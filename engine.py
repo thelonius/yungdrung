@@ -19,6 +19,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -67,7 +68,12 @@ class PlainDumper(yaml.SafeDumper):
 
 
 def write_file(path, meta, body):
-    """Атомарно: Obsidian держит файлы открытыми и кэширует, дописывать на месте нельзя."""
+    """Атомарно: Obsidian держит файлы открытыми и кэширует, дописывать на месте нельзя.
+
+    На Windows os.replace может ненадолго упасть с PermissionError, если файл в
+    этот момент держит антивирус, OneDrive-индексатор или сам Obsidian — на маке
+    так почти не бывает. Несколько коротких повторов дешевле, чем терять запись.
+    """
     fm = yaml.dump(meta, Dumper=PlainDumper, allow_unicode=True, sort_keys=False,
                    default_flow_style=False)
     content = f"---\n{fm}---\n\n{body}"
@@ -75,7 +81,14 @@ def write_file(path, meta, body):
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(content)
-        os.replace(tmp, path)
+        for attempt in range(5):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.2 * (attempt + 1))
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
