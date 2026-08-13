@@ -11,12 +11,14 @@
   python3 engine.py defer <задача> <шаг> --to 2026-08-20 --reason "..."
   python3 engine.py list                        все задачи со статусами
   python3 engine.py show <задача>               одна задача целиком
+  python3 engine.py export --to выгрузка.xlsx   весь вольт в Excel
 
 Задача указывается частью имени файла: "грант" найдёт «Заявка на грант ФПГ».
 """
 import argparse
 import json
 import os
+import re
 import sys
 import tempfile
 import time
@@ -45,6 +47,21 @@ STATUS_RU = {
     "no_date": "без даты",
     "done": "закрыта",
     "empty": "нет шагов",
+}
+
+# Статусы и события шага в файле лежат по-английски — их читает движок. В Excel
+# уходит перевод: тот файл открывает заказчик, и «not_done» ему ни о чём не говорит.
+STEP_STATUS_RU = {
+    OPEN: "ждёт",
+    DONE: "сделан",
+    SKIPPED: "снят",
+}
+
+EVENT_RU = {
+    "done": "сделан",
+    "not_done": "не сделан",
+    "defer": "перенесён",
+    "skipped": "снят",
 }
 
 
@@ -373,6 +390,153 @@ def cmd_skip(args, today):
             "task_status": task_status(task, today)}
 
 
+# --- выгрузка в Excel ------------------------------------------------------
+
+# Предел Excel на длину текста в ячейке. Тело заметки пишет заказчик, и упереться
+# в него теоретически можно — лучше обрезать, чем получить нечитаемый файл.
+MAX_CELL = 32767
+
+# Управляющие символы xlsx не принимает: файл открывается с руганью на повреждение.
+# Тело заметки приходит из внешнего редактора, так что чистим на всякий случай.
+CONTROL_CHARS = re.compile(r"[\000-\010\013\014\016-\037]")
+
+# Заголовок и ширина колонки. Ширину задаём руками, а не по содержимому: имена
+# задач и причины переносов длинные, и по факту всё равно упираешься в потолок,
+# а файл должен открываться готовым к чтению, без растаскивания колонок мышью.
+TASK_COLUMNS = [
+    ("Задача", 34), ("Заголовок", 30), ("Создана", 12), ("Статус", 14),
+    ("Текущий шаг", 34), ("Контроль", 12), ("Прогресс", 10), ("Буксует", 9),
+    ("Категории", 22), ("Заметка", 60),
+]
+STEP_COLUMNS = [
+    ("Задача", 34), ("Шаг", 6), ("Название", 40), ("Статус", 10),
+    ("Контроль", 12), ("Выполнен", 12), ("Не сделан, раз", 15),
+    ("Последняя причина", 40),
+]
+EVENT_COLUMNS = [
+    ("Задача", 34), ("Шаг", 6), ("Название", 34), ("Дата", 12),
+    ("Событие", 14), ("Причина", 40), ("Было", 12), ("Стало", 12),
+]
+
+
+def put(ws, row, col, value):
+    """Одна ячейка со всеми оговорками про Excel.
+
+    Даты кладём объектами `date`: строкой Excel их не понимает, теряется сортировка
+    и фильтр по периоду — та же причина, по которой даты пишутся датами и в YAML.
+
+    Строку, начинающуюся с «=», openpyxl считает формулой. В теле заметки такая
+    строка вполне возможна, и Excel потом ругается на весь файл — тип задаём явно.
+    """
+    cell = ws.cell(row=row, column=col)
+    if isinstance(value, datetime):
+        value = value.date()
+    if value == "":
+        value = None  # задача без категорий и без тела — просто пустая ячейка
+    if isinstance(value, date):
+        cell.value = value
+        cell.number_format = "YYYY-MM-DD"
+    elif isinstance(value, str):
+        value = CONTROL_CHARS.sub("", value)
+        if len(value) > MAX_CELL:
+            value = value[:MAX_CELL - 1] + "…"
+        cell.value = value
+        cell.data_type = "s"
+    else:
+        cell.value = value
+    return cell
+
+
+def write_sheet(wb, title, columns, rows):
+    """Лист целиком: шапка, ширины, данные, фильтр."""
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+
+    ws = wb.create_sheet(title)
+    for i, (name, width) in enumerate(columns, start=1):
+        ws.cell(row=1, column=i, value=name).font = Font(bold=True)
+        ws.column_dimensions[get_column_letter(i)].width = width
+    ws.freeze_panes = "A2"  # шапка не уезжает при прокрутке длинной истории
+    for r, values in enumerate(rows, start=2):
+        for c, value in enumerate(values, start=1):
+            put(ws, r, c, value)
+    # Фильтр по шапке: сортировка по дате и отбор по задаче — первое, что человек
+    # захочет сделать в тысяче строк истории.
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{ws.max_row}"
+    return ws
+
+
+def cmd_export(args, today):
+    """Весь вольт в один .xlsx.
+
+    Заказчику это не аналитика, а страховка «чтобы не проебалось»: файл уезжает ему
+    в Telegram и лежит отдельно от вольта. Отсюда третий лист — плоский разворот
+    `log` шагов. Сводку и статусы можно пересчитать из шагов заново, а переносы,
+    причины и старые даты больше взять неоткуда: пропадут вместе с папкой.
+
+    Только чтение: вольт после экспорта побайтово тот же.
+    """
+    # Импорт по требованию: openpyxl нужен одной команде из восьми, а грузится он
+    # впятеро дольше всего остального движка. Отметку шага это тормозить не должно.
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        sys.exit("нужен openpyxl: pip install openpyxl")
+
+    out = Path(args.to) if args.to else VAULT / f"Выгрузка {today.isoformat()}.xlsx"
+    tasks, steps, events = [], [], []
+
+    for task in load_tasks():
+        name = task["path"].stem
+        meta = task["meta"]
+        # Статус и прогресс считаем заново, а не берём из файла: сводка устаревает
+        # сама по себе, от того что прошёл день. В выгрузке должно стоять сегодня.
+        status = task_status(task, today)
+        step = current_step(task)
+        all_steps = steps_of(task)
+        closed = sum(1 for s in all_steps if s.get("status") in (DONE, SKIPPED))
+        tags = meta.get("tags") or []
+        if isinstance(tags, str):
+            tags = [tags]
+        tasks.append([
+            name, meta.get("title"), as_date(meta.get("created")), STATUS_RU[status],
+            step.get("title") if step else None,
+            as_date(step.get("control_date")) if step else None,
+            f"{closed}/{len(all_steps)}" if all_steps else None,
+            stall_count(step) if step else 0,
+            ", ".join(str(t) for t in tags), task["body"].strip(),
+        ])
+
+        for s in all_steps:
+            step_title = s.get("title")
+            steps.append([
+                name, s.get("id"), step_title,
+                STEP_STATUS_RU.get(s.get("status", OPEN), s.get("status")),
+                as_date(s.get("control_date")), as_date(s.get("completed_date")),
+                stall_count(s),
+                next((e.get("reason") for e in reversed(s.get("log") or [])
+                      if e.get("reason")), None),
+            ])
+            for e in s.get("log") or []:
+                events.append([
+                    name, s.get("id"), step_title, as_date(e.get("date")),
+                    EVENT_RU.get(e.get("event"), e.get("event")), e.get("reason"),
+                    as_date(e.get("was")), as_date(e.get("to")),
+                ])
+
+    wb = Workbook()
+    wb.remove(wb.active)  # лист по умолчанию называется Sheet и нам не нужен
+    for name, columns, rows in (("Задачи", TASK_COLUMNS, tasks),
+                                ("Шаги", STEP_COLUMNS, steps),
+                                ("История", EVENT_COLUMNS, events)):
+        write_sheet(wb, name, columns, rows)
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(out)
+    return {"today": today.isoformat(), "file": str(out), "tasks": len(tasks),
+            "steps": len(steps), "events": len(events)}
+
+
 def main():
     p = argparse.ArgumentParser(description="Движок шагов Yungdrung")
     p.add_argument("--today", help="подменить сегодняшнюю дату (для проверок)")
@@ -408,6 +572,11 @@ def main():
     k = sub.add_parser("skip", help="снять шаг")
     k.add_argument("task"); k.add_argument("step"); k.add_argument("--reason")
     k.set_defaults(func=cmd_skip)
+
+    x = sub.add_parser("export", help="выгрузить весь вольт в Excel")
+    x.add_argument("--to", help="куда писать; по умолчанию — «Выгрузка <дата>.xlsx» "
+                                "в корне вольта")
+    x.set_defaults(func=cmd_export)
 
     args = p.parse_args()
     today = date.fromisoformat(args.today) if args.today else date.today()
