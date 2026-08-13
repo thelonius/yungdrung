@@ -34,9 +34,9 @@ from pathlib import Path
 # текст и типографику: «кавычки», тире, многоточие. Без этого «нет задачи по
 # «грант»» падает UnicodeEncodeError вместо внятного сообщения — причём на
 # машине заказчика, который такое не починит. Делаем до первого вывода.
-for поток in (sys.stdout, sys.stderr):
+for stream in (sys.stdout, sys.stderr):
     try:
-        поток.reconfigure(encoding="utf-8")
+        stream.reconfigure(encoding="utf-8")
     except (AttributeError, ValueError):
         pass  # поток подменён или не текстовый — печатать всё равно нечем испортить
 
@@ -130,21 +130,21 @@ def write_file(path, meta, body):
 # здесь, чтобы попасть в JSON, а не только в stderr: заказчик правит шаги руками,
 # и опечатка в YAML не должна означать, что задача молча исчезла из трекера и из
 # утренней сборки. Молчаливая потеря опаснее падения — падение хотя бы заметно.
-БИТЫЕ = []
+BROKEN = []
 
 
 def load_tasks():
     if not TASKS_DIR.is_dir():
         sys.exit(f"нет папки задач: {TASKS_DIR}")
-    БИТЫЕ.clear()
+    BROKEN.clear()
     out = []
     for path in sorted(TASKS_DIR.glob("*.md")):
         try:
             meta, body = parse_file(path)
         except Exception as e:
-            причина = " ".join(str(e).split())[:200]
-            БИТЫЕ.append({"file": path.name, "error": причина})
-            print(f"[не разобран {path.name}: {причина}]", file=sys.stderr)
+            reason = " ".join(str(e).split())[:200]
+            BROKEN.append({"file": path.name, "error": reason})
+            print(f"[не разобран {path.name}: {reason}]", file=sys.stderr)
             continue
         if meta.get("type") != "task":
             continue
@@ -253,13 +253,13 @@ def get_step(task, step_id):
     sys.exit(f"нет шага {step_id} в «{task['path'].stem}»")
 
 
-ШАГИ_НАЧАЛО = "<!-- шаги: пишет движок, править руками не нужно -->"
-ШАГИ_КОНЕЦ = "<!-- /шаги -->"
+STEPS_START = "<!-- шаги: пишет движок, править руками не нужно -->"
+STEPS_END = "<!-- /шаги -->"
 
 # Маркеры статуса шага в теле заметки. Галочки-чекбоксы намеренно не используем:
 # в Obsidian они кликабельные, заказчик отметил бы шаг мышкой, движок затёр бы
 # это при следующей записи — и получилось бы два писателя одного поля.
-ЗНАК = {DONE: "✓", SKIPPED: "×", OPEN: "•"}
+MARK = {DONE: "✓", SKIPPED: "×", OPEN: "•"}
 
 
 def render_steps(task, today):
@@ -273,34 +273,34 @@ def render_steps(task, today):
     frontmatter, а его Obsidian ссылками не считает. В теле — считает, поэтому
     ссылки на заметки базы знаний из названий шагов начинают работать.
     """
-    строки = [ШАГИ_НАЧАЛО, "**Шаги**", ""]
-    for шаг in steps_of(task):
-        статус = шаг.get("status", OPEN)
-        хвост = []
-        дата = as_date(шаг.get("control_date"))
-        if статус == DONE:
-            сделан = as_date(шаг.get("completed_date"))
-            хвост.append(f"сделан {сделан:%d.%m.%Y}" if сделан else "сделан")
-        elif статус == SKIPPED:
-            хвост.append("снят")
-        elif дата:
-            хвост.append(f"контроль {дата:%d.%m.%Y}")
-            if дата < today:
-                хвост.append(f"просрочен на {(today - дата).days} дн.")
+    lines = [STEPS_START, "**Шаги**", ""]
+    for step in steps_of(task):
+        status = step.get("status", OPEN)
+        tail = []
+        due = as_date(step.get("control_date"))
+        if status == DONE:
+            completed = as_date(step.get("completed_date"))
+            tail.append(f"сделан {completed:%d.%m.%Y}" if completed else "сделан")
+        elif status == SKIPPED:
+            tail.append("снят")
+        elif due:
+            tail.append(f"контроль {due:%d.%m.%Y}")
+            if due < today:
+                tail.append(f"просрочен на {(today - due).days} дн.")
         else:
-            хвост.append("дата не назначена")
+            tail.append("дата не назначена")
 
-        буксует = stall_count(шаг)
-        if буксует >= 3 and статус == OPEN:
-            причина = next((e.get("reason") for e in reversed(шаг.get("log") or [])
+        stalled = stall_count(step)
+        if stalled >= 3 and status == OPEN:
+            reason = next((e.get("reason") for e in reversed(step.get("log") or [])
                             if e.get("reason")), None)
-            хвост.append(f"буксует, отметок «не сделан»: {буксует}"
-                         + (f" ({причина})" if причина else ""))
+            tail.append(f"буксует, отметок «не сделан»: {stalled}"
+                         + (f" ({reason})" if reason else ""))
 
-        строки.append(f"{ЗНАК.get(статус, '•')} **{шаг.get('id')}.** "
-                      f"{шаг.get('title', '')} — {' · '.join(хвост)}")
-    строки += ["", ШАГИ_КОНЕЦ]
-    return "\n".join(строки)
+        lines.append(f"{MARK.get(status, '•')} **{step.get('id')}.** "
+                      f"{step.get('title', '')} — {' · '.join(tail)}")
+    lines += ["", STEPS_END]
+    return "\n".join(lines)
 
 
 def put_steps_into_body(body, block):
@@ -310,11 +310,11 @@ def put_steps_into_body(body, block):
     участком между маркерами. Если маркеров нет — вставляем блок сверху, текст
     заказчика уезжает под него.
     """
-    начало = body.find(ШАГИ_НАЧАЛО)
-    конец = body.find(ШАГИ_КОНЕЦ)
-    if начало != -1 and конец != -1 and конец > начало:
-        хвост = body[конец + len(ШАГИ_КОНЕЦ):]
-        return body[:начало] + block + хвост
+    start = body.find(STEPS_START)
+    end = body.find(STEPS_END)
+    if start != -1 and end != -1 and end > start:
+        tail = body[end + len(STEPS_END):]
+        return body[:start] + block + tail
     return block + "\n\n" + body.lstrip("\n") if body.strip() else block + "\n"
 
 
@@ -376,7 +376,7 @@ def cmd_next(args, today):
             stalled.append(view)
     due.sort(key=lambda v: (-v["overdue_days"], v["task"]))
     return {"today": today.isoformat(), "due": due, "stalled": stalled,
-            "broken": list(БИТЫЕ)}
+            "broken": list(BROKEN)}
 
 
 def cmd_refresh(args, today):
@@ -395,7 +395,7 @@ def cmd_refresh(args, today):
                             "status": task["meta"]["status"],
                             "changed": changed})
     return {"today": today.isoformat(), "written": touched, "count": len(touched),
-            "forced": bool(args.force), "broken": list(БИТЫЕ)}
+            "forced": bool(args.force), "broken": list(BROKEN)}
 
 
 def cmd_list(args, today):
@@ -411,7 +411,7 @@ def cmd_list(args, today):
             "steps_total": len(steps),
             "current": step.get("title") if step else None,
         })
-    return {"today": today.isoformat(), "tasks": out, "broken": list(БИТЫЕ)}
+    return {"today": today.isoformat(), "tasks": out, "broken": list(BROKEN)}
 
 
 def cmd_show(args, today):

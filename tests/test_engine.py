@@ -31,18 +31,18 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-КОРЕНЬ = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(КОРЕНЬ))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
 import engine  # noqa: E402
 
-СЕГОДНЯ = date(2026, 8, 15)
-ЗАВТРА = date(2026, 8, 16)
+TODAY = date(2026, 8, 15)
+TOMORROW = date(2026, 8, 16)
 
 
 # --- обвязка ---------------------------------------------------------------
 
-class ДамперБезЯкорей(yaml.SafeDumper):
+class NoAliasDumper(yaml.SafeDumper):
     """Свой, а не engine.PlainDumper: исходные файлы для тестов должны готовиться
     независимо от проверяемого кода, иначе тест на якоря проверял бы сам себя."""
 
@@ -51,72 +51,72 @@ class ДамперБезЯкорей(yaml.SafeDumper):
 
 
 @pytest.fixture
-def вольт(tmp_path, monkeypatch):
+def vault(tmp_path, monkeypatch):
     """Временный вольт вместо репозитория."""
-    задачи = tmp_path / "Задачи"
-    задачи.mkdir()
+    tasks = tmp_path / "Задачи"
+    tasks.mkdir()
     monkeypatch.setattr(engine, "VAULT", tmp_path)
-    monkeypatch.setattr(engine, "TASKS_DIR", задачи)
+    monkeypatch.setattr(engine, "TASKS_DIR", tasks)
     return tmp_path
 
 
-def шаг(номер, название, *, status="pending", control_date=None,
+def step(number, title, *, status="pending", control_date=None,
         completed_date=None, log=None):
-    return {"id": номер, "title": название, "status": status,
+    return {"id": number, "title": title, "status": status,
             "control_date": control_date, "completed_date": completed_date,
             "log": log if log is not None else []}
 
 
-def задача(вольт, имя, steps, *, тело="Тело заметки, его пишет заказчик.\n", **поля):
+def task(vault, name, steps, *, body="Тело заметки, его пишет заказчик.\n", **fields):
     """Кладёт файл задачи в вольт. Сводку верхнего уровня намеренно не пишем:
     её проставляет движок, а тесты проверяют, что он это делает."""
-    meta = {"schema": 1, "type": "task", "title": имя, "created": date(2026, 8, 1)}
-    meta.update(поля)
+    meta = {"schema": 1, "type": "task", "title": name, "created": date(2026, 8, 1)}
+    meta.update(fields)
     meta["steps"] = steps
-    fm = yaml.dump(meta, Dumper=ДамперБезЯкорей, allow_unicode=True,
+    fm = yaml.dump(meta, Dumper=NoAliasDumper, allow_unicode=True,
                    sort_keys=False, default_flow_style=False)
-    path = вольт / "Задачи" / f"{имя}.md"
-    path.write_text(f"---\n{fm}---\n\n{тело}", encoding="utf-8")
+    path = vault / "Задачи" / f"{name}.md"
+    path.write_text(f"---\n{fm}---\n\n{body}", encoding="utf-8")
     return path
 
 
-def запустить(команда, today=СЕГОДНЯ, **поля):
+def run(command, today=TODAY, **fields):
     """Вызов команды движка без argparse."""
-    поля.setdefault("force", False)
-    поля.setdefault("reason", None)
-    поля.setdefault("to", None)
-    return команда(SimpleNamespace(**поля), today)
+    fields.setdefault("force", False)
+    fields.setdefault("reason", None)
+    fields.setdefault("to", None)
+    return command(SimpleNamespace(**fields), today)
 
 
-def прочитать(path):
+def read(path):
     return engine.parse_file(path)
 
 
-def фронтматтер(path):
+def frontmatter(path):
     """Сырой текст frontmatter — для проверок формата, а не значений."""
     return path.read_text(encoding="utf-8").split("---", 2)[1]
 
 
-def снимок(вольт):
+def snapshot(vault):
     """Инод, время правки и содержимое каждого файла. Запись идёт через
     os.replace, то есть переписанный файл всегда меняет инод."""
     return {p.name: (p.stat().st_ino, p.stat().st_mtime_ns, p.read_bytes())
-            for p in sorted((вольт / "Задачи").glob("*.md"))}
+            for p in sorted((vault / "Задачи").glob("*.md"))}
 
 
 # --- 1. YAML round-trip ----------------------------------------------------
 
-def test_кругорейс_yaml_не_теряет_данные(вольт):
+def test_round_trip_yaml_keeps_data(vault):
     """Записали → прочитали → то же самое, включая вложенный log внутри steps."""
     meta = {
         "schema": 1, "type": "task", "title": "Заявка на грант ФПГ",
         "created": date(2026, 8, 1), "status": "ждёт",
         "tags": ["гранты", "документы"],
         "steps": [
-            шаг(1, "Собрать пакет документов", status="done",
+            step(1, "Собрать пакет документов", status="done",
                 control_date=date(2026, 8, 8), completed_date=date(2026, 8, 7),
                 log=[{"date": date(2026, 8, 7), "event": "done"}]),
-            шаг(2, "Отправить [[Василий Говнов]] на согласование",
+            step(2, "Отправить [[Василий Говнов]] на согласование",
                 control_date=date(2026, 8, 15),
                 log=[{"date": date(2026, 8, 13), "event": "defer",
                       "was": date(2026, 8, 13), "to": date(2026, 8, 15),
@@ -124,212 +124,212 @@ def test_кругорейс_yaml_не_теряет_данные(вольт):
                      {"date": date(2026, 8, 14), "event": "not_done",
                       "was": date(2026, 8, 14), "to": date(2026, 8, 15),
                       "reason": "не дозвонился"}]),
-            шаг(3, "Дождаться решения фонда"),
+            step(3, "Дождаться решения фонда"),
         ],
     }
-    тело = "Абзац заказчика со ссылкой [[Василий Говнов]].\n\nВторой абзац.\n"
-    path = вольт / "Задачи" / "Заявка.md"
+    body = "Абзац заказчика со ссылкой [[Василий Говнов]].\n\nВторой абзац.\n"
+    path = vault / "Задачи" / "Заявка.md"
 
-    engine.write_file(path, meta, тело)
-    прочитано, тело_обратно = прочитать(path)
+    engine.write_file(path, meta, body)
+    parsed, body_back = read(path)
 
-    assert прочитано == meta
-    assert тело_обратно == тело
+    assert parsed == meta
+    assert body_back == body
     # вложенность жива не «в целом», а поимённо: log — самое хрупкое место
-    assert прочитано["steps"][1]["log"][1]["reason"] == "не дозвонился"
-    assert прочитано["steps"][1]["log"][0]["to"] == date(2026, 8, 15)
+    assert parsed["steps"][1]["log"][1]["reason"] == "не дозвонился"
+    assert parsed["steps"][1]["log"][0]["to"] == date(2026, 8, 15)
 
 
-def test_кругорейс_переживает_второй_проход(вольт):
+def test_round_trip_survives_second_pass(vault):
     """Читаем и пишем то же самое — файл должен стать побайтово прежним."""
-    path = задача(вольт, "Замена подшипника", [
-        шаг(1, "Заказать подшипник [[6805]]", status="done",
+    path = task(vault, "Замена подшипника", [
+        step(1, "Заказать подшипник [[6805]]", status="done",
             control_date=date(2026, 7, 20), completed_date=date(2026, 7, 20),
             log=[{"date": date(2026, 7, 20), "event": "done"}]),
-        шаг(2, "Снять колесо", control_date=date(2026, 8, 12)),
+        step(2, "Снять колесо", control_date=date(2026, 8, 12)),
     ])
-    запустить(engine.cmd_refresh, force=True)
-    первый = path.read_bytes()
-    запустить(engine.cmd_refresh, force=True)
-    assert path.read_bytes() == первый
+    run(engine.cmd_refresh, force=True)
+    first = path.read_bytes()
+    run(engine.cmd_refresh, force=True)
+    assert path.read_bytes() == first
 
 
-def test_текст_заказчика_в_теле_не_трогаем(вольт):
+def test_customer_text_in_body_untouched(vault):
     """Движок владеет только блоком между маркерами, остальное тело — заказчика.
 
     Блок шагов движок рендерит сам: в панели свойств Obsidian массив объектов не
     читается, и без этого блока «провалиться в задачу» упирается в JSON-строку.
     Но всё, что заказчик написал вокруг, обязано пережить любую запись.
     """
-    тело = "Позвонить [[Василий Говнов]].\n\n- пункт\n- ещё пункт\n"
-    path = задача(вольт, "Грант", [шаг(1, "Позвонить", control_date=СЕГОДНЯ)], тело=тело)
-    запустить(engine.cmd_done, task="Грант", step="1")
-    новое = прочитать(path)[1]
-    assert тело.strip() in новое, "текст заказчика потерян"
-    assert engine.ШАГИ_НАЧАЛО in новое and engine.ШАГИ_КОНЕЦ in новое
+    body = "Позвонить [[Василий Говнов]].\n\n- пункт\n- ещё пункт\n"
+    path = task(vault, "Грант", [step(1, "Позвонить", control_date=TODAY)], body=body)
+    run(engine.cmd_done, task="Грант", step="1")
+    new_body = read(path)[1]
+    assert body.strip() in new_body, "текст заказчика потерян"
+    assert engine.STEPS_START in new_body and engine.STEPS_END in new_body
 
 
-def test_блок_шагов_не_размножается(вольт):
+def test_steps_block_not_duplicated(vault):
     """Перерисовка заменяет блок на месте, а не дописывает ещё один."""
-    path = задача(вольт, "Грант", [
-        шаг(1, "Первый", control_date=СЕГОДНЯ),
-        шаг(2, "Второй"),
-    ], тело="Мои заметки по задаче.\n")
+    path = task(vault, "Грант", [
+        step(1, "Первый", control_date=TODAY),
+        step(2, "Второй"),
+    ], body="Мои заметки по задаче.\n")
     for _ in range(3):
-        запустить(engine.cmd_refresh, force=True)
-    тело = прочитать(path)[1]
-    assert тело.count(engine.ШАГИ_НАЧАЛО) == 1
-    assert тело.count(engine.ШАГИ_КОНЕЦ) == 1
-    assert "Мои заметки по задаче." in тело
+        run(engine.cmd_refresh, force=True)
+    body = read(path)[1]
+    assert body.count(engine.STEPS_START) == 1
+    assert body.count(engine.STEPS_END) == 1
+    assert "Мои заметки по задаче." in body
 
 
-def test_в_теле_видно_состояние_шагов(вольт):
+def test_body_shows_step_state(vault):
     """Ровно то, ради чего блок и заводился: провалившись в задачу из таблицы,
     заказчик должен увидеть шаги словами, а не обрезанный JSON."""
-    path = задача(вольт, "Колесо", [
-        шаг(1, "Заказать [[6805]]", status="done", completed_date=date(2026, 8, 1),
+    path = task(vault, "Колесо", [
+        step(1, "Заказать [[6805]]", status="done", completed_date=date(2026, 8, 1),
             log=[{"date": date(2026, 8, 1), "event": "done"}]),
-        шаг(2, "Заменить", control_date=date(2026, 8, 10),
+        step(2, "Заменить", control_date=date(2026, 8, 10),
             log=[{"date": d, "event": "not_done", "reason": "мастер в отпуске"}
                  for d in (date(2026, 8, 1), date(2026, 8, 5), date(2026, 8, 8))]),
     ])
-    запустить(engine.cmd_refresh, force=True)
-    тело = прочитать(path)[1]
-    assert "Заказать [[6805]]" in тело, "ссылка на заметку должна попасть в тело"
-    assert "сделан" in тело and "контроль" in тело
-    assert "буксует" in тело, "три отметки «не сделан» должны быть видны глазами"
+    run(engine.cmd_refresh, force=True)
+    body = read(path)[1]
+    assert "Заказать [[6805]]" in body, "ссылка на заметку должна попасть в тело"
+    assert "сделан" in body and "контроль" in body
+    assert "буксует" in body, "три отметки «не сделан» должны быть видны глазами"
 
 
 # --- 2. Якоря YAML ---------------------------------------------------------
 
-def test_якорей_в_файле_нет(вольт):
+def test_no_anchors_in_file(vault):
     """Obsidian не разбирает `&id001`/`*id001`, файл для него ломается.
 
     Условие для якорей создаётся само: `done` кладёт один и тот же объект даты
     в completed_date, в log и в сводку верхнего уровня.
     """
-    path = задача(вольт, "Грант", [
-        шаг(1, "Собрать", control_date=СЕГОДНЯ),
-        шаг(2, "Отправить"),
+    path = task(vault, "Грант", [
+        step(1, "Собрать", control_date=TODAY),
+        step(2, "Отправить"),
     ])
-    запустить(engine.cmd_done, task="Грант", step="1", reason="сдали в срок")
+    run(engine.cmd_done, task="Грант", step="1", reason="сдали в срок")
 
-    текст = path.read_text(encoding="utf-8")
-    assert "&id" not in текст
-    assert "*id" not in текст
-    assert re.search(r"[&*]id\d+", текст) is None
+    text = path.read_text(encoding="utf-8")
+    assert "&id" not in text
+    assert "*id" not in text
+    assert re.search(r"[&*]id\d+", text) is None
 
 
-def test_свой_дампер_а_не_везение(вольт):
+def test_custom_dumper_not_luck(vault):
     """Проверка, что предыдущий тест не пустой: обычный SafeDumper на тех же
     данных якоря как раз ставит, их убирает именно PlainDumper движка."""
-    одна_дата = date(2026, 8, 15)
-    meta = {"control_date": одна_дата,
-            "steps": [{"id": 1, "control_date": одна_дата,
-                       "log": [{"date": одна_дата, "event": "done"}]}]}
+    one_date = date(2026, 8, 15)
+    meta = {"control_date": one_date,
+            "steps": [{"id": 1, "control_date": one_date,
+                       "log": [{"date": one_date, "event": "done"}]}]}
 
-    обычный = yaml.dump(meta, Dumper=yaml.SafeDumper, sort_keys=False)
-    наш = yaml.dump(meta, Dumper=engine.PlainDumper, sort_keys=False)
+    standard = yaml.dump(meta, Dumper=yaml.SafeDumper, sort_keys=False)
+    ours = yaml.dump(meta, Dumper=engine.PlainDumper, sort_keys=False)
 
-    assert re.search(r"[&*]id\d+", обычный), "SafeDumper перестал ставить якоря"
-    assert re.search(r"[&*]id\d+", наш) is None
+    assert re.search(r"[&*]id\d+", standard), "SafeDumper перестал ставить якоря"
+    assert re.search(r"[&*]id\d+", ours) is None
 
 
 # --- 3. Даты — датами, не строками -----------------------------------------
 
-def test_даты_пишутся_датами_а_не_строками(вольт):
+def test_dates_written_as_dates_not_strings(vault):
     """Закавыченную дату Obsidian считает строкой и теряет календарь и сортировку."""
-    path = задача(вольт, "Грант", [
-        шаг(1, "Собрать", control_date=date(2026, 8, 10)),
-        шаг(2, "Отправить"),
+    path = task(vault, "Грант", [
+        step(1, "Собрать", control_date=date(2026, 8, 10)),
+        step(2, "Отправить"),
     ])
-    запустить(engine.cmd_done, task="Грант", step="1")
+    run(engine.cmd_done, task="Грант", step="1")
 
-    fm = фронтматтер(path)
+    fm = frontmatter(path)
     assert re.search(r"""['"]\d{4}-\d{2}-\d{2}['"]""", fm) is None, fm
     assert "control_date: 2026-08-15" in fm
     assert "completed_date: 2026-08-15" in fm
 
-    meta, _ = прочитать(path)
+    meta, _ = read(path)
     assert isinstance(meta["control_date"], date)
     assert isinstance(meta["steps"][0]["completed_date"], date)
     assert isinstance(meta["steps"][0]["log"][0]["date"], date)
 
 
-def test_даты_датами_и_после_переноса(вольт):
+def test_dates_as_dates_after_defer_too(vault):
     """Тот же инвариант на ветке defer: дату туда приносит аргумент-строка."""
-    path = задача(вольт, "Грант", [шаг(1, "Собрать", control_date=СЕГОДНЯ)])
-    запустить(engine.cmd_defer, task="Грант", step="1", to="2026-08-20")
+    path = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    run(engine.cmd_defer, task="Грант", step="1", to="2026-08-20")
 
-    fm = фронтматтер(path)
+    fm = frontmatter(path)
     assert re.search(r"""['"]\d{4}-\d{2}-\d{2}['"]""", fm) is None, fm
     assert "control_date: 2026-08-20" in fm
-    assert isinstance(прочитать(path)[0]["steps"][0]["log"][0]["to"], date)
+    assert isinstance(read(path)[0]["steps"][0]["log"][0]["to"], date)
 
 
 # --- 4. done ---------------------------------------------------------------
 
-def test_done_закрывает_шаг_и_ставит_дату(вольт):
-    path = задача(вольт, "Грант", [
-        шаг(1, "Собрать", control_date=СЕГОДНЯ),
-        шаг(2, "Отправить", control_date=date(2026, 8, 20)),
+def test_done_closes_step_and_sets_date(vault):
+    path = task(vault, "Грант", [
+        step(1, "Собрать", control_date=TODAY),
+        step(2, "Отправить", control_date=date(2026, 8, 20)),
     ])
-    рез = запустить(engine.cmd_done, task="Грант", step="1", reason="всё собрал")
+    result = run(engine.cmd_done, task="Грант", step="1", reason="всё собрал")
 
-    assert рез["ok"] and рез["status"] == "done"
-    assert рез["next_step"] == "Отправить"
+    assert result["ok"] and result["status"] == "done"
+    assert result["next_step"] == "Отправить"
 
-    meta, _ = прочитать(path)
-    первый = meta["steps"][0]
-    assert первый["status"] == "done"
-    assert первый["completed_date"] == СЕГОДНЯ
-    assert первый["log"][-1] == {"date": СЕГОДНЯ, "event": "done", "reason": "всё собрал"}
+    meta, _ = read(path)
+    first = meta["steps"][0]
+    assert first["status"] == "done"
+    assert first["completed_date"] == TODAY
+    assert first["log"][-1] == {"date": TODAY, "event": "done", "reason": "всё собрал"}
 
 
-def test_done_отдаёт_следующему_шагу_сегодняшнюю_дату(вольт):
+def test_done_gives_next_step_todays_date(vault):
     """Шаг без даты не всплывёт ни в одной сборке — задача молча пропадёт."""
-    path = задача(вольт, "Грант", [
-        шаг(1, "Собрать", control_date=СЕГОДНЯ),
-        шаг(2, "Отправить"),          # даты нет
-        шаг(3, "Ждать решения"),
+    path = task(vault, "Грант", [
+        step(1, "Собрать", control_date=TODAY),
+        step(2, "Отправить"),          # даты нет
+        step(3, "Ждать решения"),
     ])
-    рез = запустить(engine.cmd_done, task="Грант", step="1")
+    result = run(engine.cmd_done, task="Грант", step="1")
 
-    assert рез["date_assigned_to_step"] == 2
-    assert рез["task_status"] == "due"
-    meta, _ = прочитать(path)
-    assert meta["steps"][1]["control_date"] == СЕГОДНЯ
+    assert result["date_assigned_to_step"] == 2
+    assert result["task_status"] == "due"
+    meta, _ = read(path)
+    assert meta["steps"][1]["control_date"] == TODAY
     assert meta["steps"][2]["control_date"] is None   # через один не заглядываем
-    assert meta["control_date"] == СЕГОДНЯ
+    assert meta["control_date"] == TODAY
     assert meta["current_step"] == "Отправить"
 
     # задача осталась видимой в сборке
-    assert [v["step"] for v in запустить(engine.cmd_next)["due"]] == [2]
+    assert [v["step"] for v in run(engine.cmd_next)["due"]] == [2]
 
 
-def test_done_не_перебивает_чужую_дату(вольт):
+def test_done_does_not_override_existing_date(vault):
     """Дату ставим только если её нет: назначенную заказчиком не двигаем."""
-    path = задача(вольт, "Грант", [
-        шаг(1, "Собрать", control_date=СЕГОДНЯ),
-        шаг(2, "Отправить", control_date=date(2026, 9, 1)),
+    path = task(vault, "Грант", [
+        step(1, "Собрать", control_date=TODAY),
+        step(2, "Отправить", control_date=date(2026, 9, 1)),
     ])
-    рез = запустить(engine.cmd_done, task="Грант", step="1")
+    result = run(engine.cmd_done, task="Грант", step="1")
 
-    assert рез["date_assigned_to_step"] is None
-    assert прочитать(path)[0]["steps"][1]["control_date"] == date(2026, 9, 1)
+    assert result["date_assigned_to_step"] is None
+    assert read(path)[0]["steps"][1]["control_date"] == date(2026, 9, 1)
 
 
-def test_done_последнего_шага_закрывает_задачу(вольт):
-    path = задача(вольт, "Грант", [
-        шаг(1, "Собрать", status="done", control_date=date(2026, 8, 1),
+def test_done_on_last_step_closes_task(vault):
+    path = task(vault, "Грант", [
+        step(1, "Собрать", status="done", control_date=date(2026, 8, 1),
             completed_date=date(2026, 8, 1)),
-        шаг(2, "Отправить", control_date=СЕГОДНЯ),
+        step(2, "Отправить", control_date=TODAY),
     ])
-    рез = запустить(engine.cmd_done, task="Грант", step="2")
+    result = run(engine.cmd_done, task="Грант", step="2")
 
-    assert рез["task_status"] == "done"
-    assert рез["next_step"] is None
-    meta, _ = прочитать(path)
+    assert result["task_status"] == "done"
+    assert result["next_step"] is None
+    meta, _ = read(path)
     assert meta["status"] == "закрыта"
     assert meta["current_step"] is None
     assert meta["control_date"] is None
@@ -338,38 +338,38 @@ def test_done_последнего_шага_закрывает_задачу(во
 
 # --- 5. notdone ------------------------------------------------------------
 
-def test_notdone_оставляет_шаг_открытым(вольт):
+def test_notdone_leaves_step_open(vault):
     """Ключевое отличие от «сделан»: причина внешняя, решать всё равно надо."""
-    path = задача(вольт, "Подшипник", [шаг(1, "Снять колесо", control_date=СЕГОДНЯ)])
-    рез = запустить(engine.cmd_notdone, task="Подшипник", step="1",
+    path = task(vault, "Подшипник", [step(1, "Снять колесо", control_date=TODAY)])
+    result = run(engine.cmd_notdone, task="Подшипник", step="1",
                     reason="мастер в отпуске")
 
-    assert рез["status"] == "pending"
-    assert рез["next_check"] == "2026-08-16"
-    assert рез["stalled"] == 1
-    assert рез["hint"] is None
+    assert result["status"] == "pending"
+    assert result["next_check"] == "2026-08-16"
+    assert result["stalled"] == 1
+    assert result["hint"] is None
 
-    meta, _ = прочитать(path)
-    шаг1 = meta["steps"][0]
-    assert шаг1["status"] == "pending"
-    assert шаг1.get("completed_date") is None
-    assert шаг1["control_date"] == ЗАВТРА          # по умолчанию едет на завтра
-    assert шаг1["log"][-1] == {"date": СЕГОДНЯ, "event": "not_done",
+    meta, _ = read(path)
+    step1 = meta["steps"][0]
+    assert step1["status"] == "pending"
+    assert step1.get("completed_date") is None
+    assert step1["control_date"] == TOMORROW          # по умолчанию едет на завтра
+    assert step1["log"][-1] == {"date": TODAY, "event": "not_done",
                                "reason": "мастер в отпуске",
-                               "was": СЕГОДНЯ, "to": ЗАВТРА}
+                               "was": TODAY, "to": TOMORROW}
     assert meta["status"] == "ждёт"
 
 
-def test_notdone_копит_счётчик(вольт):
+def test_notdone_accumulates_counter(vault):
     """Каждая отметка ложится в log, счётчик считается по нему, а не хранится."""
-    path = задача(вольт, "Подшипник", [шаг(1, "Снять колесо", control_date=СЕГОДНЯ)])
+    path = task(vault, "Подшипник", [step(1, "Снять колесо", control_date=TODAY)])
 
-    запустить(engine.cmd_notdone, today=date(2026, 8, 15), task="Подшипник",
+    run(engine.cmd_notdone, today=date(2026, 8, 15), task="Подшипник",
               step="1", reason="не было времени")
-    запустить(engine.cmd_notdone, today=date(2026, 8, 16), task="Подшипник",
+    run(engine.cmd_notdone, today=date(2026, 8, 16), task="Подшипник",
               step="1", reason="сервис не отвечал")
 
-    meta, _ = прочитать(path)
+    meta, _ = read(path)
     assert len(meta["steps"][0]["log"]) == 2
     assert [e["reason"] for e in meta["steps"][0]["log"]] == [
         "не было времени", "сервис не отвечал"]
@@ -377,217 +377,217 @@ def test_notdone_копит_счётчик(вольт):
     assert engine.stall_count(meta["steps"][0]) == 2
 
 
-def test_notdone_уважает_явную_дату(вольт):
-    задача(вольт, "Подшипник", [шаг(1, "Снять колесо", control_date=СЕГОДНЯ)])
-    рез = запустить(engine.cmd_notdone, task="Подшипник", step="1", to="2026-09-01")
-    assert рез["next_check"] == "2026-09-01"
+def test_notdone_respects_explicit_date(vault):
+    task(vault, "Подшипник", [step(1, "Снять колесо", control_date=TODAY)])
+    result = run(engine.cmd_notdone, task="Подшипник", step="1", to="2026-09-01")
+    assert result["next_check"] == "2026-09-01"
 
 
 # --- 6. Буксование ---------------------------------------------------------
 
-def test_три_отметки_подряд_это_буксование(вольт):
+def test_three_marks_in_a_row_is_stalling(vault):
     """Четвёртый перенос подряд означает, что нужен другой ход, а не новая дата."""
-    path = задача(вольт, "Подшипник", [
-        шаг(1, "Снять колесо", control_date=СЕГОДНЯ, log=[
+    path = task(vault, "Подшипник", [
+        step(1, "Снять колесо", control_date=TODAY, log=[
             {"date": date(2026, 8, 1), "event": "not_done", "reason": "не было времени"},
             {"date": date(2026, 8, 8), "event": "not_done", "reason": "сервис не отвечал"},
         ]),
     ])
-    рез = запустить(engine.cmd_notdone, task="Подшипник", step="1",
+    result = run(engine.cmd_notdone, task="Подшипник", step="1",
                     reason="мастер в отпуске до сентября")
 
-    assert рез["stalled"] == 3
-    assert рез["hint"] == "шаг буксует, нужен другой ход"
-    assert прочитать(path)[0]["stalled"] == 3
+    assert result["stalled"] == 3
+    assert result["hint"] == "шаг буксует, нужен другой ход"
+    assert read(path)[0]["stalled"] == 3
 
     # в сборке следующего дня шаг попадает в отдельный список
-    сборка = запустить(engine.cmd_next, today=ЗАВТРА)
-    assert [v["task"] for v in сборка["stalled"]] == ["Подшипник"]
-    assert сборка["stalled"][0]["last_reason"] == "мастер в отпуске до сентября"
+    build = run(engine.cmd_next, today=TOMORROW)
+    assert [v["task"] for v in build["stalled"]] == ["Подшипник"]
+    assert build["stalled"][0]["last_reason"] == "мастер в отпуске до сентября"
 
 
-def test_две_отметки_ещё_не_буксование(вольт):
-    задача(вольт, "Подшипник", [
-        шаг(1, "Снять колесо", control_date=СЕГОДНЯ, log=[
+def test_two_marks_not_yet_stalling(vault):
+    task(vault, "Подшипник", [
+        step(1, "Снять колесо", control_date=TODAY, log=[
             {"date": date(2026, 8, 1), "event": "not_done", "reason": "некогда"},
         ]),
     ])
-    рез = запустить(engine.cmd_notdone, task="Подшипник", step="1")
-    assert рез["stalled"] == 2 and рез["hint"] is None
-    assert запустить(engine.cmd_next, today=ЗАВТРА)["stalled"] == []
+    result = run(engine.cmd_notdone, task="Подшипник", step="1")
+    assert result["stalled"] == 2 and result["hint"] is None
+    assert run(engine.cmd_next, today=TOMORROW)["stalled"] == []
 
 
-def test_перенос_не_считается_буксованием(вольт):
+def test_defer_does_not_count_as_stalling(vault):
     """`defer` выбирает заказчик — это не то же, что «опять не сделал»."""
-    задача(вольт, "Грант", [
-        шаг(1, "Собрать", control_date=СЕГОДНЯ, log=[
+    task(vault, "Грант", [
+        step(1, "Собрать", control_date=TODAY, log=[
             {"date": date(2026, 8, 1), "event": "defer", "to": date(2026, 8, 8)},
             {"date": date(2026, 8, 8), "event": "defer", "to": date(2026, 8, 12)},
-            {"date": date(2026, 8, 12), "event": "defer", "to": СЕГОДНЯ},
+            {"date": date(2026, 8, 12), "event": "defer", "to": TODAY},
         ]),
     ])
-    assert запустить(engine.cmd_next)["stalled"] == []
-    assert запустить(engine.cmd_next)["due"][0]["stalled"] == 0
+    assert run(engine.cmd_next)["stalled"] == []
+    assert run(engine.cmd_next)["due"][0]["stalled"] == 0
 
 
 # --- 7. defer --------------------------------------------------------------
 
-def test_defer_ставит_указанную_дату(вольт):
-    path = задача(вольт, "Грант", [шаг(1, "Собрать", control_date=СЕГОДНЯ)])
-    рез = запустить(engine.cmd_defer, task="Грант", step="1",
+def test_defer_sets_given_date(vault):
+    path = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    result = run(engine.cmd_defer, task="Грант", step="1",
                     to="2026-08-20", reason="Говнов в отъезде")
 
-    assert рез["next_check"] == "2026-08-20"
-    meta, _ = прочитать(path)
+    assert result["next_check"] == "2026-08-20"
+    meta, _ = read(path)
     assert meta["steps"][0]["control_date"] == date(2026, 8, 20)   # не завтра
-    assert meta["steps"][0]["control_date"] != ЗАВТРА
+    assert meta["steps"][0]["control_date"] != TOMORROW
     assert meta["steps"][0]["status"] == "pending"
     assert meta["steps"][0]["log"][-1] == {
-        "date": СЕГОДНЯ, "event": "defer", "reason": "Говнов в отъезде",
-        "was": СЕГОДНЯ, "to": date(2026, 8, 20)}
+        "date": TODAY, "event": "defer", "reason": "Говнов в отъезде",
+        "was": TODAY, "to": date(2026, 8, 20)}
     assert meta["status"] == "ждёт"
     assert meta["control_date"] == date(2026, 8, 20)
 
 
-def test_defer_умеет_назад(вольт):
+def test_defer_can_go_backwards(vault):
     """Перенести можно и на более раннюю дату — движок дат не оценивает."""
-    path = задача(вольт, "Грант", [шаг(1, "Собрать", control_date=date(2026, 9, 1))])
-    запустить(engine.cmd_defer, task="Грант", step="1", to="2026-08-10")
-    meta, _ = прочитать(path)
+    path = task(vault, "Грант", [step(1, "Собрать", control_date=date(2026, 9, 1))])
+    run(engine.cmd_defer, task="Грант", step="1", to="2026-08-10")
+    meta, _ = read(path)
     assert meta["steps"][0]["control_date"] == date(2026, 8, 10)
     assert meta["status"] == "просрочена"
 
 
 # --- 8. Статус задачи считается из шагов ------------------------------------
 
-def набор_статусов(вольт):
-    задача(вольт, "Просрочена", [шаг(1, "Шаг", control_date=date(2026, 8, 10))])
-    задача(вольт, "Сегодня", [шаг(1, "Шаг", control_date=СЕГОДНЯ)])
-    задача(вольт, "Ждёт", [шаг(1, "Шаг", control_date=date(2026, 8, 20))])
-    задача(вольт, "Без даты", [шаг(1, "Шаг")])
-    задача(вольт, "Закрыта", [
-        шаг(1, "Раз", status="done", control_date=date(2026, 8, 1),
+def status_set(vault):
+    task(vault, "Просрочена", [step(1, "Шаг", control_date=date(2026, 8, 10))])
+    task(vault, "Сегодня", [step(1, "Шаг", control_date=TODAY)])
+    task(vault, "Ждёт", [step(1, "Шаг", control_date=date(2026, 8, 20))])
+    task(vault, "Без даты", [step(1, "Шаг")])
+    task(vault, "Закрыта", [
+        step(1, "Раз", status="done", control_date=date(2026, 8, 1),
             completed_date=date(2026, 8, 1)),
-        шаг(2, "Два", status="skipped", control_date=date(2026, 8, 2)),
+        step(2, "Два", status="skipped", control_date=date(2026, 8, 2)),
     ])
-    задача(вольт, "Пустая", [])
+    task(vault, "Пустая", [])
 
 
-def test_статус_в_json_по_английски(вольт):
+def test_status_in_json_is_english(vault):
     """JSON наружу — интерфейс для бота, ключи английские."""
-    набор_статусов(вольт)
-    статусы = {t["task"]: t["status"] for t in запустить(engine.cmd_list)["tasks"]}
-    assert статусы == {
+    status_set(vault)
+    statuses = {t["task"]: t["status"] for t in run(engine.cmd_list)["tasks"]}
+    assert statuses == {
         "Просрочена": "overdue", "Сегодня": "due", "Ждёт": "waiting",
         "Без даты": "no_date", "Закрыта": "done", "Пустая": "empty",
     }
 
 
-def test_статус_в_файле_по_русски(вольт):
+def test_status_in_file_is_russian(vault):
     """Файлы читает заказчик, а не только движок."""
-    набор_статусов(вольт)
-    запустить(engine.cmd_refresh, force=True)
-    статусы = {p.stem: прочитать(p)[0]["status"]
-               for p in sorted((вольт / "Задачи").glob("*.md"))}
-    assert статусы == {
+    status_set(vault)
+    run(engine.cmd_refresh, force=True)
+    statuses = {p.stem: read(p)[0]["status"]
+               for p in sorted((vault / "Задачи").glob("*.md"))}
+    assert statuses == {
         "Просрочена": "просрочена", "Сегодня": "сегодня", "Ждёт": "ждёт",
         "Без даты": "без даты", "Закрыта": "закрыта", "Пустая": "нет шагов",
     }
 
 
-def test_снятый_шаг_считается_закрытым(вольт):
+def test_skipped_step_counts_as_closed(vault):
     """Задача закрыта, если все шаги done или skipped — не только done."""
-    path = задача(вольт, "Грант", [
-        шаг(1, "Раз", status="done", completed_date=date(2026, 8, 1)),
-        шаг(2, "Два", control_date=СЕГОДНЯ),
+    path = task(vault, "Грант", [
+        step(1, "Раз", status="done", completed_date=date(2026, 8, 1)),
+        step(2, "Два", control_date=TODAY),
     ])
-    рез = запустить(engine.cmd_skip, task="Грант", step="2", reason="пошли другим путём")
-    assert рез["task_status"] == "done"
-    meta, _ = прочитать(path)
+    result = run(engine.cmd_skip, task="Грант", step="2", reason="пошли другим путём")
+    assert result["task_status"] == "done"
+    meta, _ = read(path)
     assert meta["status"] == "закрыта" and meta["progress"] == "2/2"
 
 
-def test_текущий_шаг_первый_незакрытый(вольт):
-    задача(вольт, "Грант", [
-        шаг(1, "Раз", status="done", completed_date=date(2026, 8, 1)),
-        шаг(2, "Два", status="skipped"),
-        шаг(3, "Три", control_date=date(2026, 8, 20)),
-        шаг(4, "Четыре", control_date=date(2026, 8, 10)),
+def test_current_step_is_first_open_one(vault):
+    task(vault, "Грант", [
+        step(1, "Раз", status="done", completed_date=date(2026, 8, 1)),
+        step(2, "Два", status="skipped"),
+        step(3, "Три", control_date=date(2026, 8, 20)),
+        step(4, "Четыре", control_date=date(2026, 8, 10)),
     ])
-    задачи = запустить(engine.cmd_list)["tasks"]
-    assert задачи[0]["current"] == "Три"          # дата четвёртого на статус не влияет
-    assert задачи[0]["status"] == "waiting"
-    assert задачи[0]["steps_done"] == 2 and задачи[0]["steps_total"] == 4
+    tasks = run(engine.cmd_list)["tasks"]
+    assert tasks[0]["current"] == "Три"          # дата четвёртого на статус не влияет
+    assert tasks[0]["status"] == "waiting"
+    assert tasks[0]["steps_done"] == 2 and tasks[0]["steps_total"] == 4
 
 
-def test_в_сборку_попадает_только_требующее_внимания(вольт):
+def test_build_includes_only_what_needs_attention(vault):
     """`waiting` и `done` в утренней сборке не нужны, `no_date` — нужен."""
-    набор_статусов(вольт)
-    сборка = запустить(engine.cmd_next)
-    assert [v["task"] for v in сборка["due"]] == ["Просрочена", "Без даты", "Сегодня"]
-    assert сборка["due"][0]["overdue_days"] == 5
+    status_set(vault)
+    build = run(engine.cmd_next)
+    assert [v["task"] for v in build["due"]] == ["Просрочена", "Без даты", "Сегодня"]
+    assert build["due"][0]["overdue_days"] == 5
 
 
 # --- 9. refresh ------------------------------------------------------------
 
-def test_refresh_идемпотентен(вольт):
+def test_refresh_is_idempotent(vault):
     """Второй прогон подряд не должен трогать ни одного файла: иначе каждое утро
     холостой коммит и перезагрузка вольта в Obsidian."""
-    набор_статусов(вольт)
+    status_set(vault)
 
-    первый = запустить(engine.cmd_refresh)
-    assert первый["count"] == 6
-    assert all(t["changed"] for t in первый["written"])
+    first = run(engine.cmd_refresh)
+    assert first["count"] == 6
+    assert all(t["changed"] for t in first["written"])
 
-    было = снимок(вольт)
-    второй = запустить(engine.cmd_refresh)
+    before = snapshot(vault)
+    second = run(engine.cmd_refresh)
 
-    assert второй["count"] == 0
-    assert второй["written"] == []
-    assert снимок(вольт) == было
+    assert second["count"] == 0
+    assert second["written"] == []
+    assert snapshot(vault) == before
 
 
-def test_refresh_force_переписывает_всё(вольт):
+def test_refresh_force_rewrites_everything(vault):
     """Путь миграции вольта при смене схемы: файлы должны быть переписаны все,
     даже те, где сводка не поменялась."""
-    набор_статусов(вольт)
-    запустить(engine.cmd_refresh)
-    было = снимок(вольт)
+    status_set(vault)
+    run(engine.cmd_refresh)
+    before = snapshot(vault)
 
-    рез = запустить(engine.cmd_refresh, force=True)
+    result = run(engine.cmd_refresh, force=True)
 
-    assert рез["forced"] is True and рез["count"] == 6
-    assert all(t["changed"] is False for t in рез["written"])
-    стало = снимок(вольт)
+    assert result["forced"] is True and result["count"] == 6
+    assert all(t["changed"] is False for t in result["written"])
+    after = snapshot(vault)
     # инод сменился у каждого (запись идёт через os.replace), содержимое то же
-    assert all(стало[имя][0] != было[имя][0] for имя in было)
-    assert all(стало[имя][2] == было[имя][2] for имя in было)
+    assert all(after[name][0] != before[name][0] for name in before)
+    assert all(after[name][2] == before[name][2] for name in before)
 
 
-def test_refresh_идемпотентен_и_с_контрольным_временем(вольт):
+def test_refresh_idempotent_with_control_time_too(vault):
     """Свойство «дата и время» из Obsidian приезжает как datetime. Сводка хранит
     только дату, и на втором прогоне это не должно выглядеть изменением."""
-    path = задача(вольт, "Грант", [
-        шаг(1, "Созвон", control_date=datetime(2026, 8, 20, 10, 30)),
+    path = task(vault, "Грант", [
+        step(1, "Созвон", control_date=datetime(2026, 8, 20, 10, 30)),
     ])
-    assert запустить(engine.cmd_refresh)["count"] == 1
-    assert прочитать(path)[0]["status"] == "ждёт"
-    assert isinstance(прочитать(path)[0]["steps"][0]["control_date"], datetime)
+    assert run(engine.cmd_refresh)["count"] == 1
+    assert read(path)[0]["status"] == "ждёт"
+    assert isinstance(read(path)[0]["steps"][0]["control_date"], datetime)
 
-    было = снимок(вольт)
-    assert запустить(engine.cmd_refresh)["count"] == 0
-    assert снимок(вольт) == было
+    before = snapshot(vault)
+    assert run(engine.cmd_refresh)["count"] == 0
+    assert snapshot(vault) == before
 
 
-def test_refresh_проставляет_сводку_с_нуля(вольт):
+def test_refresh_sets_summary_from_scratch(vault):
     """Файл, заведённый руками без сводки, после refresh пригоден для Bases."""
-    path = задача(вольт, "Грант", [
-        шаг(1, "Раз", status="done", completed_date=date(2026, 8, 1)),
-        шаг(2, "Два", control_date=date(2026, 8, 10), log=[
+    path = task(vault, "Грант", [
+        step(1, "Раз", status="done", completed_date=date(2026, 8, 1)),
+        step(2, "Два", control_date=date(2026, 8, 10), log=[
             {"date": date(2026, 8, 5), "event": "not_done", "reason": "некогда"}]),
     ])
-    запустить(engine.cmd_refresh)
-    meta, _ = прочитать(path)
+    run(engine.cmd_refresh)
+    meta, _ = read(path)
     assert meta["schema"] == 1
     assert meta["status"] == "просрочена"
     assert meta["current_step"] == "Два"
@@ -598,125 +598,125 @@ def test_refresh_проставляет_сводку_с_нуля(вольт):
 
 # --- 10. Статус устаревает сам по себе -------------------------------------
 
-def test_статус_устаревает_от_того_что_прошёл_день(вольт):
+def test_status_goes_stale_as_day_passes(vault):
     """Тот же вольт, другой день — другой статус. Без этого утренняя сборка
     показывала бы вчерашнюю картину."""
-    path = задача(вольт, "Грант", [шаг(1, "Собрать", control_date=date(2026, 8, 20))])
+    path = task(vault, "Грант", [step(1, "Собрать", control_date=date(2026, 8, 20))])
 
-    запустить(engine.cmd_refresh, today=date(2026, 8, 15))
-    assert прочитать(path)[0]["status"] == "ждёт"
-    assert запустить(engine.cmd_next, today=date(2026, 8, 15))["due"] == []
+    run(engine.cmd_refresh, today=date(2026, 8, 15))
+    assert read(path)[0]["status"] == "ждёт"
+    assert run(engine.cmd_next, today=date(2026, 8, 15))["due"] == []
 
-    рез = запустить(engine.cmd_refresh, today=date(2026, 8, 20))
-    assert рез["count"] == 1
-    assert прочитать(path)[0]["status"] == "сегодня"
+    result = run(engine.cmd_refresh, today=date(2026, 8, 20))
+    assert result["count"] == 1
+    assert read(path)[0]["status"] == "сегодня"
 
-    запустить(engine.cmd_refresh, today=date(2026, 8, 25))
-    assert прочитать(path)[0]["status"] == "просрочена"
-    сборка = запустить(engine.cmd_next, today=date(2026, 8, 25))
-    assert сборка["due"][0]["overdue_days"] == 5
+    run(engine.cmd_refresh, today=date(2026, 8, 25))
+    assert read(path)[0]["status"] == "просрочена"
+    build = run(engine.cmd_next, today=date(2026, 8, 25))
+    assert build["due"][0]["overdue_days"] == 5
 
 
 # --- 11. Порядок полей -----------------------------------------------------
 
-def test_порядок_полей_сводка_сверху_шаги_снизу(вольт):
+def test_field_order_summary_on_top_steps_below(vault):
     """В редакторе свойств Obsidian статуса не видно за простынёй шагов."""
-    path = задача(вольт, "Грант", [шаг(1, "Собрать", control_date=СЕГОДНЯ)],
+    path = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)],
                   tags=["гранты"], приоритет="высокий")
-    запустить(engine.cmd_refresh, force=True)
+    run(engine.cmd_refresh, force=True)
 
-    ключи = list(прочитать(path)[0].keys())
-    assert ключи[-1] == "steps"
-    assert ключи[:10] == ["schema", "type", "title", "created", "status",
+    keys = list(read(path)[0].keys())
+    assert keys[-1] == "steps"
+    assert keys[:10] == ["schema", "type", "title", "created", "status",
                           "current_step", "control_date", "progress", "stalled",
                           "tags"]
-    assert ключи.index("приоритет") == 10        # чужие поля не теряются
+    assert keys.index("приоритет") == 10        # чужие поля не теряются
     # порядок именно в файле, а не только в словаре
-    fm = фронтматтер(path)
+    fm = frontmatter(path)
     assert fm.index("status:") < fm.index("steps:")
     assert fm.index("schema:") < fm.index("status:")
 
 
-def test_порядок_держится_и_у_задачи_без_сводки(вольт):
+def test_order_holds_for_task_without_summary_too(vault):
     """Файл, где сводки не было вовсе, тоже приводится к порядку."""
-    path = вольт / "Задачи" / "Ручная.md"
+    path = vault / "Задачи" / "Ручная.md"
     path.write_text(
         "---\ntype: task\nsteps:\n  - id: 1\n    title: Шаг\n"
         "    control_date: 2026-08-15\ntitle: Ручная\n---\n\nТело\n",
         encoding="utf-8")
-    запустить(engine.cmd_refresh)
-    assert list(прочитать(path)[0].keys())[-1] == "steps"
-    assert list(прочитать(path)[0].keys())[0] == "schema"
+    run(engine.cmd_refresh)
+    assert list(read(path)[0].keys())[-1] == "steps"
+    assert list(read(path)[0].keys())[0] == "schema"
 
 
 # --- Ошибки ----------------------------------------------------------------
 
-def test_несуществующая_задача(вольт):
-    задача(вольт, "Грант", [шаг(1, "Собрать", control_date=СЕГОДНЯ)])
+def test_nonexistent_task(vault):
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
     with pytest.raises(SystemExit) as e:
-        запустить(engine.cmd_show, task="подшипник")
+        run(engine.cmd_show, task="подшипник")
     assert "нет задачи" in str(e.value)
 
 
-def test_неоднозначный_фрагмент_имени(вольт):
-    задача(вольт, "Заявка на грант ФПГ", [шаг(1, "Собрать", control_date=СЕГОДНЯ)])
-    задача(вольт, "Заявка на субсидию", [шаг(1, "Собрать", control_date=СЕГОДНЯ)])
+def test_ambiguous_name_fragment(vault):
+    task(vault, "Заявка на грант ФПГ", [step(1, "Собрать", control_date=TODAY)])
+    task(vault, "Заявка на субсидию", [step(1, "Собрать", control_date=TODAY)])
 
     with pytest.raises(SystemExit) as e:
-        запустить(engine.cmd_show, task="заявка")
+        run(engine.cmd_show, task="заявка")
     assert "подходит несколько" in str(e.value)
     assert "Заявка на грант ФПГ" in str(e.value)
 
     # однозначный фрагмент находится, регистр не важен
-    assert запустить(engine.cmd_show, task="ГРАНТ")["task"] == "Заявка на грант ФПГ"
+    assert run(engine.cmd_show, task="ГРАНТ")["task"] == "Заявка на грант ФПГ"
 
 
-def test_несуществующий_шаг(вольт):
-    задача(вольт, "Грант", [шаг(1, "Собрать", control_date=СЕГОДНЯ)])
+def test_nonexistent_step(vault):
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
     with pytest.raises(SystemExit) as e:
-        запустить(engine.cmd_done, task="Грант", step="7")
+        run(engine.cmd_done, task="Грант", step="7")
     assert "нет шага 7" in str(e.value)
 
 
-@pytest.mark.parametrize("команда", ["cmd_done", "cmd_notdone", "cmd_defer"])
-def test_закрытый_шаг_повторно_не_трогается(вольт, команда):
+@pytest.mark.parametrize("command", ["cmd_done", "cmd_notdone", "cmd_defer"])
+def test_closed_step_not_touched_again(vault, command):
     """Иначе отметка задним числом перепишет дату выполнения и сломает историю."""
-    path = задача(вольт, "Грант", [
-        шаг(1, "Собрать", status="done", control_date=date(2026, 8, 1),
+    path = task(vault, "Грант", [
+        step(1, "Собрать", status="done", control_date=date(2026, 8, 1),
             completed_date=date(2026, 8, 1),
             log=[{"date": date(2026, 8, 1), "event": "done"}]),
-        шаг(2, "Отправить", control_date=СЕГОДНЯ),
+        step(2, "Отправить", control_date=TODAY),
     ])
-    было = path.read_bytes()
+    before = path.read_bytes()
 
     with pytest.raises(SystemExit) as e:
-        запустить(getattr(engine, команда), task="Грант", step="1", to="2026-08-20")
+        run(getattr(engine, command), task="Грант", step="1", to="2026-08-20")
     assert "уже done" in str(e.value)
-    assert path.read_bytes() == было      # файл не тронут
+    assert path.read_bytes() == before      # файл не тронут
 
 
-def test_файл_без_frontmatter_пропускается(вольт, capsys):
+def test_file_without_frontmatter_is_skipped(vault, capsys):
     """Один битый файл не должен ронять всю сборку."""
-    (вольт / "Задачи" / "Битая.md").write_text("Просто текст без шапки\n",
+    (vault / "Задачи" / "Битая.md").write_text("Просто текст без шапки\n",
                                                encoding="utf-8")
-    задача(вольт, "Грант", [шаг(1, "Собрать", control_date=СЕГОДНЯ)])
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
 
-    задачи = запустить(engine.cmd_list)["tasks"]
-    assert [t["task"] for t in задачи] == ["Грант"]
+    tasks = run(engine.cmd_list)["tasks"]
+    assert [t["task"] for t in tasks] == ["Грант"]
     stderr = capsys.readouterr().err
     assert "не разобран Битая.md" in stderr and "нет frontmatter" in stderr
 
 
-def test_битый_yaml_пропускается(вольт, capsys):
-    (вольт / "Задачи" / "Кривая.md").write_text(
+def test_broken_yaml_is_skipped(vault, capsys):
+    (vault / "Задачи" / "Кривая.md").write_text(
         "---\ntype: task\nsteps: [1, 2\n---\n\nТело\n", encoding="utf-8")
-    задача(вольт, "Грант", [шаг(1, "Собрать", control_date=СЕГОДНЯ)])
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
 
-    assert [t["task"] for t in запустить(engine.cmd_list)["tasks"]] == ["Грант"]
+    assert [t["task"] for t in run(engine.cmd_list)["tasks"]] == ["Грант"]
     assert "не разобран Кривая.md" in capsys.readouterr().err
 
 
-def test_битый_файл_виден_в_json_а_не_только_в_stderr(вольт):
+def test_broken_file_visible_in_json_not_only_stderr(vault):
     """Заказчик правит шаги руками, и опечатка в YAML — вопрос времени.
 
     Раньше такая задача молча исчезала: `tasks: []`, код возврата 0,
@@ -724,49 +724,49 @@ def test_битый_файл_виден_в_json_а_не_только_в_stderr(�
     Пропажа задачи из трекера и из утренней сборки без единого сигнала опаснее
     падения — падение хотя бы заметно.
     """
-    (вольт / "Задачи" / "Кривая.md").write_text(
+    (vault / "Задачи" / "Кривая.md").write_text(
         "---\ntype: task\ntitle: [Съездить\nstatus: pending\n---\n\nТело\n",
         encoding="utf-8")
-    задача(вольт, "Грант", [шаг(1, "Собрать", control_date=СЕГОДНЯ)])
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
 
-    for команда in (engine.cmd_list, engine.cmd_next):
-        рез = запустить(команда)
-        битые = рез["broken"]
-        assert [b["file"] for b in битые] == ["Кривая.md"], команда.__name__
-        assert битые[0]["error"], "причина должна быть, иначе чинить вслепую"
+    for command in (engine.cmd_list, engine.cmd_next):
+        result = run(command)
+        broken = result["broken"]
+        assert [b["file"] for b in broken] == ["Кривая.md"], command.__name__
+        assert broken[0]["error"], "причина должна быть, иначе чинить вслепую"
 
 
-def test_починенный_файл_уходит_из_битых(вольт):
+def test_fixed_file_leaves_broken_list(vault):
     """Список битых пересобирается при каждом чтении, а не копится."""
-    путь = вольт / "Задачи" / "Кривая.md"
-    путь.write_text("---\ntype: task\ntitle: [битое\n---\n\nТело\n", encoding="utf-8")
-    assert запустить(engine.cmd_list)["broken"]
+    path = vault / "Задачи" / "Кривая.md"
+    path.write_text("---\ntype: task\ntitle: [битое\n---\n\nТело\n", encoding="utf-8")
+    assert run(engine.cmd_list)["broken"]
 
-    путь.write_text("---\ntype: task\ntitle: Целое\nsteps: []\n---\n\nТело\n",
+    path.write_text("---\ntype: task\ntitle: Целое\nsteps: []\n---\n\nТело\n",
                     encoding="utf-8")
-    assert запустить(engine.cmd_list)["broken"] == []
+    assert run(engine.cmd_list)["broken"] == []
 
 
-def test_заметка_не_задача_игнорируется(вольт):
+def test_note_not_task_is_ignored(vault):
     """В папке задач может лежать что угодно: смотрим на type, а не на имя."""
-    (вольт / "Задачи" / "Василий Говнов.md").write_text(
+    (vault / "Задачи" / "Василий Говнов.md").write_text(
         "---\ntype: note\n---\n\nЗаметка базы знаний\n", encoding="utf-8")
-    задача(вольт, "Грант", [шаг(1, "Собрать", control_date=СЕГОДНЯ)])
-    assert [t["task"] for t in запустить(engine.cmd_list)["tasks"]] == ["Грант"]
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    assert [t["task"] for t in run(engine.cmd_list)["tasks"]] == ["Грант"]
 
 
-def test_нет_папки_задач(tmp_path, monkeypatch):
+def test_no_tasks_folder(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "TASKS_DIR", tmp_path / "Задачи")
     with pytest.raises(SystemExit) as e:
-        запустить(engine.cmd_list)
+        run(engine.cmd_list)
     assert "нет папки задач" in str(e.value)
 
 
-def test_пустой_вольт(вольт):
-    assert запустить(engine.cmd_list) == {"today": "2026-08-15", "tasks": [],
+def test_empty_vault(vault):
+    assert run(engine.cmd_list) == {"today": "2026-08-15", "tasks": [],
                                           "broken": []}
-    assert запустить(engine.cmd_next)["due"] == []
-    assert запустить(engine.cmd_refresh)["count"] == 0
+    assert run(engine.cmd_next)["due"] == []
+    assert run(engine.cmd_refresh)["count"] == 0
 
 
 # --- Починенные баги --------------------------------------------------------
@@ -774,29 +774,29 @@ def test_пустой_вольт(вольт):
 # Оба нашлись при написании тестов и были исправлены здесь же. Тесты остаются
 # регрессионными: они описывают ровно то поведение, которого раньше не было.
 
-def test_чужой_статус_шага_не_роняет_сборку(вольт):
+def test_unknown_step_status_does_not_break_build(vault):
     """Вольт правится руками, и `status: сделан` вместо `done` — вопрос времени.
 
     Раньше это валило list/next/refresh/export целиком: «закрыт» и «открыт»
     проверялись разными правилами и на незнакомом статусе расходились.
     """
-    задача(вольт, "Кривая", [шаг(1, "Шаг", status="сделан",
+    task(vault, "Кривая", [step(1, "Шаг", status="сделан",
                                  control_date=date(2026, 8, 10))])
-    задача(вольт, "Грант", [шаг(1, "Собрать", control_date=СЕГОДНЯ)])
-    задачи = запустить(engine.cmd_list)["tasks"]
-    assert "Грант" in [t["task"] for t in задачи]
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    tasks = run(engine.cmd_list)["tasks"]
+    assert "Грант" in [t["task"] for t in tasks]
 
 
-def test_снять_закрытый_шаг_нельзя(вольт):
+def test_cannot_skip_closed_step(vault):
     """Снятие закрытого шага оставляло бы completed_date и событие «сделан»
     рядом со статусом «снят» — запись, противоречащая сама себе."""
-    задача(вольт, "Грант", [
-        шаг(1, "Собрать", status="done", control_date=date(2026, 8, 1),
+    task(vault, "Грант", [
+        step(1, "Собрать", status="done", control_date=date(2026, 8, 1),
             completed_date=date(2026, 8, 1),
             log=[{"date": date(2026, 8, 1), "event": "done"}]),
     ])
     with pytest.raises(SystemExit):
-        запустить(engine.cmd_skip, task="Грант", step="1")
+        run(engine.cmd_skip, task="Грант", step="1")
 
 
 # --- CLI как его увидит чужой ноутбук ---------------------------------------
@@ -805,7 +805,7 @@ def test_снять_закрытый_шаг_нельзя(вольт):
 # вольту вообще берётся из YUNGDRUNG_VAULT и что argparse связан с командами.
 # Подмена модульных переменных этот кусок обходит стороной.
 
-def движок(вольт, *аргументы):
+def run_cli(vault, *args):
     """Движок всегда печатает UTF-8 — значит и читать его надо как UTF-8.
 
     Без явного encoding subprocess декодирует вывод в кодировке локали: на маке
@@ -813,39 +813,39 @@ def движок(вольт, *аргументы):
     превращается в «Ð“Ñ€Ð°Ð½Ñ‚». Поймано настоящим прогоном на машине заказчика.
     То же правило действует для любого, кто вызывает движок и разбирает JSON.
     """
-    рез = subprocess.run(
-        [sys.executable, str(КОРЕНЬ / "engine.py"), *аргументы],
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "engine.py"), *args],
         capture_output=True, text=True, encoding="utf-8",
-        env={**os.environ, "YUNGDRUNG_VAULT": str(вольт)},
+        env={**os.environ, "YUNGDRUNG_VAULT": str(vault)},
     )
-    assert рез.returncode == 0, рез.stderr
-    return json.loads(рез.stdout)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
 
 
-def test_cli_читает_переменную_окружения(tmp_path):
+def test_cli_reads_env_var(tmp_path):
     (tmp_path / "Задачи").mkdir()
-    задача(tmp_path, "Грант", [шаг(1, "Собрать", control_date=СЕГОДНЯ)])
+    task(tmp_path, "Грант", [step(1, "Собрать", control_date=TODAY)])
 
-    рез = движок(tmp_path, "--today", "2026-08-15", "list")
-    assert [t["task"] for t in рез["tasks"]] == ["Грант"]
-    assert рез["tasks"][0]["status"] == "due"
+    result = run_cli(tmp_path, "--today", "2026-08-15", "list")
+    assert [t["task"] for t in result["tasks"]] == ["Грант"]
+    assert result["tasks"][0]["status"] == "due"
     # реальный вольт репозитория при этом не читается
-    assert "Заявка на грант ФПГ" not in [t["task"] for t in рез["tasks"]]
+    assert "Заявка на грант ФПГ" not in [t["task"] for t in result["tasks"]]
 
 
-def test_cli_пишет_в_свой_вольт(tmp_path):
+def test_cli_writes_to_its_own_vault(tmp_path):
     (tmp_path / "Задачи").mkdir()
-    path = задача(tmp_path, "Грант", [
-        шаг(1, "Собрать", control_date=СЕГОДНЯ),
-        шаг(2, "Отправить"),
+    path = task(tmp_path, "Грант", [
+        step(1, "Собрать", control_date=TODAY),
+        step(2, "Отправить"),
     ])
-    репозиторий = снимок(КОРЕНЬ)
+    repo = snapshot(ROOT)
 
-    рез = движок(tmp_path, "--today", "2026-08-15", "done", "грант", "1",
+    result = run_cli(tmp_path, "--today", "2026-08-15", "done", "грант", "1",
                  "--reason", "сдал")
-    assert рез["ok"] and рез["date_assigned_to_step"] == 2
+    assert result["ok"] and result["date_assigned_to_step"] == 2
 
-    meta, _ = прочитать(path)
+    meta, _ = read(path)
     assert meta["steps"][0]["status"] == "done"
     assert meta["current_step"] == "Отправить"
-    assert снимок(КОРЕНЬ) == репозиторий, "движок тронул реальные Задачи/"
+    assert snapshot(ROOT) == repo, "движок тронул реальные Задачи/"
