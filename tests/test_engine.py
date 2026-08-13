@@ -704,7 +704,7 @@ def test_файл_без_frontmatter_пропускается(вольт, capsys
     задачи = запустить(engine.cmd_list)["tasks"]
     assert [t["task"] for t in задачи] == ["Грант"]
     stderr = capsys.readouterr().err
-    assert "пропущен Битая.md" in stderr and "нет frontmatter" in stderr
+    assert "не разобран Битая.md" in stderr and "нет frontmatter" in stderr
 
 
 def test_битый_yaml_пропускается(вольт, capsys):
@@ -713,7 +713,38 @@ def test_битый_yaml_пропускается(вольт, capsys):
     задача(вольт, "Грант", [шаг(1, "Собрать", control_date=СЕГОДНЯ)])
 
     assert [t["task"] for t in запустить(engine.cmd_list)["tasks"]] == ["Грант"]
-    assert "пропущен Кривая.md" in capsys.readouterr().err
+    assert "не разобран Кривая.md" in capsys.readouterr().err
+
+
+def test_битый_файл_виден_в_json_а_не_только_в_stderr(вольт):
+    """Заказчик правит шаги руками, и опечатка в YAML — вопрос времени.
+
+    Раньше такая задача молча исчезала: `tasks: []`, код возврата 0,
+    предупреждение только в stderr, которого не видят ни бот, ни человек.
+    Пропажа задачи из трекера и из утренней сборки без единого сигнала опаснее
+    падения — падение хотя бы заметно.
+    """
+    (вольт / "Задачи" / "Кривая.md").write_text(
+        "---\ntype: task\ntitle: [Съездить\nstatus: pending\n---\n\nТело\n",
+        encoding="utf-8")
+    задача(вольт, "Грант", [шаг(1, "Собрать", control_date=СЕГОДНЯ)])
+
+    for команда in (engine.cmd_list, engine.cmd_next):
+        рез = запустить(команда)
+        битые = рез["broken"]
+        assert [b["file"] for b in битые] == ["Кривая.md"], команда.__name__
+        assert битые[0]["error"], "причина должна быть, иначе чинить вслепую"
+
+
+def test_починенный_файл_уходит_из_битых(вольт):
+    """Список битых пересобирается при каждом чтении, а не копится."""
+    путь = вольт / "Задачи" / "Кривая.md"
+    путь.write_text("---\ntype: task\ntitle: [битое\n---\n\nТело\n", encoding="utf-8")
+    assert запустить(engine.cmd_list)["broken"]
+
+    путь.write_text("---\ntype: task\ntitle: Целое\nsteps: []\n---\n\nТело\n",
+                    encoding="utf-8")
+    assert запустить(engine.cmd_list)["broken"] == []
 
 
 def test_заметка_не_задача_игнорируется(вольт):
@@ -732,7 +763,8 @@ def test_нет_папки_задач(tmp_path, monkeypatch):
 
 
 def test_пустой_вольт(вольт):
-    assert запустить(engine.cmd_list) == {"today": "2026-08-15", "tasks": []}
+    assert запустить(engine.cmd_list) == {"today": "2026-08-15", "tasks": [],
+                                          "broken": []}
     assert запустить(engine.cmd_next)["due"] == []
     assert запустить(engine.cmd_refresh)["count"] == 0
 

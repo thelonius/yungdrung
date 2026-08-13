@@ -126,15 +126,25 @@ def write_file(path, meta, body):
         raise
 
 
+# Файлы, которые не удалось разобрать при последнем чтении вольта. Собираются
+# здесь, чтобы попасть в JSON, а не только в stderr: заказчик правит шаги руками,
+# и опечатка в YAML не должна означать, что задача молча исчезла из трекера и из
+# утренней сборки. Молчаливая потеря опаснее падения — падение хотя бы заметно.
+БИТЫЕ = []
+
+
 def load_tasks():
     if not TASKS_DIR.is_dir():
         sys.exit(f"нет папки задач: {TASKS_DIR}")
+    БИТЫЕ.clear()
     out = []
     for path in sorted(TASKS_DIR.glob("*.md")):
         try:
             meta, body = parse_file(path)
         except Exception as e:
-            print(f"[пропущен {path.name}: {e}]", file=sys.stderr)
+            причина = " ".join(str(e).split())[:200]
+            БИТЫЕ.append({"file": path.name, "error": причина})
+            print(f"[не разобран {path.name}: {причина}]", file=sys.stderr)
             continue
         if meta.get("type") != "task":
             continue
@@ -365,7 +375,8 @@ def cmd_next(args, today):
         if view["stalled"] >= 3:
             stalled.append(view)
     due.sort(key=lambda v: (-v["overdue_days"], v["task"]))
-    return {"today": today.isoformat(), "due": due, "stalled": stalled}
+    return {"today": today.isoformat(), "due": due, "stalled": stalled,
+            "broken": list(БИТЫЕ)}
 
 
 def cmd_refresh(args, today):
@@ -384,7 +395,7 @@ def cmd_refresh(args, today):
                             "status": task["meta"]["status"],
                             "changed": changed})
     return {"today": today.isoformat(), "written": touched, "count": len(touched),
-            "forced": bool(args.force)}
+            "forced": bool(args.force), "broken": list(БИТЫЕ)}
 
 
 def cmd_list(args, today):
@@ -400,7 +411,7 @@ def cmd_list(args, today):
             "steps_total": len(steps),
             "current": step.get("title") if step else None,
         })
-    return {"today": today.isoformat(), "tasks": out}
+    return {"today": today.isoformat(), "tasks": out, "broken": list(БИТЫЕ)}
 
 
 def cmd_show(args, today):
