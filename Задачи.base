@@ -1,7 +1,6 @@
 filters:
   and:
-    - 'note.type == "task"'
-
+    - note.type == "task"
 properties:
   note.status:
     displayName: Статус
@@ -17,37 +16,35 @@ properties:
     displayName: Категории
   file.name:
     displayName: Задача
-
 views:
   - type: table
     name: Доска
     groupBy:
-      property: note.status
+      property: status
+      direction: ASC
     order:
       - file.name
-      - note.control_date
-      - note.current_step
-      - note.progress
-      - note.stalled
-      - note.tags
-
+      - control_date
+      - current_step
+      - progress
+      - stalled
+      - tags
   - type: table
     name: Требует внимания
     filters:
       and:
-        - 'note.status != "закрыта"'
+        - note.status != "закрыта"
     order:
-      - note.control_date
+      - control_date
       - file.name
-      - note.current_step
-      - note.stalled
-
+      - current_step
+      - stalled
   - type: table
     name: Буксуют
     filters:
       and:
-        - 'note.stalled >= 3'
+        - note.stalled >= 3
     order:
-      - note.stalled
+      - stalled
       - file.name
-      - note.current_step
+      - current_step
