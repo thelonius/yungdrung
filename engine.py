@@ -154,10 +154,23 @@ def steps_of(task):
     return task["meta"].get("steps") or []
 
 
+def is_closed(step):
+    """Шаг закрыт, только если статус — один из двух известных нам.
+
+    Всё незнакомое считаем открытым, а не закрытым. Вольт правится руками, и
+    заказчик вполне может напечатать в Obsidian `status: сделан` вместо `done`.
+    Раньше это роняло `list`/`next`/`refresh`/`export` целиком с traceback:
+    «закрыт» и «открыт» проверялись двумя разными правилами, и на незнакомом
+    статусе они расходились — задача не считалась закрытой, но и текущего шага
+    в ней не находилось.
+    """
+    return step.get("status", OPEN) in (DONE, SKIPPED)
+
+
 def current_step(task):
     """Первый незакрытый шаг. Шаги идут последовательно, параллельных нет."""
     for step in steps_of(task):
-        if step.get("status", OPEN) == OPEN:
+        if not is_closed(step):
             return step
     return None
 
@@ -166,7 +179,7 @@ def task_status(task, today):
     steps = steps_of(task)
     if not steps:
         return "empty"
-    if all(s.get("status", OPEN) in (DONE, SKIPPED) for s in steps):
+    if all(is_closed(s) for s in steps):
         return "done"
     step = current_step(task)
     due = as_date(step.get("control_date"))
@@ -380,6 +393,11 @@ def cmd_skip(args, today):
     """Шаг снят: задача пошла другим путём, а не через этот шаг."""
     task = find_task(args.task)
     step = get_step(task, args.step)
+    # Как и done/notdone/defer: закрытый шаг повторно не трогаем. Иначе снятие
+    # уже сделанного шага оставляло бы completed_date и событие «сделан» в логе
+    # рядом со статусом «снят» — запись, противоречащая сама себе.
+    if is_closed(step):
+        sys.exit(f"шаг {args.step} уже {step.get('status')}")
     step["status"] = SKIPPED
     log_event(step, "skipped", today, reason=args.reason)
     nxt = current_step(task)

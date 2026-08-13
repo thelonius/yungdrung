@@ -1,3 +1,4 @@
 todos/
 .obsidian/
 __pycache__/
+.pytest_cache/
