@@ -1,0 +1,53 @@
+filters:
+  and:
+    - 'note.type == "task"'
+
+properties:
+  note.status:
+    displayName: Статус
+  note.current_step:
+    displayName: Текущий шаг
+  note.control_date:
+    displayName: Контроль
+  note.progress:
+    displayName: Шаги
+  note.stalled:
+    displayName: Буксует
+  note.tags:
+    displayName: Категории
+  file.name:
+    displayName: Задача
+
+views:
+  - type: table
+    name: Доска
+    groupBy:
+      property: note.status
+    order:
+      - file.name
+      - note.control_date
+      - note.current_step
+      - note.progress
+      - note.stalled
+      - note.tags
+
+  - type: table
+    name: Требует внимания
+    filters:
+      and:
+        - 'note.status != "закрыта"'
+    order:
+      - note.control_date
+      - file.name
+      - note.current_step
+      - note.stalled
+
+  - type: table
+    name: Буксуют
+    filters:
+      and:
+        - 'note.stalled >= 3'
+    order:
+      - note.stalled
+      - file.name
+      - note.current_step

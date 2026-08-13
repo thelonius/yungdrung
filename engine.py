@@ -35,6 +35,17 @@ OPEN = "pending"
 DONE = "done"
 SKIPPED = "skipped"
 
+# В вольт статус пишется по-русски: эти файлы читает заказчик, а не только движок.
+# В JSON наружу уходят английские ключи — там интерфейс для бота.
+STATUS_RU = {
+    "overdue": "просрочена",
+    "due": "сегодня",
+    "waiting": "ждёт",
+    "no_date": "без даты",
+    "done": "закрыта",
+    "empty": "нет шагов",
+}
+
 
 # --- чтение и запись -------------------------------------------------------
 
@@ -174,14 +185,43 @@ def get_step(task, step_id):
     sys.exit(f"нет шага {step_id} в «{task['path'].stem}»")
 
 
-def save(task, today):
-    """Статус задачи пересчитывается при каждой записи, руками его никто не ставит."""
+def save(task, today, force=True):
+    """Статус и сводка пересчитываются при каждой записи, руками их никто не ставит.
+
+    Сводка дублирует то, что и так лежит в шагах, но Bases читает только свойства
+    верхнего уровня и внутрь массива шагов не заглядывает. Без этих полей таблица
+    в Obsidian показывает одни имена файлов. Источник правды остаётся в шагах:
+    всё, что здесь, вычисляется заново при каждой записи.
+    """
     meta = task["meta"]
-    meta["schema"] = SCHEMA
-    status = task_status(task, today)
-    meta["status"] = "done" if status == "done" else ("in_progress" if any(
-        s.get("status") in (DONE, SKIPPED) for s in steps_of(task)) else "new")
-    write_file(task["path"], meta, task["body"])
+    steps = steps_of(task)
+    step = current_step(task)
+    closed = sum(1 for s in steps if s.get("status") in (DONE, SKIPPED))
+
+    summary = {
+        "schema": SCHEMA,
+        "status": STATUS_RU[task_status(task, today)],
+        "current_step": step.get("title") if step else None,
+        "control_date": as_date(step.get("control_date")) if step else None,
+        "stalled": stall_count(step) if step else 0,
+        "progress": f"{closed}/{len(steps)}" if steps else None,
+    }
+    changed = any(meta.get(k) != v for k, v in summary.items())
+    meta.update(summary)
+
+    # Порядок полей задаём явно: в редакторе свойств Obsidian сводка должна быть
+    # сверху, а длинный массив шагов — в конце, иначе статуса не видно за простынёй.
+    head = ["schema", "type", "title", "created", "status", "current_step",
+            "control_date", "progress", "stalled", "tags"]
+    ordered = {k: meta[k] for k in head if k in meta}
+    ordered.update({k: v for k, v in meta.items() if k not in head and k != "steps"})
+    if "steps" in meta:
+        ordered["steps"] = meta["steps"]
+    task["meta"] = ordered
+
+    if changed or force:
+        write_file(task["path"], ordered, task["body"])
+    return changed
 
 
 # --- команды ---------------------------------------------------------------
@@ -200,6 +240,25 @@ def cmd_next(args, today):
             stalled.append(view)
     due.sort(key=lambda v: (-v["overdue_days"], v["task"]))
     return {"today": today.isoformat(), "due": due, "stalled": stalled}
+
+
+def cmd_refresh(args, today):
+    """Пересчитать сводку во всех задачах.
+
+    Статус в файле устаревает сам по себе: задача становится просроченной оттого,
+    что прошёл день, а не оттого, что кто-то её трогал. Гонять перед утренней
+    сборкой. Файлы, где ничего не изменилось, не переписываются — иначе каждое утро
+    получаем холостой коммит и перезагрузку вольта в Obsidian.
+    """
+    touched = []
+    for task in load_tasks():
+        changed = save(task, today, force=args.force)
+        if changed or args.force:
+            touched.append({"task": task["path"].stem,
+                            "status": task["meta"]["status"],
+                            "changed": changed})
+    return {"today": today.isoformat(), "written": touched, "count": len(touched),
+            "forced": bool(args.force)}
 
 
 def cmd_list(args, today):
@@ -308,6 +367,11 @@ def main():
 
     sub.add_parser("next", help="что требует внимания").set_defaults(func=cmd_next)
     sub.add_parser("list", help="все задачи").set_defaults(func=cmd_list)
+    r = sub.add_parser("refresh", help="пересчитать сводку во всех задачах (перед сборкой)")
+    r.add_argument("--force", action="store_true",
+                   help="переписать все файлы, даже если сводка не изменилась — "
+                        "нужно после смены схемы, чтобы привести вольт к новому виду")
+    r.set_defaults(func=cmd_refresh)
 
     s = sub.add_parser("show", help="одна задача целиком")
     s.add_argument("task")
