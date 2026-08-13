@@ -238,6 +238,71 @@ def get_step(task, step_id):
     sys.exit(f"нет шага {step_id} в «{task['path'].stem}»")
 
 
+ШАГИ_НАЧАЛО = "<!-- шаги: пишет движок, править руками не нужно -->"
+ШАГИ_КОНЕЦ = "<!-- /шаги -->"
+
+# Маркеры статуса шага в теле заметки. Галочки-чекбоксы намеренно не используем:
+# в Obsidian они кликабельные, заказчик отметил бы шаг мышкой, движок затёр бы
+# это при следующей записи — и получилось бы два писателя одного поля.
+ЗНАК = {DONE: "✓", SKIPPED: "×", OPEN: "•"}
+
+
+def render_steps(task, today):
+    """Шаги человеческим списком — в тело заметки.
+
+    Зачем: в панели свойств Obsidian массив объектов не рисуется, там видна
+    обрезанная JSON-строка. Заказчик кликает по задаче из таблицы Bases и
+    упирается в нечитаемое. Здесь он видит список.
+
+    Побочно чинится вторая дыра: `[[ссылка]]` внутри названия шага живёт во
+    frontmatter, а его Obsidian ссылками не считает. В теле — считает, поэтому
+    ссылки на заметки базы знаний из названий шагов начинают работать.
+    """
+    строки = [ШАГИ_НАЧАЛО, "**Шаги**", ""]
+    for шаг in steps_of(task):
+        статус = шаг.get("status", OPEN)
+        хвост = []
+        дата = as_date(шаг.get("control_date"))
+        if статус == DONE:
+            сделан = as_date(шаг.get("completed_date"))
+            хвост.append(f"сделан {сделан:%d.%m.%Y}" if сделан else "сделан")
+        elif статус == SKIPPED:
+            хвост.append("снят")
+        elif дата:
+            хвост.append(f"контроль {дата:%d.%m.%Y}")
+            if дата < today:
+                хвост.append(f"просрочен на {(today - дата).days} дн.")
+        else:
+            хвост.append("дата не назначена")
+
+        буксует = stall_count(шаг)
+        if буксует >= 3 and статус == OPEN:
+            причина = next((e.get("reason") for e in reversed(шаг.get("log") or [])
+                            if e.get("reason")), None)
+            хвост.append(f"буксует, отметок «не сделан»: {буксует}"
+                         + (f" ({причина})" if причина else ""))
+
+        строки.append(f"{ЗНАК.get(статус, '•')} **{шаг.get('id')}.** "
+                      f"{шаг.get('title', '')} — {' · '.join(хвост)}")
+    строки += ["", ШАГИ_КОНЕЦ]
+    return "\n".join(строки)
+
+
+def put_steps_into_body(body, block):
+    """Блок шагов переписываем, всё остальное в теле не трогаем.
+
+    Тело принадлежит заказчику: там его заметки по задаче. Движок владеет только
+    участком между маркерами. Если маркеров нет — вставляем блок сверху, текст
+    заказчика уезжает под него.
+    """
+    начало = body.find(ШАГИ_НАЧАЛО)
+    конец = body.find(ШАГИ_КОНЕЦ)
+    if начало != -1 and конец != -1 and конец > начало:
+        хвост = body[конец + len(ШАГИ_КОНЕЦ):]
+        return body[:начало] + block + хвост
+    return block + "\n\n" + body.lstrip("\n") if body.strip() else block + "\n"
+
+
 def save(task, today, force=True):
     """Статус и сводка пересчитываются при каждой записи, руками их никто не ставит.
 
@@ -259,8 +324,11 @@ def save(task, today, force=True):
         "stalled": stall_count(step) if step else 0,
         "progress": f"{closed}/{len(steps)}" if steps else None,
     }
-    changed = any(meta.get(k) != v for k, v in summary.items())
+    body = put_steps_into_body(task["body"], render_steps(task, today))
+    changed = (any(meta.get(k) != v for k, v in summary.items())
+               or body != task["body"])
     meta.update(summary)
+    task["body"] = body
 
     # Порядок полей задаём явно: в редакторе свойств Obsidian сводка должна быть
     # сверху, а длинный массив шагов — в конце, иначе статуса не видно за простынёй.
@@ -273,7 +341,7 @@ def save(task, today, force=True):
     task["meta"] = ordered
 
     if changed or force:
-        write_file(task["path"], ordered, task["body"])
+        write_file(task["path"], ordered, body)
     return changed
 
 
