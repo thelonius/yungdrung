@@ -25,6 +25,16 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+# Консоль Windows по умолчанию не в UTF-8 (обычно cp866), а мы печатаем русский
+# текст и типографику: «кавычки», тире, многоточие. Без этого «нет задачи по
+# «грант»» падает UnicodeEncodeError вместо внятного сообщения — причём на
+# машине заказчика, который такое не починит. Делаем до первого вывода.
+for поток in (sys.stdout, sys.stderr):
+    try:
+        поток.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass  # поток подменён или не текстовый — печатать всё равно нечем испортить
+
 try:
     import yaml
 except ImportError:
