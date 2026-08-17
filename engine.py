@@ -27,7 +27,7 @@ import re
 import sys
 import tempfile
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
 # Консоль Windows по умолчанию не в UTF-8 (обычно cp866), а мы печатаем русский
@@ -388,21 +388,54 @@ def cmd_next(args, today):
 ОТНОСИТЕЛЬНЫЕ = {"сегодня": 0, "завтра": 1, "послезавтра": 2}
 
 
-def parse_date_input(text, today):
-    """Человеческий ввод даты → date. Здесь, а не в браузере.
+def _не_время(token):
+    raise ValueError(f"не время: {token}")
 
-    Форма и CLI обязаны понимать дату одинаково, иначе появятся задачи, которые
+
+def parse_time_part(token):
+    """«14:00», «9.30», «18-45» → time. Не время — None, и это не ошибка:
+    вызывающий просто поймёт, что времени в строке не было."""
+    m = re.fullmatch(r"(\d{1,2})[:.\-](\d{2})", token)
+    if not m:
+        return None
+    часы, минуты = int(m.group(1)), int(m.group(2))
+    if часы > 23 or минуты > 59:
+        raise ValueError(f"не время: {token}")
+    return dtime(часы, минуты)
+
+
+def parse_date_input(text, today):
+    """Человеческий ввод → date или datetime. Здесь, а не в браузере.
+
+    Форма и CLI обязаны понимать ввод одинаково, иначе появятся задачи, которые
     завелись через форму, но не читаются движком. Поэтому разбор один, а форма
     только показывает, во что он превратился.
 
     Понимает: 2026-08-18 · 18.08.2026 · 18.08 · сегодня · завтра · послезавтра ·
     +3 (через три дня) · пн, вторник (ближайший такой день после сегодня).
+
+    Со временем: «завтра 14:00», «18.08 09:30», «+3 18:00». Просто «14:00» —
+    сегодня в это время. Без времени возвращается date, и шаг считается
+    назначенным на весь день: рабочие часы для него считаются от начала дня.
     """
     if text is None:
         return None
     s = str(text).strip().lower().replace("ё", "е")
     if not s:
         return None
+
+    # Время отделяем до всего остального: «18.08 09:30» — это дата и время, а не
+    # два непонятных числа. Голое «14:00» означает сегодня в это время.
+    части = s.split()
+    if len(части) > 1:
+        часть_времени = parse_time_part(части[-1])
+        if часть_времени is not None:
+            день = parse_date_input(" ".join(части[:-1]), today)
+            if день is None:
+                raise ValueError(f"есть время, но нет даты: {text!r}")
+            return datetime.combine(as_date(день), часть_времени)
+    elif ":" in s:
+        return datetime.combine(today, parse_time_part(s) or _не_время(s))
 
     if s in ОТНОСИТЕЛЬНЫЕ:
         return today + timedelta(days=ОТНОСИТЕЛЬНЫЕ[s])
