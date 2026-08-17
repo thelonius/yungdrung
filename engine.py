@@ -45,6 +45,8 @@ try:
 except ImportError:
     sys.exit("нужен pyyaml: pip install pyyaml")
 
+import worktime
+
 SCHEMA = 1
 VAULT = Path(os.environ.get("YUNGDRUNG_VAULT", Path(__file__).resolve().parent))
 TASKS_DIR = VAULT / "Задачи"
@@ -52,6 +54,20 @@ TASKS_DIR = VAULT / "Задачи"
 OPEN = "pending"
 DONE = "done"
 SKIPPED = "skipped"
+FAILED = "failed"
+
+# Справочник причин, раздел 5.4 ТЗ. Стартовый набор, дальше редактируется.
+# Причина обязательна при «не сделано», переносе и провале: без неё счётчик
+# переносов показывает, что шаг буксует, но не показывает, обо что.
+REASONS = [
+    "жду ответа от другого человека",
+    "не было денег",
+    "не было времени",
+    "передумал, надо переформулировать",
+    "внешние обстоятельства",
+    "не хватило информации",
+    "моя лень",
+]
 
 # В вольт статус пишется по-русски: эти файлы читает заказчик, а не только движок.
 # В JSON наружу уходят английские ключи — там интерфейс для бота.
@@ -70,10 +86,12 @@ STEP_STATUS_RU = {
     OPEN: "ждёт",
     DONE: "сделан",
     SKIPPED: "снят",
+    FAILED: "провален",
 }
 
 EVENT_RU = {
     "done": "сделан",
+    "failed": "провален",
     "not_done": "не сделан",
     "defer": "перенесён",
     "skipped": "снят",
@@ -189,7 +207,7 @@ def is_closed(step):
     статусе они расходились — задача не считалась закрытой, но и текущего шага
     в ней не находилось.
     """
-    return step.get("status", OPEN) in (DONE, SKIPPED)
+    return step.get("status", OPEN) in (DONE, SKIPPED, FAILED)
 
 
 def current_step(task):
@@ -259,7 +277,7 @@ STEPS_END = "<!-- /шаги -->"
 # Маркеры статуса шага в теле заметки. Галочки-чекбоксы намеренно не используем:
 # в Obsidian они кликабельные, заказчик отметил бы шаг мышкой, движок затёр бы
 # это при следующей записи — и получилось бы два писателя одного поля.
-MARK = {DONE: "✓", SKIPPED: "×", OPEN: "•"}
+MARK = {DONE: "✓", SKIPPED: "×", FAILED: "✗", OPEN: "•"}
 
 
 def render_steps(task, today):
@@ -283,6 +301,8 @@ def render_steps(task, today):
             tail.append(f"сделан {completed:%d.%m.%Y}" if completed else "сделан")
         elif status == SKIPPED:
             tail.append("снят")
+        elif status == FAILED:
+            tail.append("не будет сделан")
         elif due:
             tail.append(f"контроль {due:%d.%m.%Y}")
             if due < today:
@@ -329,7 +349,7 @@ def save(task, today, force=True):
     meta = task["meta"]
     steps = steps_of(task)
     step = current_step(task)
-    closed = sum(1 for s in steps if s.get("status") in (DONE, SKIPPED))
+    closed = sum(1 for s in steps if is_closed(s))
 
     summary = {
         "schema": SCHEMA,
@@ -361,6 +381,103 @@ def save(task, today, force=True):
 
 
 # --- команды ---------------------------------------------------------------
+
+def feed_item(task, step, now, work):
+    """Строка ленты. Всё вычислено здесь: морда только показывает.
+
+    Раздел 6.1 ТЗ перечисляет, что видно в строке: название шага, название задачи,
+    время контроля, теги, счётчик переносов, если больше нуля.
+    """
+    control = step.get("control_date")
+    показ = worktime.show_at(control, work) if control else None
+    return {
+        "task": task["path"].stem,
+        "step": step.get("id"),
+        "title": step.get("title"),
+        "note": step.get("note"),
+        "control_at": str(control) if control else None,
+        "show_at": показ.isoformat() if показ else None,
+        "state": worktime.due_state(control, now, work),
+        "postponed": stall_count(step),
+        "stalled": stall_count(step) >= 3,
+        "tags": task["meta"].get("tags") or [],
+        "last_reason": next(
+            (e.get("reason") for e in reversed(step.get("log") or []) if e.get("reason")),
+            None),
+        "actions": ["done", "notdone", "defer", "skip"],
+    }
+
+
+def collect_open(now, work):
+    """Открытые шаги всех задач, разложенные по состоянию.
+
+    Одним проходом, потому что лента и завал — это один и тот же набор, просто
+    разрезанный по-разному, и считать его дважды значит однажды разойтись.
+    """
+    лента, завал, ждут = [], [], []
+    for task in load_tasks():
+        step = current_step(task)
+        if step is None:
+            continue
+        item = feed_item(task, step, now, work)
+        if item["state"] == "overdue":
+            завал.append(item)
+        elif worktime.in_horizon(step.get("control_date"), now, work):
+            лента.append(item)
+        else:
+            ждут.append(item)
+    ключ = lambda i: (i["show_at"] or "9999", i["task"])
+    return sorted(лента, key=ключ), sorted(завал, key=ключ), sorted(ждут, key=ключ)
+
+
+def cmd_feed(args, today):
+    """Лента «Что сегодня» — раздел 6.1 ТЗ.
+
+    Просроченное в строки не попадает: по 6.1 оно живёт отдельной плашкой, потому
+    что пятнадцать красных строк парализуют экран. Счётчик отдаёт отдельно.
+    """
+    now = _now(args, today)
+    work = _work(args)
+    лента, завал, ждут = collect_open(now, work)
+    ближайший = ждут[0] if ждут else None
+    return {
+        "now": now.isoformat(),
+        "feed": лента,
+        "overdue_count": len(завал),
+        "counts": {"overdue": len(завал), "today": len(лента), "waiting": len(ждут)},
+        "next_ahead": ближайший,
+        "stalled_count": sum(1 for i in лента + завал if i["stalled"]),
+        "broken": list(BROKEN),
+    }
+
+
+def cmd_backlog(args, today):
+    """Разбор завала — раздел 6.9 ТЗ. Всё просроченное, худшее сверху."""
+    now = _now(args, today)
+    work = _work(args)
+    _, завал, _ = collect_open(now, work)
+    завал.sort(key=lambda i: (not i["stalled"], i["show_at"] or "9999"))
+    return {"now": now.isoformat(), "backlog": завал, "count": len(завал),
+            "broken": list(BROKEN)}
+
+
+def _now(args, today):
+    """Момент, от которого считаем. `--today` задаёт дату, время берём текущее —
+    так тесты и утренние прогоны воспроизводимы, а живой запуск точен."""
+    заданный = getattr(args, "now", None) if args else None
+    if заданный:
+        return worktime.as_datetime(заданный)
+    сейчас = datetime.now()
+    return сейчас if today == сейчас.date() else datetime.combine(today, сейчас.time())
+
+
+def _work(args):
+    return worktime.settings(
+        start=getattr(args, "work_start", None) if args else None,
+        end=getattr(args, "work_end", None) if args else None,
+        weekends=getattr(args, "weekends", None) if args else None,
+    )
+
 
 def cmd_next(args, today):
     due, stalled = [], []
@@ -678,6 +795,29 @@ def cmd_defer(args, today):
             "next_check": to.isoformat()}
 
 
+def cmd_fail(args, today):
+    """«Не будет сделано» — шаг закрывается проваленным, задача идёт дальше.
+
+    Четвёртый исход из раздела 6.4 ТЗ, намеренно менее заметный в интерфейсе:
+    он не должен становиться лёгким путём отмахнуться. Отличается от «снят» тем,
+    что снятый шаг перестал быть нужен, а проваленный был нужен и не случился —
+    и в истории это разные вещи.
+    """
+    task = find_task(args.task)
+    step = get_step(task, args.step)
+    if is_closed(step):
+        sys.exit(f"шаг {args.step} уже {step.get('status')}")
+    step["status"] = FAILED
+    log_event(step, "failed", today, reason=args.reason)
+    nxt = current_step(task)
+    if nxt and not nxt.get("control_date"):
+        nxt["control_date"] = today
+    save(task, today)
+    return {"ok": True, "task": task["path"].stem, "step": args.step, "status": FAILED,
+            "next_step": nxt.get("id") if nxt else None,
+            "task_status": task_status(task, today)}
+
+
 def cmd_skip(args, today):
     """Шаг снят: задача пошла другим путём, а не через этот шаг."""
     task = find_task(args.task)
@@ -850,6 +990,8 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("next", help="что требует внимания").set_defaults(func=cmd_next)
+    sub.add_parser("feed", help="лента «Что сегодня»").set_defaults(func=cmd_feed)
+    sub.add_parser("backlog", help="всё просроченное — разбор завала").set_defaults(func=cmd_backlog)
     sub.add_parser("list", help="все задачи").set_defaults(func=cmd_list)
     r = sub.add_parser("refresh", help="пересчитать сводку во всех задачах (перед сборкой)")
     r.add_argument("--force", action="store_true",
@@ -879,6 +1021,12 @@ def main():
     f.add_argument("task"); f.add_argument("step")
     f.add_argument("--to", required=True); f.add_argument("--reason")
     f.set_defaults(func=cmd_defer)
+
+    fl = sub.add_parser("fail", help="не будет сделано — шаг провален, задача идёт дальше")
+    fl.add_argument("task")
+    fl.add_argument("step")
+    fl.add_argument("--reason", required=True, help="причина обязательна")
+    fl.set_defaults(func=cmd_fail)
 
     k = sub.add_parser("skip", help="снять шаг")
     k.add_argument("task"); k.add_argument("step"); k.add_argument("--reason")

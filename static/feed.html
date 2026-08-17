@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Что сегодня — Yungdrung</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/feed.css">
+</head>
+<body>
+
+<main class="wrap">
+
+  <header class="head">
+    <div class="head-row">
+      <h1>Что сегодня</h1>
+      <a class="ghost small" href="/новая">Новая задача</a>
+    </div>
+    <div class="counters" id="counters"></div>
+  </header>
+
+  <!-- Просроченное не выводится строками: раздел 6.1 ТЗ. Пятнадцать красных
+       строк парализуют экран, поэтому одна плашка со входом в разбор. -->
+  <button type="button" class="overdue-plate" id="plate" hidden></button>
+
+  <ol class="feed" id="feed"></ol>
+
+  <p class="empty" id="empty" hidden></p>
+
+  <section class="backlog" id="backlog-view" hidden>
+    <div class="backlog-head">
+      <h2>Разбор завала</h2>
+      <button type="button" class="ghost small" id="close-backlog">Назад к ленте</button>
+    </div>
+    <ol class="feed" id="backlog-list"></ol>
+  </section>
+
+</main>
+
+<!-- Окно контроля, раздел 6.4. Крестик и Esc означают «напомнить позже», а не
+     ответ: отмахнуться от шага случайно нельзя. -->
+<dialog id="control">
+  <form method="dialog" class="control-card">
+    <header class="control-head">
+      <p class="control-task" id="c-task"></p>
+      <h2 class="control-step" id="c-step"></h2>
+      <p class="control-note" id="c-note" hidden></p>
+      <p class="control-meta" id="c-meta"></p>
+    </header>
+
+    <div class="control-actions">
+      <button type="button" class="primary" data-op="done">Сделано</button>
+      <button type="button" class="secondary" data-op="notdone">Не сделано</button>
+      <button type="button" class="secondary" data-op="defer">Перенести</button>
+    </div>
+
+    <div class="control-form" id="c-form" hidden>
+      <div class="field">
+        <label for="c-reason">Причина</label>
+        <select id="c-reason"></select>
+      </div>
+      <div class="field" id="c-date-field">
+        <label for="c-date">Новая дата контроля</label>
+        <div class="presets" id="c-presets">
+          <button type="button" data-when="+1 09:00">завтра утром</button>
+          <button type="button" data-when="+3">через 3 дня</button>
+          <button type="button" data-when="+7">через неделю</button>
+        </div>
+        <input type="text" id="c-date" autocomplete="off" placeholder="или свой вариант: 18.08, пн, +5">
+        <span class="date-preview" id="c-date-preview"></span>
+      </div>
+      <p class="err" id="c-err" hidden></p>
+      <div class="control-actions">
+        <button type="button" class="primary" id="c-save">Сохранить</button>
+        <button type="button" class="ghost" id="c-back">Отмена</button>
+      </div>
+    </div>
+
+    <footer class="control-foot">
+      <button type="button" class="quiet" data-op="fail">Не будет сделано</button>
+      <span class="foot-hint">Esc — напомнить позже</span>
+    </footer>
+  </form>
+</dialog>
+
+<script src="/feed.js"></script>
+</body>
+</html>

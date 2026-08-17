@@ -1,0 +1,297 @@
+/* Лента «Что сегодня» — раздел 6.1 ТЗ. Общие токены и поля живут в style.css. */
+
+/* Атрибут hidden прячет элемент через display:none в стилях браузера, а любой
+   свой display его перебивает — блок с display:flex остаётся виден. Правило
+   ниже возвращает hidden силу, иначе прятать элементы приходится классами. */
+[hidden] { display: none !important; }
+
+.head-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.small { padding: 5px 11px; font-size: 13px; }
+
+.counters {
+  display: flex;
+  gap: 18px;
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.counters b {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.counters .hot b { color: var(--danger); }
+
+/* Плашка вместо списка просроченного */
+.overdue-plate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  font: inherit;
+  text-align: left;
+  padding: 14px 16px;
+  border: 1.5px solid var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.overdue-plate:hover { filter: brightness(0.97); }
+
+.overdue-plate .go { font-weight: 400; opacity: .8; }
+
+.feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 13px 14px;
+  background: var(--card);
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.row.is-stalled { border-color: var(--danger); }
+
+.row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.row-title {
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.row-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.row-time { font-variant-numeric: tabular-nums; }
+
+.tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 100px;
+  font-size: 12px;
+}
+
+.postponed { color: var(--danger); font-weight: 600; }
+
+.row-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.tick, .open {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--line-strong);
+  background: none;
+  color: var(--muted);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.tick:hover { border-color: var(--accent); color: var(--accent); }
+.open:hover { border-color: var(--ink); color: var(--ink); }
+
+.empty {
+  color: var(--muted);
+  padding: 28px 4px;
+}
+
+/* --- разбор завала --- */
+
+.backlog { display: flex; flex-direction: column; gap: 14px; }
+
+.backlog-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+/* --- окно контроля --- */
+
+dialog {
+  border: none;
+  padding: 0;
+  background: none;
+  max-width: 460px;
+  width: calc(100% - 32px);
+}
+
+dialog::backdrop { background: rgba(0, 0, 0, .45); }
+
+.control-card {
+  background: var(--card);
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  color: var(--ink);
+}
+
+.control-task {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.control-step {
+  margin: 4px 0 0;
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.control-note {
+  margin: 8px 0 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.control-meta {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.control-meta .warn { color: var(--danger); font-weight: 600; }
+
+.control-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.secondary {
+  background: none;
+  border: 1.5px solid var(--line-strong);
+  color: var(--ink);
+  padding: 10px 16px;
+  border-radius: var(--radius);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.secondary:hover { border-color: var(--ink); }
+
+.control-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+
+select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--card);
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  width: 100%;
+}
+
+select:focus, select.invalid { outline: none; }
+select:focus { border-color: var(--accent); }
+select.invalid { border-color: var(--danger); background: var(--danger-bg); }
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.presets button {
+  background: none;
+  border: 1.5px solid var(--line-strong);
+  color: var(--muted);
+  padding: 5px 11px;
+  border-radius: 100px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.presets button:hover, .presets button.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Четвёртое действие оформлено сдержанно намеренно: раздел 6.4 требует, чтобы
+   «не будет сделано» не выглядело лёгким путём отмахнуться. */
+.control-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.quiet {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.quiet:hover { color: var(--danger); }
+
+.foot-hint { font-size: 12px; color: var(--muted); }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: var(--bg);
+  padding: 10px 18px;
+  border-radius: 100px;
+  font-size: 14px;
+  z-index: 10;
+}
