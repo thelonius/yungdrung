@@ -849,3 +849,100 @@ def test_cli_writes_to_its_own_vault(tmp_path):
     assert meta["steps"][0]["status"] == "done"
     assert meta["current_step"] == "Отправить"
     assert snapshot(ROOT) == repo, "движок тронул реальные Задачи/"
+
+
+# --- разбор человеческой даты ----------------------------------------------
+
+# Разбор живёт в движке, а не в браузере: форма и CLI обязаны понимать дату
+# одинаково, иначе через форму заведётся задача, которую движок не прочитает.
+
+@pytest.mark.parametrize("текст, ожидаем", [
+    ("", None),
+    ("сегодня", date(2026, 8, 17)),
+    ("завтра", date(2026, 8, 18)),
+    ("послезавтра", date(2026, 8, 19)),
+    ("+3", date(2026, 8, 20)),
+    ("+14", date(2026, 8, 31)),
+    ("вт", date(2026, 8, 18)),
+    ("пятница", date(2026, 8, 21)),
+    ("18.08", date(2026, 8, 18)),
+    ("18.08.2026", date(2026, 8, 18)),
+    ("18.08.26", date(2026, 8, 18)),
+    ("2026-08-18", date(2026, 8, 18)),
+    ("  Завтра  ", date(2026, 8, 18)),
+])
+def test_разбор_даты(текст, ожидаем):
+    assert engine.parse_date_input(текст, date(2026, 8, 17)) == ожидаем
+
+
+def test_день_недели_совпал_с_сегодня_даёт_следующую():
+    """17.08.2026 — понедельник. «пн» должен дать следующий понедельник:
+    иначе «пн» в понедельник молча означал бы «прямо сейчас»."""
+    assert engine.parse_date_input("пн", date(2026, 8, 17)) == date(2026, 8, 24)
+
+
+def test_день_и_месяц_без_года_не_уезжают_в_прошлое():
+    """«18.08» в сентябре — это август следующего года, а не позади."""
+    assert engine.parse_date_input("18.08", date(2026, 9, 1)) == date(2027, 8, 18)
+
+
+@pytest.mark.parametrize("мусор", ["вчера", "abc", "32.13", "18.08.2026 и ещё", "++5"])
+def test_мусорная_дата_отвергается(мусор):
+    with pytest.raises((ValueError, TypeError)):
+        engine.parse_date_input(мусор, date(2026, 8, 17))
+
+
+# --- создание задачи через контракт формы ----------------------------------
+
+def test_create_заводит_задачу_с_разобранными_датами(vault):
+    result = run(engine.cmd_create, json=json.dumps({
+        "title": "Продлить страховку",
+        "tags": ["быт"],
+        "steps": [{"title": "Собрать документы", "control_date": "завтра"},
+                  {"title": "Оплатить полис", "control_date": "+5"}],
+        "body": "Заметка",
+    }))
+    assert result["ok"]
+
+    meta, body = read(vault / "Задачи" / "Продлить страховку.md")
+    assert [s["control_date"] for s in meta["steps"]] == [TOMORROW, date(2026, 8, 20)]
+    assert [s["id"] for s in meta["steps"]] == [1, 2], "id раздаёт движок, по порядку"
+    assert meta["status"] == "ждёт"
+    assert "Заметка" in body
+
+
+def test_create_собирает_все_ошибки_разом(vault):
+    """Форме надо подсветить все проблемные поля сразу, а не гонять по кругу."""
+    result = run(engine.cmd_create, json=json.dumps({
+        "title": "Отчёт: за/квартал",
+        "steps": [{"title": "", "control_date": "позавчера"}],
+    }))
+    assert not result["ok"]
+    поля = {e["field"] for e in result["errors"]}
+    assert поля == {"title", "steps.0.title", "steps.0.control_date"}
+
+
+def test_create_не_пускает_дубликат(vault):
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    result = run(engine.cmd_create, json=json.dumps({
+        "title": "грант",  # тот же файл, другой регистр
+        "steps": [{"title": "Что-то"}],
+    }))
+    assert not result["ok"]
+    assert result["errors"][0]["field"] == "title"
+
+
+def test_create_требует_хотя_бы_один_шаг(vault):
+    result = run(engine.cmd_create, json=json.dumps({"title": "Пустая", "steps": []}))
+    assert not result["ok"]
+    assert result["errors"][0]["field"] == "steps"
+
+
+@pytest.mark.parametrize("плохое", ['Отчёт/квартал', 'Файл: имя', 'Что?', 'a<b'])
+def test_create_отвергает_запрещённые_в_windows_символы(vault, плохое):
+    """Название задачи — это имя файла. Вольт уезжает на Windows, и задача,
+    заведённая на маке, должна там открыться."""
+    result = run(engine.cmd_create, json=json.dumps({
+        "title": плохое, "steps": [{"title": "Шаг"}]}))
+    assert not result["ok"]
+    assert result["errors"][0]["field"] == "title"

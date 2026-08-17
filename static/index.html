@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Новая задача — Yungdrung</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<main class="wrap">
+  <header class="head">
+    <h1>Новая задача</h1>
+    <p class="hint">Enter в шаге добавляет следующий · Ctrl+Enter сохраняет</p>
+  </header>
+
+  <form id="form" novalidate>
+
+    <div class="field">
+      <label for="title">Название задачи</label>
+      <input id="title" name="title" type="text" autocomplete="off" autofocus
+             placeholder="Оплатить налоги за третий квартал">
+      <p class="err" id="err-title" hidden></p>
+    </div>
+
+    <div class="field">
+      <label for="tags">Категории <span class="opt">необязательно</span></label>
+      <input id="tags" name="tags" type="text" autocomplete="off"
+             placeholder="финансы, отчётность">
+      <p class="note">Через запятую</p>
+    </div>
+
+    <section class="steps-block">
+      <div class="steps-head">
+        <h2>Шаги</h2>
+        <p class="note">Идут по очереди: следующий откроется, когда закроешь предыдущий</p>
+      </div>
+      <ol class="steps" id="steps"></ol>
+      <p class="err" id="err-steps" hidden></p>
+      <button type="button" class="ghost" id="add-step">Добавить шаг</button>
+    </section>
+
+    <div class="field">
+      <label for="body">Заметка <span class="opt">необязательно</span></label>
+      <textarea id="body" name="body" rows="3"
+                placeholder="Телефоны, номера счетов, ссылки на [[Василий Говнов]]"></textarea>
+      <p class="note">Ссылки в двойных скобках ведут в базу знаний</p>
+    </div>
+
+    <div class="actions">
+      <button type="submit" class="primary" id="save">Создать задачу</button>
+      <span class="saved" id="saved" hidden></span>
+    </div>
+
+  </form>
+</main>
+
+<template id="step-tpl">
+  <li class="step">
+    <div class="step-num"></div>
+    <div class="step-fields">
+      <div class="step-title-row">
+        <input type="text" class="step-title" autocomplete="off" placeholder="Что сделать">
+        <button type="button" class="drop" title="Убрать шаг" aria-label="Убрать шаг">×</button>
+      </div>
+      <p class="err step-err-title" hidden></p>
+      <div class="date-row">
+        <input type="text" class="step-date" autocomplete="off"
+               placeholder="дата: завтра, +3, пн, 18.08">
+        <span class="date-preview"></span>
+      </div>
+      <p class="err step-err-date" hidden></p>
+    </div>
+  </li>
+</template>
+
+<script src="/app.js"></script>
+</body>
+</html>

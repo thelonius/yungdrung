@@ -379,6 +379,168 @@ def cmd_next(args, today):
             "broken": list(BROKEN)}
 
 
+ДНИ_НЕДЕЛИ = {
+    "пн": 0, "понедельник": 0, "вт": 1, "вторник": 1, "ср": 2, "среда": 2,
+    "чт": 3, "четверг": 3, "пт": 4, "пятница": 4, "сб": 5, "суббота": 5,
+    "вс": 6, "воскресенье": 6,
+}
+
+ОТНОСИТЕЛЬНЫЕ = {"сегодня": 0, "завтра": 1, "послезавтра": 2}
+
+
+def parse_date_input(text, today):
+    """Человеческий ввод даты → date. Здесь, а не в браузере.
+
+    Форма и CLI обязаны понимать дату одинаково, иначе появятся задачи, которые
+    завелись через форму, но не читаются движком. Поэтому разбор один, а форма
+    только показывает, во что он превратился.
+
+    Понимает: 2026-08-18 · 18.08.2026 · 18.08 · сегодня · завтра · послезавтра ·
+    +3 (через три дня) · пн, вторник (ближайший такой день после сегодня).
+    """
+    if text is None:
+        return None
+    s = str(text).strip().lower().replace("ё", "е")
+    if not s:
+        return None
+
+    if s in ОТНОСИТЕЛЬНЫЕ:
+        return today + timedelta(days=ОТНОСИТЕЛЬНЫЕ[s])
+
+    if s.startswith("+") and s[1:].isdigit():
+        return today + timedelta(days=int(s[1:]))
+
+    день = ДНИ_НЕДЕЛИ.get(s.replace("воскресенье", "воскресенье"))
+    if день is None:
+        день = ДНИ_НЕДЕЛИ.get(s)
+    if день is not None:
+        вперёд = (день - today.weekday()) % 7 or 7  # «пн» в понедельник — следующий
+        return today + timedelta(days=вперёд)
+
+    m = re.fullmatch(r"(\d{1,2})[.\-/](\d{1,2})(?:[.\-/](\d{2}|\d{4}))?", s)
+    if m:
+        д, мес, год = int(m.group(1)), int(m.group(2)), m.group(3)
+        if год is None:
+            дата = date(today.year, мес, д)
+            # «18.08» в сентябре — это следующий год, а не прошедшая дата
+            return дата if дата >= today else date(today.year + 1, мес, д)
+        год = int(год)
+        return date(год + 2000 if год < 100 else год, мес, д)
+
+    return as_date(s)  # ISO и всё, что понимает datetime.fromisoformat
+
+
+# Windows не пускает эти символы в имена файлов, а имя задачи — это имя файла.
+# Проверяем и на маке тоже: вольт уезжает на Windows, и задача, заведённая здесь,
+# должна там открыться.
+FORBIDDEN_IN_NAME = set('\\/:*?"<>|')
+
+# Имя файла целиком (с расширением и путём) на Windows ограничено 260 символами.
+# С запасом на путь к вольту берём предел на само название.
+MAX_TITLE = 120
+
+
+def validate_new_task(data, existing_names, today):
+    """Проверка задачи до записи. Возвращает список ошибок по полям.
+
+    Отдельно от формы намеренно: правила должны быть в одном месте, иначе форма
+    и CLI разойдутся, и в вольт попадёт то, что движок потом не прочитает.
+    Ошибки возвращаются списком, а не первым попавшимся исключением, — форме надо
+    подсветить все проблемные поля разом, а не гонять человека по кругу.
+    """
+    errors = []
+
+    title = (data.get("title") or "").strip()
+    if not title:
+        errors.append({"field": "title", "error": "Название задачи обязательно"})
+    elif len(title) > MAX_TITLE:
+        errors.append({"field": "title",
+                       "error": f"Название длиннее {MAX_TITLE} символов"})
+    elif set(title) & FORBIDDEN_IN_NAME:
+        плохие = "".join(sorted(set(title) & FORBIDDEN_IN_NAME))
+        errors.append({"field": "title",
+                       "error": f"В названии нельзя символы {плохие} — это имя файла"})
+    elif title.lower() in {n.lower() for n in existing_names}:
+        errors.append({"field": "title",
+                       "error": "Задача с таким названием уже есть"})
+    elif title != title.strip(". "):
+        errors.append({"field": "title",
+                       "error": "Название не должно кончаться точкой или пробелом"})
+
+    steps = data.get("steps") or []
+    if not steps:
+        errors.append({"field": "steps", "error": "Нужен хотя бы один шаг"})
+    for i, step in enumerate(steps):
+        поле = f"steps.{i}"
+        if not (step.get("title") or "").strip():
+            errors.append({"field": f"{поле}.title", "error": "Название шага обязательно"})
+        raw = (step.get("control_date") or "").strip()
+        if raw:
+            try:
+                parse_date_input(raw, today)
+            except (ValueError, TypeError):
+                errors.append({"field": f"{поле}.control_date",
+                               "error": "Дату не понял. Можно: 18.08 · завтра · +3 · пн"})
+    return errors
+
+
+def build_task(data, today):
+    """Данные формы → frontmatter задачи. Без записи на диск.
+
+    Идентификаторы шагов раздаёт движок, а не форма: они должны быть плотными и
+    по порядку, иначе `done <задача> 3` будет попадать не туда.
+    """
+    steps = []
+    for i, step in enumerate(data.get("steps") or [], start=1):
+        raw = (step.get("control_date") or "").strip()
+        steps.append({
+            "id": i,
+            "title": step["title"].strip(),
+            "status": OPEN,
+            "control_date": parse_date_input(raw, today) if raw else None,
+            "completed_date": None,
+            "log": [],
+        })
+    tags = [t.strip() for t in (data.get("tags") or []) if t and t.strip()]
+    meta = {
+        "schema": SCHEMA,
+        "type": "task",
+        "title": data["title"].strip(),
+        "created": today,
+        "tags": tags,
+        "steps": steps,
+    }
+    return meta
+
+
+def cmd_create(args, today):
+    """Завести задачу. Единственный путь создания — и из формы, и из CLI.
+
+    JSON на входе: {"title": "...", "tags": [...], "steps": [{"title": "...",
+    "control_date": "2026-08-20"}], "body": "..."}
+    """
+    raw = sys.stdin.read() if args.json == "-" else args.json
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
+
+    existing = [t["path"].stem for t in load_tasks()]
+    errors = validate_new_task(data, existing, today)
+    if errors:
+        return {"ok": False, "errors": errors}
+
+    meta = build_task(data, today)
+    path = TASKS_DIR / f"{meta['title']}.md"
+    if path.exists():
+        return {"ok": False, "errors": [{"field": "title", "error": "Файл уже существует"}]}
+
+    task = {"path": path, "meta": meta, "body": (data.get("body") or "").strip() + "\n"}
+    save(task, today)
+    return {"ok": True, "task": path.stem, "path": str(path),
+            "steps": len(meta["steps"]), "status": task["meta"]["status"]}
+
+
 def cmd_refresh(args, today):
     """Пересчитать сводку во всех задачах.
 
@@ -661,6 +823,10 @@ def main():
                    help="переписать все файлы, даже если сводка не изменилась — "
                         "нужно после смены схемы, чтобы привести вольт к новому виду")
     r.set_defaults(func=cmd_refresh)
+
+    c = sub.add_parser("create", help="завести задачу из JSON (её же зовёт форма)")
+    c.add_argument("json", help='JSON или "-" для stdin')
+    c.set_defaults(func=cmd_create)
 
     s = sub.add_parser("show", help="одна задача целиком")
     s.add_argument("task")
