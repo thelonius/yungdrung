@@ -190,11 +190,45 @@ function предпросмотрДаты(input, out, доп) {
     таймерыПредпросмотра.set(input, setTimeout(async () => {
       const текст = input.value.trim();
       доп();
-      if (!текст) { out.textContent = ''; return; }
-      const r = await post('/api/parse-date', { text: текст });
-      out.textContent = r.ok ? (r.label || '') : 'не понял дату';
+      if (!текст) { out.textContent = ''; }
+      else {
+        const r = await post('/api/parse-date', { text: текст });
+        out.textContent = r.ok ? (r.label || '') : 'не понял дату';
+      }
+      // Порядок дат проверяем при любой правке — не только при сохранении.
+      // Значение уже разобрано и лежит в шагах через доп(), можно спрашивать сразу.
+      проверитьПорядок();
     }, 220));
   });
+}
+
+// Порядок дат — сразу по мере ввода, а не только на «Сохранить»: контроль
+// раньше даты начала виден в тот же момент, когда его напечатали, а не после
+// круга «сохранил → откатили → чини». Правило то же, что и на сервере при
+// записи — сервер и здесь единственный, кто его вычисляет, страница только
+// подсвечивает то, что он вернул.
+// Вызывается уже из debounce в предпросмотрДаты() — свой таймер здесь не
+// нужен, он только добавил бы задержку поверх уже отложенного вызова.
+async function проверитьПорядок() {
+  const payload = {
+    task: имя,
+    start_date: $('#start-date').value.trim(),
+    steps: шаги.map((s) => ({ id: s.id, title: s.title || '·', start_date: s.start_date,
+                              control_date: s.control_date })),
+  };
+  const r = await post('/api/steps-check', payload);
+  checklist.querySelectorAll('.edit-control').forEach((el) => el.classList.remove('invalid'));
+  checklist.querySelectorAll('.edit-control-preview').forEach((el) => el.classList.remove('past'));
+  for (const e of r.errors || []) {
+    const m = /^steps\.(\d+)\.control_date$/.exec(e.field || '');
+    if (!m) continue;
+    const li = checklist.children[+m[1]];
+    if (!li) continue;
+    $('.edit-control', li).classList.add('invalid');
+    const preview = $('.edit-control-preview', li);
+    preview.textContent = e.error;
+    preview.classList.add('past');
+  }
 }
 
 // --- перетаскивание ---------------------------------------------------------
@@ -225,6 +259,7 @@ function настроитьПеретаскивание(li) {
     шаги.splice(цель, 0, взятый);
     перетаскиваемый = null;
     перерисоватьЧеклист();
+    проверитьПорядок();  // порядок сменился без единой правки поля — проверить сразу
   });
 }
 

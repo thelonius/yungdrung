@@ -149,6 +149,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, self._task_update(payload))
         if route == "/api/task-warnings":
             return self._json(200, {"warnings": engine.soft_warnings(payload, date.today())})
+        if route == "/api/steps-check":
+            return self._json(200, self._steps_check(payload))
         if route == "/api/task-cancel":
             return self._json(200, self._guarded(engine.cmd_cancel, _args(
                 task=payload.get("task"), reason=payload.get("reason"))))
@@ -279,6 +281,40 @@ class Handler(BaseHTTPRequestHandler):
             return engine.cmd_update(args, date.today())
         except SystemExit as e:
             return {"ok": False, "errors": [{"field": None, "error": str(e)}]}
+
+    def _steps_check(self, payload):
+        """Порядок дат сразу по мере ввода, не дожидаясь «Сохранить» — то же
+        правило, что в validate_new_task/validate_task_edit (control не раньше
+        start), но без записи и без требования названия задачи: форма спрашивает
+        это на каждое изменение поля, а не один раз перед сохранением.
+        """
+        today = date.today()
+        try:
+            старт = engine.as_date(engine.parse_date_input(payload.get("start_date"), today)) \
+                if (payload.get("start_date") or "").strip() else None
+        except (ValueError, TypeError):
+            старт = None
+
+        имя = (payload.get("task") or "").strip()
+        задача = None
+        if имя:
+            try:
+                задача = engine.find_task(имя)
+            except SystemExit:
+                pass  # переименовывают на лету — считаем, что старых шагов ещё нет
+
+        if задача:
+            старые = {s["id"]: s for s in engine.steps_of(задача)}
+            старт = старт or engine.as_date(задача["meta"].get("start_date")) or today
+            resolved = engine.resolve_steps_for_edit(payload.get("steps") or [], старые,
+                                                      старт, today)
+        else:
+            resolved = engine.resolve_steps(payload.get("steps") or [], старт or today, today)
+
+        # Только про порядок дат — пустой заголовок посреди набора текста
+        # не ошибка, а нормальное промежуточное состояние.
+        errors = [e for r in resolved for e in r["errors"] if e["field"].endswith("control_date")]
+        return {"errors": errors}
 
     def _create(self, payload):
         today = date.today()
