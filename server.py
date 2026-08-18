@@ -123,6 +123,17 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/template-from-task":
             return self._json(200, engine.cmd_template_from_task(
                 _args(task=payload.get("task"), name=payload.get("name")), date.today()))
+        if route == "/api/recurrence-preview":
+            return self._json(200, engine.cmd_recurrence_preview(
+                _args(anchor=payload.get("anchor"), rule=payload.get("rule")), date.today()))
+        if route == "/api/template-recurrence":
+            return self._json(200, engine.cmd_set_recurrence(
+                _args(name=payload.get("name"), rule=payload.get("rule"),
+                      clear=bool(payload.get("clear"))), date.today()))
+        if route == "/api/recur":
+            return self._json(200, engine.cmd_recur(
+                _args(name=payload.get("name"), force=bool(payload.get("force")),
+                      limit=payload.get("limit")), date.today()))
         self._json(404, {"error": "нет такого адреса"})
 
     # --- действия ---

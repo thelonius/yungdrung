@@ -23,6 +23,32 @@
 .tpl-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .tpl-name { font-weight: 650; }
 .tpl-meta { font-size: 13px; color: var(--muted); }
+.tpl-recur { font-size: 13px; }
+.tpl-recur.is-set { color: var(--accent, var(--ink)); }
+.tpl-recur.is-unset { color: var(--muted); }
+
+.tpl-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+.weekdays {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.weekdays label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.tpl-recur-desc {
+  font-size: 14px;
+  color: var(--muted);
+  margin: 0;
+  min-height: 1.2em;
+}
 
 .tpl-preview {
   list-style: none;

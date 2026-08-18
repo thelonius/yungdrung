@@ -946,3 +946,104 @@ def test_create_отвергает_запрещённые_в_windows_симво�
         "title": плохое, "steps": [{"title": "Шаг"}]}))
     assert not result["ok"]
     assert result["errors"][0]["field"] == "title"
+
+
+# --- повторения: движок держит правило единственного цикла ------------------
+#
+# Сама календарная арифметика проверена в test_recurrence.py — сверена с
+# dateutil.rrule на шести тысячах случайных правил. Здесь проверяется другое:
+# что движок правильно ведёт журнал между вызовами, создаёт ровно один цикл за
+# раз и не плодит дублей при повторном прогоне.
+
+import templates as tpl  # noqa: E402
+
+
+def месячный_шаблон(vault, day=5, **поля):
+    склад = tpl.JsonStore(vault)
+    шаблон = {
+        "name": "Отчёт по кассе",
+        "steps": [{"title": "Свести кассу", "offset_days": 0, "time_of_day": "10:00"}],
+        "recurrence": {"anchor": f"2026-08-{day:02d}", "freq": "monthly",
+                       "bymonthday": [day], **поля},
+    }
+    return склад.save(шаблон)
+
+
+def test_recur_создаёт_только_первый_непройденный_цикл(vault):
+    """Три цикла позади (авг/сен/окт), сегодня — 20 ноября. Создаётся только
+    самый старый: следующие ждут, пока закроется он."""
+    месячный_шаблон(vault)
+    r = run(engine.cmd_recur, today=date(2026, 11, 20))
+    задачи = r["templates"][0]
+    assert [c["task"] for c in задачи["created"]] == ["Отчёт по кассе — 05.08.2026"]
+    assert len(задачи["skipped"]) == 3
+
+
+def test_recur_повторный_вызов_не_плодит_дублей(vault):
+    """Идемпотентность из контракта: обрыв связи и повтор запроса не должны
+    заводить вторую задачу на тот же цикл."""
+    месячный_шаблон(vault)
+    run(engine.cmd_recur, today=date(2026, 11, 20))
+    r2 = run(engine.cmd_recur, today=date(2026, 11, 20))
+    assert r2["created"] == 0
+    assert len(list((vault / "Задачи").glob("*.md"))) == 1
+
+
+def test_recur_закрытие_цикла_открывает_следующий(vault):
+    """Ядро требования: незакрытый цикл блокирует следующий, а закрытие снимает
+    блокировку и продвигает журнал ровно на один шаг вперёд, а не сразу до конца."""
+    месячный_шаблон(vault)
+    run(engine.cmd_recur, today=date(2026, 11, 20))
+    run(engine.cmd_done, today=date(2026, 8, 5),
+        task="Отчёт по кассе — 05.08", step="1")
+
+    r = run(engine.cmd_recur, today=date(2026, 11, 20))
+    задачи = r["templates"][0]
+    assert [c["task"] for c in задачи["created"]] == ["Отчёт по кассе — 05.09.2026"]
+    assert len(задачи["skipped"]) == 2
+
+
+def test_recur_журнал_хранит_только_последний_цикл(vault):
+    """Журнал — не полная история, а указатель на последний известный цикл:
+    иначе он растёт вечно на каждое правило."""
+    месячный_шаблон(vault)
+    run(engine.cmd_recur, today=date(2026, 11, 20))
+    состояние = engine.load_recurrence_state()
+    assert состояние["Отчёт по кассе"]["previous"]["date"] == "2026-08-05"
+    assert состояние["Отчёт по кассе"]["previous"]["closed"] is False
+
+
+def test_recur_удалённая_задача_не_блокирует_навсегда(vault):
+    """Заказчик вправе удалить задачу руками. Отсутствие файла считается
+    закрытием цикла, а не вечной блокировкой правила."""
+    месячный_шаблон(vault)
+    run(engine.cmd_recur, today=date(2026, 11, 20))
+    (vault / "Задачи" / "Отчёт по кассе — 05.08.2026.md").unlink()
+
+    r = run(engine.cmd_recur, today=date(2026, 11, 20))
+    задачи = r["templates"][0]
+    assert [c["task"] for c in задачи["created"]] == ["Отчёт по кассе — 05.09.2026"]
+
+
+def test_recur_без_правила_шаблон_пропускается(vault):
+    """Обычный шаблон без повторения не должен ничего создавать сам."""
+    tpl.JsonStore(vault).save({"name": "Просто шаблон",
+                               "steps": [{"title": "Шаг", "offset_days": 0}]})
+    r = run(engine.cmd_recur, today=date(2026, 11, 20))
+    assert r["templates"] == []
+    assert r["created"] == 0
+
+
+def test_recur_несколько_шаблонов_независимы(vault):
+    """Ошибка или блокировка на одном правиле не должна тормозить остальные."""
+    месячный_шаблон(vault, day=5)
+    склад = tpl.JsonStore(vault)
+    склад.save({
+        "name": "Полить цветы",
+        "steps": [{"title": "Полить", "offset_days": 0}],
+        "recurrence": {"anchor": "2026-11-01", "freq": "weekly", "byweekday": [0]},
+    })
+    r = run(engine.cmd_recur, today=date(2026, 11, 20))
+    имена = {t["template"] for t in r["templates"]}
+    assert имена == {"Отчёт по кассе", "Полить цветы"}
+    assert all(t["created"] for t in r["templates"])

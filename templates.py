@@ -42,6 +42,7 @@ from pathlib import Path
 # `engine` зовёт sys.exit прямо при импорте — тогда упасть на старте честнее, чем
 # подсунуть расчёту запасную копию правил имени и разойтись с движком.
 import engine
+import recurrence as rec
 import worktime
 
 SCHEMA = 1
@@ -329,6 +330,32 @@ def validate_template(data, existing_names=()):
                                         f"«{занятые_позиции[позиция]}»"})
             else:
                 занятые_позиции[позиция] = название
+
+    # Повторение — необязательное поле поверх обычного шаблона (раздел 5.10 ТЗ:
+    # «правило может висеть на шаблоне»). Проверяет и считает даты `recurrence`,
+    # здесь — только форма вложения: якорная дата обязательна, само правило
+    # проверяется его же валидатором, чтобы не заводить вторую копию правил.
+    повтор = data.get("recurrence")
+    if повтор is not None:
+        if not isinstance(повтор, dict):
+            errors.append({"field": "recurrence", "error": "Повторение задаётся полями"})
+        else:
+            якорь = повтор.get("anchor")
+            анкер_дата = None
+            if not якорь:
+                errors.append({"field": "recurrence.anchor",
+                               "error": "Нужна дата, от которой считать первый цикл"})
+            else:
+                try:
+                    анкер_дата = engine.as_date(engine.parse_date_input(якорь, engine.date.today()))
+                except (ValueError, TypeError):
+                    errors.append({"field": "recurrence.anchor",
+                                   "error": "Дату не понял, нужен формат 2026-08-18"})
+            правило = {k: v for k, v in повтор.items() if k != "anchor"}
+            for ошибка in rec.validate_rule(правило, start=анкер_дата):
+                errors.append({"field": f"recurrence.{ошибка['field']}"
+                               if ошибка.get("field") else "recurrence",
+                               "error": ошибка["error"]})
     return errors
 
 
@@ -367,12 +394,29 @@ def normalize_template(data):
             "time_of_day": format_time_of_day(parse_time_of_day(шаг.get("time_of_day"))),
         })
     tags = [t.strip() for t in (сырые_теги or []) if isinstance(t, str) and t.strip()]
+
+    повтор = None
+    сырое_повторение = data.get("recurrence")
+    if сырое_повторение:
+        якорь = engine.as_date(engine.parse_date_input(сырое_повторение["anchor"],
+                                                        engine.date.today()))
+        правило = rec.normalize_rule(
+            {k: v for k, v in сырое_повторение.items() if k != "anchor"}, start=якорь)
+        # `until` возвращается объектом date — JSON его не сериализует. В строку
+        # здесь, а не в JsonStore._commit: MemoryStore хранит те же данные без
+        # похода на диск, и расхождение по времени всплыло бы только в файловом
+        # хранилище, а тесты на MemoryStore его бы не поймали.
+        if правило["until"] is not None:
+            правило["until"] = правило["until"].isoformat()
+        повтор = {"anchor": якорь.isoformat(), **правило}
+
     return {
         "schema": SCHEMA,
         "name": str(data.get("name") or "").strip(),
         "tags": tags,
         "steps": steps,
         "body": str(data.get("body") or "").strip(),
+        "recurrence": повтор,
     }
 
 

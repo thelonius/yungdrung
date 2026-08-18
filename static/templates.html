@@ -63,6 +63,68 @@
   </form>
 </dialog>
 
+<!-- Настройка повторения. Простой путь: частота, шаг, дни недели, число месяца.
+     Вхождение в месяце и перенос с выходных не выведены сюда намеренно — заказчик
+     их словами не подтверждал (вопрос Q26 в ТЗ), а движок ими и так пользуется,
+     если появятся в JSON руками. -->
+<dialog id="recur">
+  <form method="dialog" class="control-card">
+    <header class="control-head">
+      <p class="control-task" id="r-name"></p>
+      <h2 class="control-step">Повторение</h2>
+    </header>
+
+    <div class="control-form" style="display:flex; flex-direction:column; gap:16px;">
+      <div class="field">
+        <label for="r-freq">Как часто</label>
+        <select id="r-freq">
+          <option value="daily">каждый день</option>
+          <option value="weekly">по дням недели</option>
+          <option value="monthly" selected>раз в месяц</option>
+          <option value="yearly">раз в год</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="r-interval">Каждые сколько <span class="opt">1 — без пропусков</span></label>
+        <input type="text" id="r-interval" autocomplete="off" value="1" style="max-width:100px;">
+      </div>
+
+      <div class="field" id="r-weekday-field" hidden>
+        <label>Дни недели</label>
+        <div class="weekdays" id="r-weekdays">
+          <label><input type="checkbox" value="0"> пн</label>
+          <label><input type="checkbox" value="1"> вт</label>
+          <label><input type="checkbox" value="2"> ср</label>
+          <label><input type="checkbox" value="3"> чт</label>
+          <label><input type="checkbox" value="4"> пт</label>
+          <label><input type="checkbox" value="5"> сб</label>
+          <label><input type="checkbox" value="6"> вс</label>
+        </div>
+      </div>
+
+      <div class="field" id="r-monthday-field">
+        <label for="r-monthday">Число месяца <span class="opt">-1 — последний день</span></label>
+        <input type="text" id="r-monthday" autocomplete="off" placeholder="например 5" style="max-width:140px;">
+      </div>
+
+      <div class="field">
+        <label for="r-anchor">Первый цикл от даты</label>
+        <input type="text" id="r-anchor" autocomplete="off" placeholder="18.08, завтра, +3">
+      </div>
+
+      <p class="tpl-recur-desc" id="r-desc"></p>
+      <p class="err" id="r-err" hidden></p>
+    </div>
+
+    <div class="control-actions">
+      <button type="button" class="primary" id="r-save">Сохранить</button>
+      <button type="button" class="quiet" id="r-clear">Убрать повторение</button>
+      <button type="button" class="ghost" id="r-back">Отмена</button>
+    </div>
+  </form>
+</dialog>
+
 <script src="/templates.js"></script>
 </body>
 </html>

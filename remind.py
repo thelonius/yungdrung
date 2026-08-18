@@ -82,6 +82,12 @@ def main():
     # задачу. Без пересчёта лента считалась бы по вчерашним данным.
     engine.cmd_refresh(SimpleNamespace(force=False), today)
 
+    # Повторяющиеся шаблоны продвигаются здесь же, до ленты: свежесозданный цикл
+    # должен попасть в то же самое уведомление, а не ждать следующего пробуждения.
+    # Без --name это прогон всех правил разом, force всегда False — «всё равно
+    # создать» решает человек по конкретному циклу, а не планировщик молча.
+    engine.cmd_recur(SimpleNamespace(name=None, force=False, limit=None), today)
+
     лента = engine.cmd_feed(SimpleNamespace(), today)
     items = лента["feed"]
 

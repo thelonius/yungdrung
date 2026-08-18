@@ -45,6 +45,7 @@ try:
 except ImportError:
     sys.exit("нужен pyyaml: pip install pyyaml")
 
+import recurrence as rec
 import templates as tpl
 import worktime
 
@@ -692,6 +693,17 @@ def cmd_create(args, today):
             "steps": len(meta["steps"]), "status": task["meta"]["status"]}
 
 
+def _recurrence_view(шаблон):
+    """Правило повторения с человеческой подписью — для карточки шаблона.
+    Подпись считает `recurrence.describe`, а не морда: тот же принцип, что и
+    везде — оболочка не пересказывает правило словами сама."""
+    правило = шаблон.get("recurrence")
+    if not правило:
+        return None
+    return {**правило, "description": rec.describe(
+        {k: v for k, v in правило.items() if k != "anchor"})}
+
+
 def cmd_templates(args, today):
     """Список шаблонов. Отдаём с предпросмотром на сегодня: заказчику надо видеть,
     какие даты получатся, а не только имена."""
@@ -705,17 +717,86 @@ def cmd_templates(args, today):
             "tags": шаблон.get("tags") or [],
             "steps": len(шаблон.get("steps") or []),
             "preview": tpl.preview(шаблон, из_даты),
+            "recurrence": _recurrence_view(шаблон),
         })
     return {"templates": out, "count": len(out), "start": из_даты.isoformat()}
 
 
-def cmd_from_template(args, today):
-    """Завести задачу из шаблона.
+def cmd_recurrence_preview(args, today):
+    """Проверить и описать правило без сохранения — живая подпись в форме,
+    та же роль, что у `/api/parse-date` для одиночной даты."""
+    if not getattr(args, "anchor", None):
+        return {"ok": False, "errors": [{"field": "recurrence.anchor",
+                                         "error": "Нужна дата, от которой считать первый цикл"}]}
+    try:
+        якорь = as_date(parse_date_input(args.anchor, today))
+    except (ValueError, TypeError):
+        return {"ok": False, "errors": [{"field": "recurrence.anchor",
+                                         "error": "Дату не понял, нужен формат 2026-08-18"}]}
+    try:
+        правило = json.loads(args.rule) if isinstance(args.rule, str) else (args.rule or {})
+    except json.JSONDecodeError as e:
+        return {"ok": False, "errors": [{"field": "recurrence", "error": f"битый JSON: {e}"}]}
 
-    Развёртывание и создание намеренно идут через те же `build_task` и `save`, что
-    и обычное заведение: иначе появился бы второй путь записи задачи, и однажды
-    он разошёлся бы с первым в мелочи вроде порядка полей или сводки.
+    ошибки = rec.validate_rule(правило, start=якорь)
+    if ошибки:
+        return {"ok": False, "errors": [
+            {"field": f"recurrence.{e['field']}" if e.get("field") else "recurrence",
+             "error": e["error"]} for e in ошибки]}
+
+    return {"ok": True, "description": rec.describe(правило), "anchor": якорь.isoformat(),
+            "preview": [{"date": s["date"].isoformat(), "text": s["text"]}
+                       for s in rec.preview(правило, якорь, count=5)]}
+
+
+def cmd_set_recurrence(args, today):
+    """Прикрепить или снять правило повторения с шаблона.
+
+    Идёт через `Store.save` целиком, а не отдельным полем: у шаблона один путь
+    записи, тот же, что у формы шагов, — иначе однажды разойдутся форматом.
     """
+    склад = tpl.JsonStore(VAULT)
+    шаблон = склад.get(args.name)
+    if not шаблон:
+        return {"ok": False, "errors": [{"field": "name",
+                                         "error": f"нет шаблона «{args.name}»"}]}
+    данные = dict(шаблон)
+    if getattr(args, "clear", False):
+        данные["recurrence"] = None
+    else:
+        данные["recurrence"] = args.rule if isinstance(args.rule, dict) else json.loads(args.rule)
+    try:
+        обновлённый = склад.save(данные)
+    except tpl.TemplateError as e:
+        return {"ok": False, "errors": getattr(e, "errors", [{"field": None, "error": str(e)}])}
+    return {"ok": True, "template": обновлённый["name"],
+            "recurrence": _recurrence_view(обновлённый)}
+
+
+def _create_task_from_data(данные, today, existing=None):
+    """Общий путь записи новой задачи — из формы, из шаблона, из повторения.
+
+    Один путь, а не три копии: второй писатель рано или поздно разойдётся с
+    первым в мелочи вроде порядка полей или сводки. `existing` передают, когда
+    список задач уже прочитан вызывающим (движок повторений создаёт несколько
+    задач подряд, и читать вольт заново перед каждой — лишний проход по файлам).
+    """
+    существующие = existing if existing is not None else [t["path"].stem for t in load_tasks()]
+    errors = validate_new_task(данные, существующие, today)
+    if errors:
+        return None, errors
+
+    meta = build_task(данные, today)
+    path = TASKS_DIR / f"{meta['title']}.md"
+    if path.exists():
+        return None, [{"field": "title", "error": "Файл уже существует"}]
+    задача = {"path": path, "meta": meta, "body": (данные.get("body") or "").strip() + "\n"}
+    save(задача, today)
+    return задача, None
+
+
+def cmd_from_template(args, today):
+    """Завести задачу из шаблона."""
     склад = tpl.JsonStore(VAULT)
     шаблон = склад.get(args.name)
     if not шаблон:
@@ -724,18 +805,141 @@ def cmd_from_template(args, today):
     старт = as_date(parse_date_input(args.start, today)) if args.start else today
     данные = tpl.expand(шаблон, старт, title=args.title)
 
-    errors = validate_new_task(данные, [t["path"].stem for t in load_tasks()], today)
+    задача, errors = _create_task_from_data(данные, today)
     if errors:
         return {"ok": False, "errors": errors}
+    return {"ok": True, "task": задача["path"].stem, "template": шаблон["name"],
+            "steps": len(задача["meta"]["steps"]), "status": задача["meta"]["status"]}
 
-    meta = build_task(данные, today)
-    path = TASKS_DIR / f"{meta['title']}.md"
-    if path.exists():
-        return {"ok": False, "errors": [{"field": "title", "error": "Файл уже существует"}]}
-    задача = {"path": path, "meta": meta, "body": (данные.get("body") or "").strip() + "\n"}
-    save(задача, today)
-    return {"ok": True, "task": path.stem, "template": шаблон["name"],
-            "steps": len(meta["steps"]), "status": задача["meta"]["status"]}
+
+# --- повторения --------------------------------------------------------
+
+def recurrence_state_path(vault=None):
+    """Журнал повторений лежит рядом с вольтом, но не в нём: это отметки «какой
+    цикл был последним», а не данные заказчика. Тот же приём, что у файла
+    доставки в notify.py — потеря файла означает лишний повтор, а не потерю
+    задачи."""
+    return Path(vault or VAULT) / ".повторения.json"
+
+
+def load_recurrence_state():
+    path = recurrence_state_path()
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        # Битый журнал — не повод падать: хуже пропустить проверку блокировки
+        # один раз, чем перестать заводить задачи по всем правилам разом.
+        return {}
+
+
+def save_recurrence_state(state):
+    path = recurrence_state_path()
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=1, default=str)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def recurring_title(name, cycle_date):
+    """Имя автосозданной задачи. Голое имя шаблона совпало бы с прошлым циклом —
+    ровно та коллизия, что при ручном разворачивании ловит понятную ошибку
+    в форме, а здесь заведение идёт без человека и споткнуться не о что."""
+    return f"{name} — {cycle_date:%d.%m.%Y}"
+
+
+def _cycle_closed(task_name, today):
+    """Закрыт ли цикл — по статусу задачи, которую он породил.
+
+    Файл мог исчезнуть: заказчик вправе удалить задачу руками. Отсутствие
+    считаем закрытием, а не блокировкой навсегда — иначе удалённая вручную
+    задача остановила бы правило насовсем, и это тише любой ошибки.
+    """
+    for задача in load_tasks():
+        if задача["path"].stem == task_name:
+            return task_status(задача, today) == "done"
+    return True
+
+
+def cmd_recur(args, today):
+    """Прогнать шаблоны с правилом повторения: создать очередной цикл или
+    записать пропуск. Раздел 5.12 ТЗ.
+
+    Идемпотентно в границах контракта: незакрытый цикл при повторном вызове в
+    тот же день снова даёт пропуск, а не вторую задачу — `due_cycles` сам не
+    продвигает журнал, пока предыдущий цикл не закрыт.
+    """
+    склад = tpl.JsonStore(VAULT)
+    state = load_recurrence_state()
+    work = worktime.settings()
+    задачи_кэш = [t["path"].stem for t in load_tasks()]
+
+    отчёт = []
+    for шаблон in склад.all():
+        правило = шаблон.get("recurrence")
+        if not правило:
+            continue
+        имя = шаблон["name"]
+        запись = state.get(имя) or {}
+        предыдущий = None
+        if запись.get("previous"):
+            предыдущий = dict(запись["previous"])
+            задача_цикла = предыдущий.pop("task", None)
+            if задача_цикла:
+                предыдущий["closed"] = _cycle_closed(задача_цикла, today)
+
+        якорь = as_date(правило["anchor"])
+        сила = bool(getattr(args, "force", False)) and getattr(args, "name", None) == имя
+        try:
+            решения = rec.due_cycles(
+                {k: v for k, v in правило.items() if k != "anchor"}, якорь, today,
+                previous=предыдущий, work=work, force=сила,
+                limit=getattr(args, "limit", None) or 12)
+        except rec.RuleError as e:
+            отчёт.append({"template": имя, "errors": e.errors, "created": [], "skipped": []})
+            continue
+
+        # Статус закрытия старого цикла пересчитывается заново на каждом вызове
+        # из фактического состояния задачи (см. выше), а не хранится, — поэтому
+        # если новых циклов в этом прогоне не появилось, запись про «previous»
+        # трогать не нужно вовсе: она и так будет пересчитана в следующий раз.
+        созданы, пропущены, сбой = [], [], None
+        for решение in решения:
+            if решение["action"] == "skip":
+                пропущены.append({"date": решение["date"].isoformat(),
+                                  "message": решение["message"]})
+                continue
+            title = recurring_title(имя, решение["date"])
+            данные = tpl.expand(шаблон, решение["date"], title=title)
+            задача, errors = _create_task_from_data(данные, today, existing=задачи_кэш)
+            if errors:
+                # Название занято чем-то посторонним — не тем же циклом: имя
+                # несёт дату, и наше собственное совпадение уже поймала бы
+                # проверка выше по этому же циклу. Останавливаем это правило,
+                # остальные шаблоны идут дальше своим чередом.
+                сбой = errors
+                break
+            задачи_кэш.append(задача["path"].stem)
+            созданы.append({"date": решение["date"].isoformat(), "task": задача["path"].stem})
+            запись["previous"] = {"date": решение["date"].isoformat(), "closed": False,
+                                  "task": задача["path"].stem}
+
+        if созданы:
+            state[имя] = запись
+        if сбой:
+            отчёт.append({"template": имя, "errors": сбой,
+                          "created": созданы, "skipped": пропущены})
+        else:
+            отчёт.append({"template": имя, "created": созданы, "skipped": пропущены})
+
+    save_recurrence_state(state)
+    return {"today": today.isoformat(), "templates": отчёт,
+            "created": sum(len(t["created"]) for t in отчёт)}
 
 
 def cmd_template_from_task(args, today):
@@ -1066,6 +1270,20 @@ def main():
     t = sub.add_parser("templates", help="список шаблонов с предпросмотром")
     t.add_argument("--start", help="от какой даты считать предпросмотр")
     t.set_defaults(func=cmd_templates)
+
+    sr = sub.add_parser("set-recurrence", help="прикрепить или снять повторение у шаблона")
+    sr.add_argument("name")
+    sr.add_argument("--rule", help='JSON правила с anchor, например {"anchor":"2026-09-01","freq":"monthly","bymonthday":[5]}')
+    sr.add_argument("--clear", action="store_true", help="снять повторение")
+    sr.set_defaults(func=cmd_set_recurrence)
+
+    rc = sub.add_parser("recur", help="прогнать шаблоны с правилом повторения")
+    rc.add_argument("--name", help="только один шаблон")
+    rc.add_argument("--force", action="store_true",
+                    help="создать очередной цикл, даже если предыдущий не закрыт "
+                         "(только вместе с --name — кнопка про один конкретный цикл)")
+    rc.add_argument("--limit", type=int, help="сколько решений максимум за прогон")
+    rc.set_defaults(func=cmd_recur)
 
     ft = sub.add_parser("from-template", help="завести задачу из шаблона")
     ft.add_argument("name")
