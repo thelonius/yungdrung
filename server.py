@@ -81,7 +81,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         route = unquote(self.path.split("?")[0])
         СТРАНИЦЫ = {"/": "feed.html", "/лента": "feed.html", "/новая": "index.html",
-                    "/шаблоны": "templates.html"}
+                    "/шаблоны": "templates.html", "/настройки": "settings.html"}
         if route in СТРАНИЦЫ:
             return self._static(СТРАНИЦЫ[route], "text/html; charset=utf-8")
         if route.endswith(".css"):
@@ -99,6 +99,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"reasons": engine.REASONS})
         if route == "/api/tasks":
             return self._json(200, engine.cmd_list(None, date.today()))
+        if route == "/api/backups":
+            назначение = _param(self.path, "dest")
+            return self._json(200, engine.cmd_backup_list(
+                _args(dest=назначение), date.today()))
         self._json(404, {"error": "нет такого адреса"})
 
     def do_POST(self):
@@ -134,6 +138,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, engine.cmd_recur(
                 _args(name=payload.get("name"), force=bool(payload.get("force")),
                       limit=payload.get("limit")), date.today()))
+        if route == "/api/backup":
+            return self._json(200, engine.cmd_backup(
+                _args(dest=payload.get("dest"), keep=payload.get("keep"),
+                      force=bool(payload.get("force"))), date.today()))
+        if route == "/api/restore":
+            return self._json(200, engine.cmd_backup_restore(
+                _args(file=payload.get("file")), date.today()))
+        if route == "/api/export-json":
+            return self._json(200, engine.cmd_export_json(
+                _args(to=payload.get("to")), date.today()))
         self._json(404, {"error": "нет такого адреса"})
 
     # --- действия ---
