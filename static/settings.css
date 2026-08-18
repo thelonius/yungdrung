@@ -29,6 +29,50 @@
 .settings-actions {
   display: flex;
   gap: 8px;
+  align-items: center;
+}
+
+.settings-actions input[type="text"] {
+  flex: 1 1 auto;
+  max-width: 260px;
+}
+
+/* Рабочее время: два поля рядом, как в карточке задачи, но без task.css —
+   настройки его не подключают ради одного правила сетки. */
+.card-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  margin-bottom: 14px;
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  margin-bottom: 12px;
+  cursor: pointer;
+}
+
+.check-row input { cursor: pointer; }
+
+.reason-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.reason-row:last-child { border-bottom: none; }
+
+.reason-row.is-archived { color: var(--muted); text-decoration: line-through; }
+
+.reason-name { flex: 1 1 auto; }
+
+@media (max-width: 640px) {
+  .card-fields { grid-template-columns: 1fr; }
 }
 
 .backup-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }

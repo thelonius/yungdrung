@@ -48,6 +48,7 @@ except ImportError:
 import backup
 import kb
 import recurrence as rec
+import settings as cfg
 import templates as tpl
 import worktime
 
@@ -61,18 +62,18 @@ DONE = "done"
 SKIPPED = "skipped"
 FAILED = "failed"
 
-# Справочник причин, раздел 5.4 ТЗ. Стартовый набор, дальше редактируется.
-# Причина обязательна при «не сделано», переносе и провале: без неё счётчик
-# переносов показывает, что шаг буксует, но не показывает, обо что.
-REASONS = [
-    "жду ответа от другого человека",
-    "не было денег",
-    "не было времени",
-    "передумал, надо переформулировать",
-    "внешние обстоятельства",
-    "не хватило информации",
-    "моя лень",
-]
+def get_reasons():
+    """Справочник причин, раздел 5.4 ТЗ. Причина обязательна при «не сделано»,
+    переносе и провале: без неё счётчик переносов показывает, что шаг буксует,
+    но не показывает, обо что.
+
+    Список редактируется в настройках (settings.py) — здесь только чтение.
+    Функция, а не константа: захардкоженный список нельзя переименовать или
+    заархивировать из интерфейса, а settings.py уже это умеет. `VAULT` берём
+    именно из engine (не из settings.cfg.VAULT — тот вычислен независимо при
+    импорте и не отследит подмену в тестах через monkeypatch).
+    """
+    return cfg.active_reason_names(cfg.settings_path(VAULT))
 
 # В вольт статус пишется по-русски: эти файлы читает заказчик, а не только движок.
 # В JSON наружу уходят английские ключи — там интерфейс для бота.
@@ -523,10 +524,24 @@ def _now(args, today):
 
 
 def _work(args):
+    """Рабочие часы: настройки из файла — база, аргументы вызова — оверрайд
+    поверх них. Раньше файл настроек не читался вовсе, и `Настройки.json` мог
+    хранить что угодно — трекер всё равно жил на 09:00–21:00 по умолчанию.
+    """
+    try:
+        сохранённые = cfg.load(cfg.settings_path(VAULT))["notifications"]
+    except cfg.SettingsError:
+        # Битый файл настроек не должен останавливать ленту и завал — почему
+        # он битый, разбирается в настройках-интерфейсе, а не здесь.
+        сохранённые = cfg.defaults()["notifications"]
+
+    def выбрать(из_аргумента, ключ):
+        return из_аргумента if из_аргумента is not None else сохранённые.get(ключ)
+
     return worktime.settings(
-        start=getattr(args, "work_start", None) if args else None,
-        end=getattr(args, "work_end", None) if args else None,
-        weekends=getattr(args, "weekends", None) if args else None,
+        start=выбрать(getattr(args, "work_start", None) if args else None, "start"),
+        end=выбрать(getattr(args, "work_end", None) if args else None, "end"),
+        weekends=выбрать(getattr(args, "weekends", None) if args else None, "weekends"),
     )
 
 
@@ -1873,6 +1888,31 @@ def cmd_export_json(args, today):
     except backup.BackupError as e:
         return {"ok": False, "errors": [e.as_json()]}
     return {"ok": True, **итог}
+
+
+def rename_tag_everywhere(old_name, new_name, today=None):
+    """Заменить тег во всех задачах вольта. Дополняет `settings.rename_tag`
+    и `settings.merge_tags`: те трогают только справочник (цвет, закрепление),
+    а сами задачи settings.py не видит — про хранилище знает только движок.
+
+    Дубликаты после замены схлопываются: если на задаче уже стоял new_name
+    (типичный случай слияния двух тегов), второй раз его не добавляем.
+    """
+    today = today or date.today()
+    задето = 0
+    for задача in load_tasks():
+        теги = задача["meta"].get("tags") or []
+        if old_name not in теги:
+            continue
+        новые = []
+        for t in теги:
+            имя = new_name if t == old_name else t
+            if имя not in новые:
+                новые.append(имя)
+        задача["meta"]["tags"] = новые
+        save(задача, today)
+        задето += 1
+    return задето
 
 
 def main():

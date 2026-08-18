@@ -24,7 +24,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, time as dtime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,6 +37,7 @@ sys.path.insert(0, str(ROOT))
 import backup  # noqa: E402
 import engine  # noqa: E402
 import kb  # noqa: E402
+import settings as cfg  # noqa: E402
 
 TODAY = date(2026, 8, 15)
 TOMORROW = date(2026, 8, 16)
@@ -1414,3 +1415,91 @@ def test_backup_повторный_с_force_не_падает_и_даёт_нов
     assert r1["file"] != r2["file"]
     dest = Path(r1["file"]).parent
     assert len(backup.copies(dest)) == 2
+
+
+# --- настройки: причины и рабочие часы из файла, не из кода -----------------
+#
+# Требование R28. До этой правки REASONS был захардкожен списком в engine.py,
+# а _work() читал только аргументы вызова — Настройки.json существовал сам по
+# себе, трекер его не открывал. Тесты ниже проверяют ровно связку, а не
+# settings.py как таковой — у него своя validate() и test_settings.py.
+
+def test_get_reasons_отражает_файл_настроек(vault):
+    """Без файла — семь причин по умолчанию (перенесены из старого REASONS)."""
+    assert len(engine.get_reasons()) == 7
+    cfg.add_reason("не дозвонился", path=cfg.settings_path(vault))
+    assert "не дозвонился" in engine.get_reasons()
+
+
+def test_get_reasons_не_предлагает_архивные(vault):
+    путь = cfg.settings_path(vault)
+    cfg.add_reason("устарела", path=путь)
+    cfg.archive_reason("устарела", path=путь)
+    assert "устарела" not in engine.get_reasons()
+
+
+def test_work_читает_рабочие_часы_из_файла(vault):
+    """_work() — приватная, но это ровно то место, от которого зависит вся
+    лента и завал: без чтения файла настройки продукта были бы витриной."""
+    путь = cfg.settings_path(vault)
+    данные = cfg.defaults()
+    данные["notifications"]["start"] = "07:00"
+    данные["notifications"]["end"] = "16:00"
+    cfg.save(данные, path=путь)
+    work = engine._work(None)
+    assert work["start"].strftime("%H:%M") == "07:00"
+    assert work["end"].strftime("%H:%M") == "16:00"
+
+
+def test_work_аргумент_вызова_перебивает_файл(vault):
+    """Аргумент вызова важнее сохранённого файла — иначе разовый прогон с
+    другим временем нельзя было бы сделать, не переписывая настройки.
+    `_work` ждёт уже разобранный time, как и `worktime.settings()` — разбор
+    строки в файле делает cfg.save()/cfg._deserialize, а не эта функция."""
+    путь = cfg.settings_path(vault)
+    данные = cfg.defaults()
+    данные["notifications"]["start"] = "07:00"
+    cfg.save(данные, path=путь)
+    args = SimpleNamespace(work_start=dtime(10, 0), work_end=None, weekends=None)
+    work = engine._work(args)
+    assert work["start"].strftime("%H:%M") == "10:00"
+
+
+def test_work_битый_файл_настроек_не_роняет_ленту(vault):
+    """Испорченный Настройки.json — повод чинить настройки, не повод положить
+    ленту и завал: они не про настройки, они про то, что просрочено сегодня."""
+    cfg.settings_path(vault).write_text("{не json", encoding="utf-8")
+    work = engine._work(None)
+    assert work["start"].strftime("%H:%M") == "09:00"
+
+
+# --- перенос тега по всем задачам вольта ------------------------------------
+#
+# settings.rename_tag/merge_tags меняют только справочник (цвет, закрепление):
+# сами задачи им не видны, об этом прямо сказано в докстроке merge_tags.
+# rename_tag_everywhere — та часть, которую обязан сделать тот, кто подключает
+# settings.py к движку.
+
+def test_rename_tag_everywhere_меняет_тег_на_задаче(vault):
+    task(vault, "Аренда", [step(1, "A", control_date=TODAY)], tags=["финансы"])
+    задето = engine.rename_tag_everywhere("финансы", "деньги", TODAY)
+    assert задето == 1
+    meta, _ = read(vault / "Задачи" / "Аренда.md")
+    assert meta["tags"] == ["деньги"]
+
+
+def test_rename_tag_everywhere_схлопывает_дубликат(vault):
+    """Слияние «срочное» → «важное» на задаче, где «важное» уже стоит, не
+    должно оставить тег дважды."""
+    task(vault, "Грант", [step(1, "A", control_date=TODAY)], tags=["срочное", "важное"])
+    engine.rename_tag_everywhere("срочное", "важное", TODAY)
+    meta, _ = read(vault / "Задачи" / "Грант.md")
+    assert meta["tags"] == ["важное"]
+
+
+def test_rename_tag_everywhere_не_трогает_задачи_без_тега(vault):
+    task(vault, "Без тега", [step(1, "A", control_date=TODAY)], tags=["другое"])
+    задето = engine.rename_tag_everywhere("финансы", "деньги", TODAY)
+    assert задето == 0
+    meta, _ = read(vault / "Задачи" / "Без тега.md")
+    assert meta["tags"] == ["другое"]

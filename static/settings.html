@@ -23,6 +23,43 @@
   </header>
 
   <section class="settings-section">
+    <h2>Рабочее время</h2>
+    <p class="hint">Вне этого интервала уведомления не показываются, а просрочка не
+      начисляется — момент показа просто уезжает на ближайшее начало.</p>
+    <div class="card-fields">
+      <div class="field">
+        <label for="work-start">Начало</label>
+        <input type="text" id="work-start" autocomplete="off" placeholder="09:00">
+      </div>
+      <div class="field">
+        <label for="work-end">Конец</label>
+        <input type="text" id="work-end" autocomplete="off" placeholder="21:00">
+      </div>
+    </div>
+    <label class="check-row">
+      <input type="checkbox" id="work-weekends">
+      Показывать уведомления и в выходные
+    </label>
+    <p class="err" id="work-err" hidden></p>
+    <div class="settings-actions">
+      <button type="button" class="primary small" id="work-save">Сохранить</button>
+      <span class="note" id="work-saved" hidden>Сохранено</span>
+    </div>
+  </section>
+
+  <section class="settings-section">
+    <h2>Причины переноса</h2>
+    <p class="hint">Список для окна контроля. Архивная причина не пропадает из
+      истории, но больше не предлагается при выборе новой.</p>
+    <ul class="tpl-list" id="reasons-list"></ul>
+    <div class="settings-actions">
+      <input type="text" id="reason-new" autocomplete="off" placeholder="Новая причина">
+      <button type="button" class="ghost small" id="reason-add">Добавить</button>
+    </div>
+    <p class="err" id="reasons-err" hidden></p>
+  </section>
+
+  <section class="settings-section">
     <div class="settings-head">
       <h2>Резервные копии</h2>
       <button type="button" class="primary small" id="backup-now">Сделать копию сейчас</button>

@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import engine  # noqa: E402
+import settings as cfg  # noqa: E402
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -97,7 +98,7 @@ class Handler(BaseHTTPRequestHandler):
             начало = _param(self.path, "start")
             return self._json(200, engine.cmd_templates(_args(start=начало), date.today()))
         if route == "/api/reasons":
-            return self._json(200, {"reasons": engine.REASONS})
+            return self._json(200, {"reasons": engine.get_reasons()})
         if route == "/api/tasks":
             return self._json(200, engine.cmd_list(None, date.today()))
         if route == "/api/task":
@@ -110,6 +111,8 @@ class Handler(BaseHTTPRequestHandler):
             назначение = _param(self.path, "dest")
             return self._json(200, engine.cmd_backup_list(
                 _args(dest=назначение), date.today()))
+        if route == "/api/settings":
+            return self._json(200, self._settings_load())
         self._json(404, {"error": "нет такого адреса"})
 
     def do_POST(self):
@@ -183,7 +186,75 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/export-json":
             return self._json(200, engine.cmd_export_json(
                 _args(to=payload.get("to")), date.today()))
+        if route == "/api/settings":
+            return self._json(200, self._settings_save(payload))
+        if route == "/api/reasons-add":
+            return self._json(200, self._settings_op(cfg.add_reason, payload.get("name")))
+        if route == "/api/reasons-rename":
+            return self._json(200, self._settings_op(
+                cfg.rename_reason, payload.get("old_name"), payload.get("new_name")))
+        if route == "/api/reasons-archive":
+            return self._json(200, self._settings_op(cfg.archive_reason, payload.get("name")))
+        if route == "/api/tags-add":
+            return self._json(200, self._settings_op(
+                cfg.add_tag, payload.get("name"), payload.get("color"),
+                bool(payload.get("pinned"))))
+        if route == "/api/tags-rename":
+            return self._json(200, self._tag_rewrite(
+                cfg.rename_tag, payload.get("old_name"), payload.get("new_name")))
+        if route == "/api/tags-toggle-pinned":
+            return self._json(200, self._settings_op(cfg.toggle_tag_pinned, payload.get("name")))
+        if route == "/api/tags-merge":
+            return self._json(200, self._tag_rewrite(
+                cfg.merge_tags, payload.get("source"), payload.get("target")))
         self._json(404, {"error": "нет такого адреса"})
+
+    def _settings_path(self):
+        # Тот же приём, что в engine._work: путь считаем от engine.VAULT, а не
+        # от settings.cfg.VAULT — второй вычислен независимо при импорте и не
+        # видит подмену вольта (тесты, --vault, что угодно другое).
+        return cfg.settings_path(engine.VAULT)
+
+    def _settings_load(self):
+        try:
+            data = cfg.load(self._settings_path())
+        except cfg.SettingsError as e:
+            return {"error": "; ".join(x.get("error", "") for x in e.errors)}
+        # cfg.load() отдаёт start/end объектами time — для файла это верно
+        # (settings.save сериализует их сама), а для голого json.dumps с
+        # default=str time(9, 0) превращается в «09:00:00»: str(time) всегда
+        # печатает секунды, даже нулевые. Форма ждёт «09:00», как и пишет файл.
+        notif = data.get("notifications", {})
+        for поле in ("start", "end"):
+            if hasattr(notif.get(поле), "strftime"):
+                notif[поле] = notif[поле].strftime("%H:%M")
+        return data
+
+    def _settings_save(self, payload):
+        try:
+            warnings = cfg.save(payload, self._settings_path())
+            return {"ok": True, "warnings": warnings}
+        except cfg.SettingsError as e:
+            return {"ok": False, "errors": e.errors}
+
+    def _settings_op(self, операция, *args):
+        """Общая обёртка для действий над справочником причин и тегов: все они
+        читают-меняют-пишут один и тот же файл и одинаково реагируют на ошибку
+        валидации — писать эту тройку восемь раз незачем."""
+        try:
+            результат = операция(*args, path=self._settings_path())
+            return {"ok": True, "result": результат[0] if isinstance(результат, tuple)
+                    else результат}
+        except cfg.SettingsError as e:
+            return {"ok": False, "errors": e.errors}
+
+    def _tag_rewrite(self, операция, old_name, new_name):
+        """rename_tag и merge_tags меняют только справочник тегов — сами задачи
+        правит движок отдельным шагом, см. `engine.rename_tag_everywhere`."""
+        итог = self._settings_op(операция, old_name, new_name)
+        if итог.get("ok"):
+            итог["tasks_updated"] = engine.rename_tag_everywhere(old_name, new_name)
+        return итог
 
     def _guarded(self, команда, args):
         """Обёртка для операций, которые движок останавливает через `sys.exit`

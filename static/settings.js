@@ -167,4 +167,99 @@ $('#export-json').addEventListener('click', async () => {
   }
 });
 
+// --- рабочее время --------------------------------------------------------
+//
+// Правило «начало раньше конца» и сами дефолты считает worktime.py через
+// settings.py — страница не проверяет часы сама, только показывает ответ.
+
+let текущиеНастройки = null;
+
+async function загрузитьНастройки() {
+  текущиеНастройки = await get('/api/settings');
+  if (текущиеНастройки.error) {
+    всплывашка('Файл настроек повреждён: ' + текущиеНастройки.error);
+    return;
+  }
+  const n = текущиеНастройки.notifications;
+  $('#work-start').value = n.start;
+  $('#work-end').value = n.end;
+  $('#work-weekends').checked = !!n.weekends;
+  отрисоватьПричины(текущиеНастройки.reasons);
+}
+
+$('#work-save').addEventListener('click', async () => {
+  $('#work-err').hidden = true;
+  const данные = {
+    ...текущиеНастройки,
+    notifications: {
+      ...текущиеНастройки.notifications,
+      start: $('#work-start').value.trim(),
+      end: $('#work-end').value.trim(),
+      weekends: $('#work-weekends').checked,
+    },
+  };
+  const r = await post('/api/settings', данные);
+  if (!r.ok) {
+    $('#work-err').textContent = (r.errors || []).map((e) => e.error).join('; ') || 'не сохранилось';
+    $('#work-err').hidden = false;
+    return;
+  }
+  текущиеНастройки.notifications = данные.notifications;
+  const метка = $('#work-saved');
+  метка.hidden = false;
+  setTimeout(() => { метка.hidden = true; }, 2500);
+  if (r.warnings && r.warnings.length) всплывашка(r.warnings.map((w) => w.warning).join(' · '));
+});
+
+// --- причины переноса ------------------------------------------------------
+
+function отрисоватьПричины(reasons) {
+  $('#reasons-list').replaceChildren(...(reasons || []).map(причинаСтрокой));
+}
+
+function причинаСтрокой(r) {
+  const li = document.createElement('li');
+  li.className = 'reason-row' + (r.archived ? ' is-archived' : '');
+
+  const name = document.createElement('span');
+  name.className = 'reason-name';
+  name.textContent = r.name;
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ghost small';
+  btn.textContent = r.archived ? 'В архиве' : 'В архив';
+  btn.disabled = r.archived;
+  btn.addEventListener('click', async () => {
+    const ответ = await post('/api/reasons-archive', { name: r.name });
+    if (!ответ.ok) return всплывашка((ответ.errors || []).map((e) => e.error).join('; '));
+    отрисоватьПричины(ответ.result);
+    текущиеНастройки.reasons = ответ.result;
+  });
+
+  li.append(name, btn);
+  return li;
+}
+
+$('#reason-add').addEventListener('click', async () => {
+  const input = $('#reason-new');
+  const имя = input.value.trim();
+  $('#reasons-err').hidden = true;
+  if (!имя) return;
+  const r = await post('/api/reasons-add', { name: имя });
+  if (!r.ok) {
+    $('#reasons-err').textContent = (r.errors || []).map((e) => e.error).join('; ') || 'не вышло';
+    $('#reasons-err').hidden = false;
+    return;
+  }
+  input.value = '';
+  отрисоватьПричины(r.result);
+  текущиеНастройки.reasons = r.result;
+});
+
+$('#reason-new').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); $('#reason-add').click(); }
+});
+
 загрузитьКопии();
+загрузитьНастройки();

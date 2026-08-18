@@ -26,6 +26,16 @@ def path(tmp_path):
     return tmp_path / "Настройки.json"
 
 
+@pytest.fixture
+def пустой(path):
+    """Файл настроек с пустым справочником причин. Дефолты теперь несут семь
+    перенесённых из engine.REASONS строк (см. настройки продукта, раздел 6.8),
+    а часть тестов ниже проверяет сами операции — дубликаты, регистр,
+    идемпотентность, — а не то, что унаследовано от стартового набора."""
+    settings.save({**settings.defaults(), "reasons": []}, path=path)
+    return path
+
+
 # --- дефолты -----------------------------------------------------------------
 
 def test_рабочие_часы_по_умолчанию_взяты_из_worktime_а_не_задублированы():
@@ -46,10 +56,11 @@ def test_defaults_возвращает_независимые_копии():
     """Правка того, что вернул defaults(), не должна протухать в модуле —
     иначе один тест испортит все последующие в этом же процессе."""
     d1 = settings.defaults()
+    исходное_число_причин = len(d1["reasons"])
     d1["reasons"].append({"name": "подсунутое", "archived": False})
     d1["notifications"]["repeat_minutes"] = 999
     d2 = settings.defaults()
-    assert d2["reasons"] == []
+    assert len(d2["reasons"]) == исходное_число_причин
     assert d2["notifications"]["repeat_minutes"] == 15
 
 
@@ -221,49 +232,49 @@ def test_неизвестное_поле_в_файле_тихо_отбрасыв
 
 # --- справочник причин --------------------------------------------------------
 
-def test_добавление_причины(path):
-    причины, warnings = settings.add_reason("не дозвонился", path=path)
+def test_добавление_причины(пустой):
+    причины, warnings = settings.add_reason("не дозвонился", path=пустой)
     assert причины == [{"name": "не дозвонился", "archived": False}]
     assert warnings == []
 
 
-def test_дубликат_активной_причины_отвергается(path):
-    settings.add_reason("не было денег", path=path)
+def test_дубликат_активной_причины_отвергается(пустой):
+    settings.add_reason("не было денег", path=пустой)
     with pytest.raises(settings.SettingsError) as exc:
-        settings.add_reason("не было денег", path=path)
+        settings.add_reason("не было денег", path=пустой)
     assert exc.value.errors[0]["field"] == "name"
 
 
-def test_дубликат_причины_нечувствителен_к_регистру(path):
-    settings.add_reason("Моя лень", path=path)
+def test_дубликат_причины_нечувствителен_к_регистру(пустой):
+    settings.add_reason("Моя лень", path=пустой)
     with pytest.raises(settings.SettingsError):
-        settings.add_reason("моя лень", path=path)
+        settings.add_reason("моя лень", path=пустой)
 
 
-def test_архивная_причина_не_мешает_новой_с_тем_же_именем(path):
-    settings.add_reason("временно", path=path)
-    settings.archive_reason("временно", path=path)
-    причины, _ = settings.add_reason("временно", path=path)
+def test_архивная_причина_не_мешает_новой_с_тем_же_именем(пустой):
+    settings.add_reason("временно", path=пустой)
+    settings.archive_reason("временно", path=пустой)
+    причины, _ = settings.add_reason("временно", path=пустой)
     активные = [r for r in причины if not r["archived"]]
     assert len(активные) == 1
 
 
-def test_архивирование_причины_идемпотентно(path):
+def test_архивирование_причины_идемпотентно(пустой):
     """Операции идемпотентны — правило из КОНТРАКТ.md: повторный вызов после
     обрыва связи не должен считаться ошибкой и не должен ничего ломать."""
-    settings.add_reason("жду ответа", path=path)
-    settings.archive_reason("жду ответа", path=path)
-    причины, warnings = settings.archive_reason("жду ответа", path=path)
+    settings.add_reason("жду ответа", path=пустой)
+    settings.archive_reason("жду ответа", path=пустой)
+    причины, warnings = settings.archive_reason("жду ответа", path=пустой)
     assert причины == [{"name": "жду ответа", "archived": True}]
     assert warnings == []
 
 
-def test_архивная_причина_не_предлагается_при_выборе_новой(path):
-    settings.add_reason("активная", path=path)
-    settings.add_reason("устаревшая", path=path)
-    settings.archive_reason("устаревшая", path=path)
-    assert settings.active_reason_names(path=path) == ["активная"]
-    assert {r["name"] for r in settings.list_reasons(path=path)} == {"активная", "устаревшая"}
+def test_архивная_причина_не_предлагается_при_выборе_новой(пустой):
+    settings.add_reason("активная", path=пустой)
+    settings.add_reason("устаревшая", path=пустой)
+    settings.archive_reason("устаревшая", path=пустой)
+    assert settings.active_reason_names(path=пустой) == ["активная"]
+    assert {r["name"] for r in settings.list_reasons(path=пустой)} == {"активная", "устаревшая"}
 
 
 def test_архивирование_несуществующей_причины_ошибка(path):
@@ -271,9 +282,9 @@ def test_архивирование_несуществующей_причины_
         settings.archive_reason("такой не было", path=path)
 
 
-def test_переименование_причины(path):
-    settings.add_reason("не было времени", path=path)
-    причины, _ = settings.rename_reason("не было времени", "не хватило времени", path=path)
+def test_переименование_причины(пустой):
+    settings.add_reason("не было времени", path=пустой)
+    причины, _ = settings.rename_reason("не было времени", "не хватило времени", path=пустой)
     assert причины == [{"name": "не хватило времени", "archived": False}]
 
 
