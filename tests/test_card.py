@@ -10,6 +10,7 @@ monkeypatch, зовём функции движка напрямую в обхо
 на диск шаг, где дата начала обгоняла дату контроля. Тесты ниже воспроизводят
 ровно этот сценарий, а не абстрактную перестановку.
 """
+import json
 import sys
 from datetime import date
 from pathlib import Path
@@ -320,6 +321,45 @@ def test_update_невалидные_даты_не_переименовываю�
     assert not (vault / "Задачи" / "Аренда 2.md").exists()
 
 
+# --- заметка задачи: показ и обратное сохранение ----------------------------
+
+def test_show_отдаёт_заметку_без_блока_шагов(vault):
+    task(vault, "Грант", [
+        {"id": 1, "title": "A", "status": "pending", "control_date": date(2026, 8, 20),
+         "completed_date": None, "log": []}],
+        body="Юрист — [[Василий Говнов]], телефон в договоре.")
+    r = run(engine.cmd_show, task="Грант")
+    assert r["body"] == "Юрист — [[Василий Говнов]], телефон в договоре."
+    assert engine.STEPS_START not in r["body"]
+
+
+def test_заметка_переживает_сохранение_карточки(vault):
+    """Живой баг на демо-данных: `cmd_show` не отдавал `body`, карточка
+    показывала пустую заметку и отправляла эту пустоту обратно — заметка
+    стиралась при первом же сохранении, хотя человек её не трогал.
+
+    Проверяем весь круг, а не только показ: карточка шлёт ровно то, что ей
+    отдали, и текст должен вернуться в файл нетронутым."""
+    task(vault, "Грант", [
+        {"id": 1, "title": "A", "status": "pending", "control_date": date(2026, 8, 20),
+         "completed_date": None, "log": []}],
+        body="Сумма 840 тыс. Контакт: +7 900 000-00-00.")
+    показано = run(engine.cmd_show, task="Грант")
+
+    данные = {"title": "Грант", "tags": [], "body": показано["body"],
+              "steps": [{"id": s["id"], "title": s["title"],
+                         "control_date": s.get("control_date"), "note": s.get("note")}
+                        for s in показано["steps"]]}
+    r = run(engine.cmd_update, task="Грант", json=json.dumps(данные))
+    assert r["ok"], r
+
+    снова = run(engine.cmd_show, task="Грант")
+    assert снова["body"] == "Сумма 840 тыс. Контакт: +7 900 000-00-00."
+    текст = (vault / "Задачи" / "Грант.md").read_text(encoding="utf-8")
+    assert "+7 900 000-00-00" in текст
+    assert текст.count(engine.STEPS_START) == 1  # блок шагов не размножился
+
+
 # --- отмена, удаление, переоткрытие ------------------------------------------
 
 def test_cancel_меняет_статус_задачи(vault):
@@ -342,6 +382,25 @@ def test_отменённая_задача_не_просроченная(vault):
     r = run(engine.cmd_list)
     строка = next(t for t in r["tasks"] if t["task"] == "Грант")
     assert строка["status"] == "cancelled"
+
+
+def test_отменённая_не_попадает_в_ленту_и_завал(vault):
+    """Найдено на демо-данных: `task_status` отменённую отсекает первым правилом,
+    а `collect_open` — источник ленты, завала и напоминаний — про отмену не знал
+    вовсе и каждый день показывал её просроченной. Шаг в отменённой задаче так
+    и остаётся открытым, поэтому проверка нужна явная."""
+    task(vault, "Грант", [
+        {"id": 1, "title": "A", "status": "pending", "control_date": date(2026, 8, 1),
+         "completed_date": None, "log": []}], start_date=date(2026, 8, 1))
+    завал_до = run(engine.cmd_backlog)
+    assert завал_до["count"] == 1
+
+    run(engine.cmd_cancel, task="Грант")
+
+    assert run(engine.cmd_backlog)["count"] == 0
+    лента = run(engine.cmd_feed)
+    assert лента["counts"] == {"overdue": 0, "today": 0, "waiting": 0}
+    assert лента["feed"] == []
 
 
 def test_cancel_дважды_отказывает(vault):
