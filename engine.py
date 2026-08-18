@@ -45,6 +45,7 @@ try:
 except ImportError:
     sys.exit("нужен pyyaml: pip install pyyaml")
 
+import kb
 import recurrence as rec
 import templates as tpl
 import worktime
@@ -52,6 +53,7 @@ import worktime
 SCHEMA = 1
 VAULT = Path(os.environ.get("YUNGDRUNG_VAULT", Path(__file__).resolve().parent))
 TASKS_DIR = VAULT / "Задачи"
+KB_DIR = VAULT / "База"
 
 OPEN = "pending"
 DONE = "done"
@@ -182,6 +184,44 @@ def find_task(fragment):
     if len(hits) > 1:
         sys.exit("подходит несколько: " + ", ".join(t["path"].stem for t in hits))
     return hits[0]
+
+
+# Записи базы знаний, которые не разобрались при последнем чтении. Та же логика,
+# что у BROKEN: опечатка в заметке заказчика не должна тихо выкидывать запись
+# из автораспознавания без единого сигнала об этом.
+KB_BROKEN = []
+
+
+def load_kb_entries():
+    """Записи базы знаний для kb.build_index — раздел 5.7 ТЗ.
+
+    Источник — `База/*.md` в том же формате frontmatter, что и задачи. Папки
+    может не быть вовсе: заказчик вправе завести первую задачу раньше первой
+    записи базы, и это не поломка, а нет — пустой список.
+    """
+    KB_BROKEN.clear()
+    if not KB_DIR.is_dir():
+        return []
+    out = []
+    for path in sorted(KB_DIR.glob("*.md")):
+        try:
+            meta, _ = parse_file(path)
+        except Exception as e:
+            reason = " ".join(str(e).split())[:200]
+            KB_BROKEN.append({"file": path.name, "error": reason})
+            continue
+        if meta.get("type") != "note":
+            continue
+        title = (meta.get("title") or "").strip()
+        if not title:
+            KB_BROKEN.append({"file": path.name, "error": "нет названия"})
+            continue
+        out.append({
+            "id": path.stem,
+            "title": title,
+            "aliases": meta.get("aliases") or meta.get("synonyms") or [],
+        })
+    return out
 
 
 # --- вычисления ------------------------------------------------------------
@@ -1433,6 +1473,170 @@ def cmd_skip(args, today):
             "task_status": task_status(task, today)}
 
 
+# --- база знаний -------------------------------------------------------
+
+def _read_json_arg(value):
+    """JSON: строкой, уже разобранным значением (так приходит из HTTP — сервер
+    парсит тело запроса раньше) или «-» для чтения из stdin, как у `create`.
+    Одна команда обслуживает и форму, и командную строку, и вход у них разный."""
+    if isinstance(value, str):
+        if value == "-":
+            value = sys.stdin.read()
+        return json.loads(value)
+    return value
+
+
+def cmd_kb_scan(args, today):
+    """Гипотезы упоминаний записей базы знаний в тексте — R17, разделы 5.7/5.8 ТЗ.
+
+    Индекс собирается заново на каждый вызов, не кэшируется: заказчик правит
+    заметки базы в Obsidian, а кэш без инвалидации на эту правку не среагирует.
+    """
+    text = getattr(args, "text", None) or ""
+    entries = load_kb_entries()
+    if not text or not entries:
+        return {"hypotheses": [], "confirmed": [], "kb_broken": list(KB_BROKEN)}
+
+    исключения = kb.JsonExclusionStore(VAULT).keys()
+    индекс = kb.build_index(entries)
+    гипотезы = kb.find_mentions(text, индекс, excluded=исключения)
+
+    source_type = getattr(args, "source_type", None)
+    source_id = getattr(args, "source_id", None)
+    подтверждённые = []
+    if source_type and source_id:
+        подтверждённые = kb.JsonLinkStore(VAULT).for_source(source_type, source_id)
+        # Уже отвеченное не переспрашиваем: смещения подтверждённых ссылок
+        # исключаются из новых гипотез по тому же месту в тексте.
+        занято = {(с["offset_start"], с["offset_end"]) for с in подтверждённые}
+        гипотезы = [г for г in гипотезы
+                    if (г["offset_start"], г["offset_end"]) not in занято]
+
+    return {"hypotheses": гипотезы, "confirmed": подтверждённые,
+            "kb_broken": list(KB_BROKEN)}
+
+
+def _find_task_by_stem(name):
+    """Точное имя файла задачи, без нечёткого поиска `find_task`: гипотезы уже
+    посчитаны на конкретной, уже созданной задаче — мазать мимо здесь нельзя."""
+    for t in load_tasks():
+        if t["path"].stem == name:
+            return t
+    return None
+
+
+def _strip_steps_block(body):
+    """Тело без блока шагов плюс способ вернуть блок на прежнее место.
+
+    Смещения гипотез посчитаны против текста БЕЗ этого блока (см. `cmd_kb_scan`
+    и докстринг вызывающего кода), поэтому сплайс ссылок должен идти по той же
+    системе координат. Блока может не быть вовсе — задача только что создана
+    и ещё не проходила через `save()`; тогда возвращается тело как есть.
+
+    Первая же вставка блока (`put_steps_into_body`, когда маркеров ещё не
+    было) склеивает его с текстом заказчика через «\\n\\n» — до одного
+    перевода строки, если текста не было вовсе. Эта склейка не текст
+    заказчика, а механика рендера, и в форме создания на момент сканирования
+    её ещё нет. Не срезать её здесь — значит увести смещения на два символа
+    для любой задачи, которую подтверждают сразу после первого сохранения:
+    ровно тот путь, которым и приходит подтверждение из формы (раздел 4).
+    Дальше эта склейка не меняется (`put_steps_into_body` при найденных
+    маркерах переносит хвост как есть), поэтому срез безопасен и на
+    повторных сохранениях — режется всегда один и тот же кусок.
+    """
+    start = body.find(STEPS_START)
+    end = body.find(STEPS_END)
+    if start == -1 or end == -1 or end <= start:
+        return body, lambda stripped: stripped
+    block_end = end + len(STEPS_END)
+    block = body[start:block_end]
+    tail = body[block_end:]
+    склейка = tail[:2] if tail[:2] == "\n\n" else (tail[:1] if tail[:1] == "\n" else "")
+    return (body[:start] + tail[len(склейка):],
+            lambda stripped: stripped[:start] + block + склейка + stripped[start:])
+
+
+def _mark_links_in_body(task, mentions):
+    """Вписать подтверждённые упоминания в тело настоящими вики-ссылками.
+
+    Единственное место, где текст заказчика правит программа, — и делает это
+    ровно потому, что человек сам нажал «да» на конкретное упоминание (раздел
+    7.1 ТЗ). Пишет `[[Название]]`, а если написано не так, как называется
+    запись — piped link `[[Название|как написано]]`.
+
+    Гипотезы обрабатываются по убыванию offset_start: иначе первая же вставка
+    сдвинет смещения соседних. Та, под которой текст успел измениться
+    (`text[s:e] != matched`), пропускается молча — ссылка в Ссылки.json уже
+    записана вызывающим, здесь только подчёркивание в тексте.
+    """
+    body, вернуть_блок = _strip_steps_block(task["body"])
+    for гипотеза in sorted(mentions, key=lambda г: -г["offset_start"]):
+        s, e = гипотеза["offset_start"], гипотеза["offset_end"]
+        if body[s:e] != гипотеза["matched"]:
+            continue
+        title, matched = гипотеза["title"], гипотеза["matched"]
+        link = f"[[{title}]]" if matched == title else f"[[{title}|{matched}]]"
+        body = body[:s] + link + body[e:]
+    task["body"] = вернуть_блок(body)
+
+
+def cmd_kb_confirm(args, today):
+    """Подтверждение гипотез автораспознавания — R17, раздел 7.1 ТЗ.
+
+    Каждая гипотеза обрабатывается независимо: одна кривая не блокирует
+    соседние. Ошибки собираются с индексом гипотезы в поле (`mentions.0` и
+    т. п.), `ok` — False только если упали все.
+    """
+    source_type = getattr(args, "source_type", None)
+    source_id = getattr(args, "source_id", None)
+    try:
+        mentions = _read_json_arg(args.mentions) or []
+    except json.JSONDecodeError as e:
+        return {"ok": False, "links": [],
+                "errors": [{"field": "mentions", "error": f"битый JSON: {e}"}]}
+
+    склад = kb.JsonLinkStore(VAULT)
+    успешные, ошибки = [], []
+    for i, гипотеза in enumerate(mentions):
+        try:
+            ссылка = склад.add(гипотеза, source_type=source_type, source_id=source_id)
+        except kb.KbError as e:
+            for err in e.errors:
+                поле = f"mentions.{i}.{err['field']}" if err.get("field") else f"mentions.{i}"
+                ошибки.append({"field": поле, "error": err["error"]})
+            continue
+        успешные.append((гипотеза, ссылка))
+
+    if успешные and source_type == "task":
+        задача = _find_task_by_stem(source_id)
+        if задача is not None:
+            _mark_links_in_body(задача, [г for г, _ in успешные])
+            save(задача, today)
+
+    ok = bool(успешные) or not ошибки
+    return {"ok": ok, "links": [с for _, с in успешные], "errors": ошибки}
+
+
+def cmd_kb_reject(args, today):
+    """Ответ «нет» на гипотезу — раздел 7.1 ТЗ.
+
+    `mute=True` — слово никогда не считается ссылкой ни у одной записи
+    («Грант» у заказчика чаще сумма денег, чем запись базы). `mute=False` —
+    отказ только от этой конкретной гипотезы у этой записи.
+    """
+    try:
+        гипотеза = _read_json_arg(args.mention)
+    except json.JSONDecodeError as e:
+        return {"ok": False, "errors": [{"field": "mention", "error": f"битый JSON: {e}"}]}
+
+    склад = kb.JsonExclusionStore(VAULT)
+    if getattr(args, "mute", False):
+        склад.mute_word(гипотеза["matched"])
+    else:
+        склад.reject(гипотеза)
+    return {"ok": True}
+
+
 # --- выгрузка в Excel ------------------------------------------------------
 
 # Предел Excel на длину текста в ячейке. Тело заметки пишет заказчик, и упереться
@@ -1677,6 +1881,24 @@ def main():
     k = sub.add_parser("skip", help="снять шаг")
     k.add_argument("task"); k.add_argument("step"); k.add_argument("--reason")
     k.set_defaults(func=cmd_skip)
+
+    ks = sub.add_parser("kb-scan", help="гипотезы упоминаний записей базы знаний в тексте")
+    ks.add_argument("--text", default="")
+    ks.add_argument("--source-type")
+    ks.add_argument("--source-id")
+    ks.set_defaults(func=cmd_kb_scan)
+
+    kc = sub.add_parser("kb-confirm", help="подтвердить гипотезы, проставить ссылки в тексте")
+    kc.add_argument("--source-type", required=True)
+    kc.add_argument("--source-id", required=True)
+    kc.add_argument("--mentions", required=True,
+                    help='JSON-список гипотез (эхо того, что вернул kb-scan) или "-" для stdin')
+    kc.set_defaults(func=cmd_kb_confirm)
+
+    kr = sub.add_parser("kb-reject", help="отклонить гипотезу или заглушить слово целиком")
+    kr.add_argument("--mention", required=True, help='JSON гипотезы или "-" для stdin')
+    kr.add_argument("--mute", action="store_true", help="слово никогда не ссылка, у любой записи")
+    kr.set_defaults(func=cmd_kb_reject)
 
     x = sub.add_parser("export", help="выгрузить весь вольт в Excel")
     x.add_argument("--to", help="куда писать; по умолчанию — «Выгрузка <дата>.xlsx» "

@@ -153,6 +153,19 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/task-reopen":
             return self._json(200, self._guarded(engine.cmd_reopen, _args(
                 task=payload.get("task"), step=str(payload.get("step") or ""))))
+        if route == "/api/kb/scan":
+            return self._json(200, engine.cmd_kb_scan(
+                _args(text=payload.get("text"), source_type=payload.get("source_type"),
+                      source_id=payload.get("source_id")), date.today()))
+        if route == "/api/kb/confirm":
+            return self._json(200, engine.cmd_kb_confirm(
+                _args(source_type=payload.get("source_type"),
+                      source_id=payload.get("source_id"),
+                      mentions=payload.get("mentions")), date.today()))
+        if route == "/api/kb/reject":
+            return self._json(200, engine.cmd_kb_reject(
+                _args(mention=payload.get("mention"),
+                      mute=bool(payload.get("mute"))), date.today()))
         self._json(404, {"error": "нет такого адреса"})
 
     def _guarded(self, команда, args):

@@ -35,6 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import engine  # noqa: E402
+import kb  # noqa: E402
 
 TODAY = date(2026, 8, 15)
 TOMORROW = date(2026, 8, 16)
@@ -52,11 +53,17 @@ class NoAliasDumper(yaml.SafeDumper):
 
 @pytest.fixture
 def vault(tmp_path, monkeypatch):
-    """Временный вольт вместо репозитория."""
+    """Временный вольт вместо репозитория.
+
+    KB_DIR патчится тем же приёмом, что и TASKS_DIR: без этого kb-команды
+    читали бы «База» настоящего репозитория, а не тестовую папку, и записи
+    базы знаний, заведённые в тесте, были бы не видны движку.
+    """
     tasks = tmp_path / "Задачи"
     tasks.mkdir()
     monkeypatch.setattr(engine, "VAULT", tmp_path)
     monkeypatch.setattr(engine, "TASKS_DIR", tasks)
+    monkeypatch.setattr(engine, "KB_DIR", tmp_path / "База")
     return tmp_path
 
 
@@ -1047,3 +1054,247 @@ def test_recur_несколько_шаблонов_независимы(vault):
     имена = {t["template"] for t in r["templates"]}
     assert имена == {"Отчёт по кассе", "Полить цветы"}
     assert all(t["created"] for t in r["templates"])
+
+
+# --- база знаний: подключение kb.py (R17, разделы 5.7/5.8/7 ТЗ) ------------
+#
+# Сама морфология и защита от мусора уже проверены в test_kb.py на голом
+# kb.py — здесь только то, что добавляет движок: чтение База/*.md,
+# `--source-*` подмешивание уже подтверждённого, сплайс [[ссылок]] в тело
+# задачи по убыванию смещения и идемпотентность через настоящий вольт.
+
+def kb_note(vault, title, *, aliases=None, body=""):
+    """Кладёт запись базы знаний в вольт — по образцу task()."""
+    (vault / "База").mkdir(exist_ok=True)
+    meta = {"type": "note", "title": title}
+    if aliases:
+        meta["aliases"] = list(aliases)
+    fm = yaml.dump(meta, Dumper=NoAliasDumper, allow_unicode=True,
+                   sort_keys=False, default_flow_style=False)
+    path = vault / "База" / f"{title}.md"
+    path.write_text(f"---\n{fm}---\n\n{body}", encoding="utf-8")
+    return path
+
+
+def test_kb_scan_находит_упоминание_offset_совпадает_со_срезом(vault):
+    kb_note(vault, "Василий Говнов")
+    текст = "Позвонить Василию Говнову завтра"
+    result = run(engine.cmd_kb_scan, text=текст)
+
+    assert len(result["hypotheses"]) == 1
+    г = result["hypotheses"][0]
+    assert г["entry_id"] == "Василий Говнов"
+    assert текст[г["offset_start"]:г["offset_end"]] == г["matched"]
+    assert result["confirmed"] == []
+    assert result["kb_broken"] == []
+
+
+@pytest.mark.parametrize("форма", ["Говнову", "Говновым", "Говнове"])
+def test_kb_scan_не_путает_падежи(форма, vault):
+    kb_note(vault, "Говнов")
+    result = run(engine.cmd_kb_scan, text=f"отдать {форма} денег")
+    assert [г["entry_id"] for г in result["hypotheses"]] == ["Говнов"]
+
+
+@pytest.mark.parametrize("текст", ["Грантовый конкурс в июле", "говновая контора"])
+def test_kb_scan_не_путает_словообразование(текст, vault):
+    """Докстринг kb.py прямо предупреждает про этот промах наивного среза
+    окончания: «Грантовый» даёт «грантов» из «Фонда президентских грантов»,
+    «говновая» — «говнов» из фамилии другого человека. Через морфологию,
+    подключённую здесь же, такого не происходит."""
+    kb_note(vault, "Фонд президентских грантов", aliases=["ФПГ"])
+    kb_note(vault, "Василий Говнов")
+    assert run(engine.cmd_kb_scan, text=текст)["hypotheses"] == []
+
+
+def test_kb_scan_без_записей_базы_ничего_не_падает(vault):
+    result = run(engine.cmd_kb_scan, text="Отдать Василию Говнову деньги")
+    assert result == {"hypotheses": [], "confirmed": [], "kb_broken": []}
+
+
+def test_kb_confirm_вписывает_ссылку_в_тело(vault):
+    """Написание совпадает с названием записи — простая ссылка, без piped-части
+    (тот случай проверен отдельно, ниже)."""
+    kb_note(vault, "Василий Говнов")
+    body = "Отправить документы. Василий Говнов утвердит.\n\nВторой абзац заказчика.\n"
+    path = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)], body=body)
+    run(engine.cmd_refresh, force=True)   # тело теперь содержит блок шагов
+
+    _, body_now = read(path)
+    текст, _ = engine._strip_steps_block(body_now)
+    гипотезы = run(engine.cmd_kb_scan, text=текст)["hypotheses"]
+    assert len(гипотезы) == 1
+
+    r = run(engine.cmd_kb_confirm, source_type="task", source_id="Грант",
+                mentions=гипотезы)
+    assert r["ok"] and len(r["links"]) == 1 and r["errors"] == []
+
+    _, body_after = read(path)
+    assert "[[Василий Говнов]]" in body_after
+    assert "Второй абзац заказчика." in body_after, "текст заказчика не должен потеряться"
+    assert body_after.count(engine.STEPS_START) == 1
+    assert body_after.count(engine.STEPS_END) == 1
+
+    ссылки = kb.JsonLinkStore(vault).for_source("task", "Грант")
+    assert len(ссылки) == 1 and ссылки[0]["kb_entry_id"] == "Василий Говнов"
+
+
+def test_kb_confirm_piped_link_когда_написано_не_как_называется(vault):
+    """`matched != title` → `[[Название|как написано]]`, чтобы карточка
+    открывалась по названию, а текст остался таким, каким его набрал заказчик."""
+    kb_note(vault, "Василий Говнов", aliases=["Вася Говнов"])
+    path = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)],
+                body="Спросить Васю Говнова про грант.\n")
+    run(engine.cmd_refresh, force=True)
+
+    _, body_now = read(path)
+    текст, _ = engine._strip_steps_block(body_now)
+    гипотеза = run(engine.cmd_kb_scan, text=текст)["hypotheses"][0]
+    run(engine.cmd_kb_confirm, source_type="task", source_id="Грант", mentions=[гипотеза])
+
+    _, body_after = read(path)
+    assert "[[Василий Говнов|Васю Говнова]]" in body_after
+
+
+def test_kb_confirm_несколько_гипотез_разные_смещения(vault):
+    """Гипотезы обрабатываются по убыванию offset_start — иначе первая же
+    вставка сдвинула бы смещения остальных, и они попали бы не туда."""
+    kb_note(vault, "Пётр Семёнов")
+    kb_note(vault, "Василий Говнов")
+    body = "Пётр Семёнов и Василий Говнов встретились сегодня.\n"
+    path = task(vault, "Встреча", [step(1, "Организовать", control_date=TODAY)], body=body)
+    run(engine.cmd_refresh, force=True)
+
+    _, body_now = read(path)
+    текст, _ = engine._strip_steps_block(body_now)
+    гипотезы = run(engine.cmd_kb_scan, text=текст)["hypotheses"]
+    assert len(гипотезы) == 2
+
+    run(engine.cmd_kb_confirm, source_type="task", source_id="Встреча", mentions=гипотезы)
+
+    _, body_after = read(path)
+    assert "[[Пётр Семёнов]] и [[Василий Говнов]] встретились сегодня." in body_after
+
+
+def test_kb_confirm_текст_успел_измениться_не_падает(vault):
+    """Ссылка в Ссылки.json пишется в любом случае — раздел 5.8: смещения
+    посчитаны на старом тексте, и если заказчик успел его переписать до ответа,
+    подчёркивать в теле уже нечего, но факт подтверждения не теряется."""
+    kb_note(vault, "Василий Говнов")
+    path = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)],
+                body="Отдать Василию Говнову деньги.\n")
+    run(engine.cmd_refresh, force=True)
+    _, body_now = read(path)
+    текст, _ = engine._strip_steps_block(body_now)
+    гипотеза = run(engine.cmd_kb_scan, text=текст)["hypotheses"][0]
+
+    # заказчик успел переписать абзац руками до того, как ответил на вопрос
+    meta, body_now = read(path)
+    блок = body_now[body_now.index(engine.STEPS_START):]
+    engine.write_file(path, meta, "Текст совсем другой.\n\n" + блок)
+
+    r = run(engine.cmd_kb_confirm, source_type="task", source_id="Грант",
+                mentions=[гипотеза])
+    assert r["ok"] and len(r["links"]) == 1
+
+    _, body_after = read(path)
+    assert "[[Василий Говнов]]" not in body_after
+    assert "Текст совсем другой." in body_after
+    assert kb.JsonLinkStore(vault).for_source("task", "Грант")
+
+
+def test_kb_confirm_повторный_вызов_идемпотентен(vault):
+    kb_note(vault, "Василий Говнов")
+    path = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)],
+                body="Отправить документы. Василий Говнов утвердит.\n")
+    run(engine.cmd_refresh, force=True)
+    _, body_now = read(path)
+    текст, _ = engine._strip_steps_block(body_now)
+    гипотеза = run(engine.cmd_kb_scan, text=текст)["hypotheses"][0]
+
+    r1 = run(engine.cmd_kb_confirm, source_type="task", source_id="Грант",
+                 mentions=[гипотеза])
+    r2 = run(engine.cmd_kb_confirm, source_type="task", source_id="Грант",
+                 mentions=[гипотеза])
+
+    assert r1["ok"] and r2["ok"]
+    ссылки = kb.JsonLinkStore(vault).for_source("task", "Грант")
+    assert len(ссылки) == 1, "вторая ссылка на то же место не завелась"
+
+    _, body_after = read(path)
+    assert body_after.count("[[Василий Говнов]]") == 1, "вставлено ровно один раз"
+
+
+def test_kb_scan_подмешивает_подтверждённые_и_не_переспрашивает(vault):
+    kb_note(vault, "Василий Говнов")
+    path = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)],
+                body="Отдать Василию Говнову деньги.\n")
+    run(engine.cmd_refresh, force=True)
+    _, body_now = read(path)
+    текст, _ = engine._strip_steps_block(body_now)
+
+    гипотеза = run(engine.cmd_kb_scan, text=текст)["hypotheses"][0]
+    run(engine.cmd_kb_confirm, source_type="task", source_id="Грант", mentions=[гипотеза])
+
+    result = run(engine.cmd_kb_scan, text=текст, source_type="task", source_id="Грант")
+    assert result["hypotheses"] == [], "уже отвеченное не переспрашиваем"
+    assert len(result["confirmed"]) == 1
+    подтв = result["confirmed"][0]
+    assert подтв["kb_entry_id"] == "Василий Говнов"
+    assert (подтв["offset_start"], подтв["offset_end"]) == \
+        (гипотеза["offset_start"], гипотеза["offset_end"])
+
+
+def test_kb_confirm_сразу_после_создания_задачи(vault):
+    """Путь из раздела 4: форма сканирует текст ДО того, как задача вообще
+    существует (блока шагов ещё нет), потом /api/create заводит задачу — и
+    только это сохранение впервые вставляет блок, склеивая его с текстом
+    заказчика через «\\n\\n» (put_steps_into_body). Подтверждение приходит
+    следом, с теми же гипотезами, что вернул самый первый скан. Если сплайс
+    не срежет эту склейку вместе с блоком, смещения уедут на два символа и
+    вставка молча не произойдёт — регрессионный тест ровно на этот случай."""
+    kb_note(vault, "Василий Говнов")
+    сырой_текст = "Отдать Василию Говнову деньги"
+    гипотезы = run(engine.cmd_kb_scan, text=сырой_текст)["hypotheses"]
+    assert len(гипотезы) == 1
+
+    создание = run(engine.cmd_create, json=json.dumps({
+        "title": "Долг", "steps": [{"title": "Шаг"}], "body": сырой_текст,
+    }))
+    assert создание["ok"]
+
+    r = run(engine.cmd_kb_confirm, source_type="task", source_id=создание["task"],
+                mentions=гипотезы)
+    assert r["ok"] and len(r["links"]) == 1 and r["errors"] == []
+
+    _, body_after = read(vault / "Задачи" / "Долг.md")
+    assert "[[Василий Говнов|Василию Говнову]]" in body_after
+
+
+def test_kb_reject_убирает_гипотезу_из_следующего_скана(vault):
+    kb_note(vault, "Василий Говнов")
+    текст = "Отдать Василию Говнову деньги"
+    гипотеза = run(engine.cmd_kb_scan, text=текст)["hypotheses"][0]
+
+    run(engine.cmd_kb_reject, mention=гипотеза, mute=False)
+    assert run(engine.cmd_kb_scan, text=текст)["hypotheses"] == []
+
+
+def test_kb_reject_mute_гасит_слово_у_любой_записи(vault):
+    """Отказ по слову хранится без entry_id (`word_key`): гасит слово для любой
+    записи, а не только для той, от которой пришла отклонённая гипотеза.
+    Проверяем на двух РАЗНЫХ записях с одинаковым написанием названия — второй
+    заводим уже после отказа, чтобы не столкнуться с побочной неоднозначностью
+    (два омонима одновременно в базе сами по себе перестали бы находиться)."""
+    kb_note(vault, "Грант")
+    гипотеза = run(engine.cmd_kb_scan, text="ждём Грант в четверг")["hypotheses"][0]
+    assert гипотеза["entry_id"] == "Грант"
+
+    run(engine.cmd_kb_reject, mention=гипотеза, mute=True)
+    assert run(engine.cmd_kb_scan, text="ждём Грант в четверг")["hypotheses"] == []
+
+    (vault / "База" / "Грант.md").unlink()
+    (vault / "База" / "Грант (вторая запись).md").write_text(
+        "---\ntype: note\ntitle: Грант\n---\n\n", encoding="utf-8")
+
+    assert run(engine.cmd_kb_scan, text="ждём Грант в четверг")["hypotheses"] == []
