@@ -279,6 +279,19 @@ $('#c-save').addEventListener('click', () => {
 // Esc закрывает окно — и это «напомнить позже», а не ответ. Шаг остаётся в ленте.
 dlg.addEventListener('close', () => { текущий = null; режим = null; });
 
+// «В шаблон» — не одно из четырёх действий про ответ на шаг (раздел 6.4), а
+// отдельная операция над задачей целиком. Кнопка рядом, но окно не закрывает:
+// человек может передумать и всё равно ответить.
+$('#c-to-template').addEventListener('click', async () => {
+  if (!текущий) return;
+  const r = await post('/api/template-from-task', { task: текущий.task });
+  const кнопка = $('#c-to-template');
+  const исходный = кнопка.textContent;
+  кнопка.textContent = r.ok ? `Готово: «${r.template}»` : 'Не вышло';
+  кнопка.disabled = true;
+  setTimeout(() => { кнопка.textContent = исходный; кнопка.disabled = false; }, 2500);
+});
+
 (async function старт() {
   const r = await get('/api/reasons');
   причины = r.reasons || [];

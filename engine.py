@@ -45,6 +45,7 @@ try:
 except ImportError:
     sys.exit("нужен pyyaml: pip install pyyaml")
 
+import templates as tpl
 import worktime
 
 SCHEMA = 1
@@ -691,6 +692,69 @@ def cmd_create(args, today):
             "steps": len(meta["steps"]), "status": task["meta"]["status"]}
 
 
+def cmd_templates(args, today):
+    """Список шаблонов. Отдаём с предпросмотром на сегодня: заказчику надо видеть,
+    какие даты получатся, а не только имена."""
+    склад = tpl.JsonStore(VAULT)
+    старт = parse_date_input(args.start, today) if getattr(args, "start", None) else today
+    из_даты = as_date(старт)
+    out = []
+    for шаблон in склад.all():
+        out.append({
+            "name": шаблон["name"],
+            "tags": шаблон.get("tags") or [],
+            "steps": len(шаблон.get("steps") or []),
+            "preview": tpl.preview(шаблон, из_даты),
+        })
+    return {"templates": out, "count": len(out), "start": из_даты.isoformat()}
+
+
+def cmd_from_template(args, today):
+    """Завести задачу из шаблона.
+
+    Развёртывание и создание намеренно идут через те же `build_task` и `save`, что
+    и обычное заведение: иначе появился бы второй путь записи задачи, и однажды
+    он разошёлся бы с первым в мелочи вроде порядка полей или сводки.
+    """
+    склад = tpl.JsonStore(VAULT)
+    шаблон = склад.get(args.name)
+    if not шаблон:
+        return {"ok": False, "errors": [{"field": "name",
+                                         "error": f"нет шаблона «{args.name}»"}]}
+    старт = as_date(parse_date_input(args.start, today)) if args.start else today
+    данные = tpl.expand(шаблон, старт, title=args.title)
+
+    errors = validate_new_task(данные, [t["path"].stem for t in load_tasks()], today)
+    if errors:
+        return {"ok": False, "errors": errors}
+
+    meta = build_task(данные, today)
+    path = TASKS_DIR / f"{meta['title']}.md"
+    if path.exists():
+        return {"ok": False, "errors": [{"field": "title", "error": "Файл уже существует"}]}
+    задача = {"path": path, "meta": meta, "body": (данные.get("body") or "").strip() + "\n"}
+    save(задача, today)
+    return {"ok": True, "task": path.stem, "template": шаблон["name"],
+            "steps": len(meta["steps"]), "status": задача["meta"]["status"]}
+
+
+def cmd_template_from_task(args, today):
+    """Сделать шаблон из существующей задачи — «я это уже делал, повтори так же».
+
+    Сдвиги считаются от даты первого шага, поэтому шаблон переносим на любую дату
+    старта. Задача при этом не меняется.
+    """
+    задача = find_task(args.task)
+    склад = tpl.JsonStore(VAULT)
+    try:
+        шаблон = tpl.template_from_task(задача["meta"], name=args.name)
+        склад.save(шаблон)
+    except tpl.TemplateError as e:
+        return {"ok": False, "errors": getattr(e, "errors", [{"field": None, "error": str(e)}])}
+    return {"ok": True, "template": шаблон["name"], "from_task": задача["path"].stem,
+            "steps": len(шаблон.get("steps") or [])}
+
+
 def cmd_refresh(args, today):
     """Пересчитать сводку во всех задачах.
 
@@ -998,6 +1062,21 @@ def main():
                    help="переписать все файлы, даже если сводка не изменилась — "
                         "нужно после смены схемы, чтобы привести вольт к новому виду")
     r.set_defaults(func=cmd_refresh)
+
+    t = sub.add_parser("templates", help="список шаблонов с предпросмотром")
+    t.add_argument("--start", help="от какой даты считать предпросмотр")
+    t.set_defaults(func=cmd_templates)
+
+    ft = sub.add_parser("from-template", help="завести задачу из шаблона")
+    ft.add_argument("name")
+    ft.add_argument("--start", help="дата старта, по умолчанию сегодня")
+    ft.add_argument("--title", help="имя задачи, по умолчанию имя шаблона")
+    ft.set_defaults(func=cmd_from_template)
+
+    tt = sub.add_parser("template-from-task", help="сделать шаблон из задачи")
+    tt.add_argument("task")
+    tt.add_argument("--name", help="имя шаблона, по умолчанию имя задачи")
+    tt.set_defaults(func=cmd_template_from_task)
 
     c = sub.add_parser("create", help="завести задачу из JSON (её же зовёт форма)")
     c.add_argument("json", help='JSON или "-" для stdin')

@@ -14,6 +14,8 @@
 
 .small { padding: 5px 11px; font-size: 13px; }
 
+.head-links { display: flex; gap: 8px; flex-shrink: 0; }
+
 .counters {
   display: flex;
   gap: 18px;

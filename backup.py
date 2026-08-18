@@ -41,6 +41,7 @@ import re
 import shutil
 import sqlite3
 import tempfile
+import threading
 import time
 import zipfile
 from datetime import date, datetime, timedelta
@@ -226,7 +227,10 @@ def check_sqlite(path):
     return "ok" if ответ == ["ok"] else "; ".join(ответ or ["пусто"])[:200]
 
 
-def snapshot(src, dst):
+SNAPSHOT_TIMEOUT = 20  # секунд
+
+
+def snapshot(src, dst, timeout=SNAPSHOT_TIMEOUT):
     """Согласованный снимок базы в файл `dst`. Возвращает `dst`.
 
     `Connection.backup()` копирует страницы под замком чтения и начинает заново,
@@ -241,17 +245,46 @@ def snapshot(src, dst):
     про которую известно, что она битая, — повод остановиться, пока оригинал ещё
     цел. Молча положить её в архив значит узнать всё то же самое через неделю,
     когда возвращаться будет уже некуда.
+
+    У `Connection.backup()` нет предела ожидания: если источник держат под
+    эксклюзивной блокировкой (антивирус, зависший процесс, другая копия), вызов
+    спит и повторяет попытку бесконечно, не возвращая управление. Копия по
+    расписанию из Планировщика при этом не падает и не создаётся — она просто
+    исчезает, и заказчик продолжает считать себя защищённым. Поэтому копирование
+    идёт в отдельном потоке с ограничением по времени: не дождались — явная
+    ошибка вместо тишины. Поток при этом может остаться висеть на месте, но
+    вызывающий код об этом уже не ждёт и может пробовать снова на следующем
+    прогоне планировщика.
     """
     src, dst = Path(src), Path(dst)
-    источник = connect_ro(src)
-    try:
-        приёмник = sqlite3.connect(str(dst), timeout=5)
+    ошибка = []
+
+    def копировать():
+        # Оба соединения — и на чтение, и на запись — открываются внутри
+        # потока: объекты sqlite3 нельзя передавать между потоками, только
+        # пересоздавать на месте.
+        источник = connect_ro(src)
         try:
-            источник.backup(приёмник)
+            приёмник = sqlite3.connect(str(dst), timeout=5)
+            try:
+                источник.backup(приёмник)
+            finally:
+                приёмник.close()
+        except BaseException as e:
+            ошибка.append(e)
         finally:
-            приёмник.close()
-    finally:
-        источник.close()
+            источник.close()
+
+    поток = threading.Thread(target=копировать, daemon=True)
+    поток.start()
+    поток.join(timeout=timeout)
+    if поток.is_alive():
+        raise BackupError(
+            "vault",
+            f"база {src.name} под блокировкой дольше {timeout} с — копия не снята")
+    if ошибка:
+        raise ошибка[0]
+
     жалоба = check_sqlite(dst)
     if жалоба != "ok":
         raise BackupError("vault",
@@ -379,21 +412,36 @@ def zip_entry(name, mtime):
     return info
 
 
-def add_snapshot(z, src, name, mtime, workdir):
+def add_snapshot(z, src, name, mtime, workdir, raw_on_corrupt=False):
     """Положить в архив согласованный снимок базы `src` под именем `name`.
 
     Снимок делается во временный файл рядом с архивом и оттуда переливается в
     архив потоком. Держать базу в памяти целиком незачем: она растёт вместе с
     архивом закрытых задач (R29 — их пять тысяч), а поток обходится одним
     буфером независимо от размера.
+
+    `raw_on_corrupt` предназначен только для страховочной копии перед
+    восстановлением (см. `restore`). Обычная копия по расписанию на битой базе
+    обязана падать — иначе заказчик получит архив без данных и решит, что всё
+    сохранено. Но перед восстановлением цель другая: не потерять то, что было,
+    а не подтвердить, что оно исправно. Возвращает True, если снимок пришлось
+    класть сырыми байтами без проверки.
     """
     fd, tmp = tempfile.mkstemp(dir=str(workdir), suffix=".db.tmp")
     os.close(fd)
     tmp = Path(tmp)
     try:
-        snapshot(src, tmp)
+        try:
+            snapshot(src, tmp)
+        except BackupError:
+            if not raw_on_corrupt:
+                raise
+            with open(src, "rb") as f, z.open(zip_entry(name, mtime), "w") as вход:
+                shutil.copyfileobj(f, вход)
+            return True
         with open(tmp, "rb") as f, z.open(zip_entry(name, mtime), "w") as вход:
             shutil.copyfileobj(f, вход)
+        return False
     finally:
         # Приёмник снимка мог оставить рядом свои служебные файлы — уносим их
         # вместе с временным, иначе папка копий обрастает мусором.
@@ -401,7 +449,7 @@ def add_snapshot(z, src, name, mtime, workdir):
             tmp.with_name(tmp.name + хвост).unlink(missing_ok=True)
 
 
-def create(vault, dest, now=None, prefix=PREFIX):
+def create(vault, dest, now=None, prefix=PREFIX, raw_on_corrupt=False):
     """Копия вольта в папку `dest`. Возвращает описание созданной копии.
 
     Вольтом может быть папка с файлами (сейчас) или один файл базы SQLite (после
@@ -453,7 +501,7 @@ def create(vault, dest, now=None, prefix=PREFIX):
         момент += timedelta(seconds=1)
         target = dest / archive_name(момент, prefix)
 
-    пропущено, снимки, записано = [], [], 0
+    пропущено, снимки, сырые, записано = [], [], [], 0
     fd, tmp = tempfile.mkstemp(dir=str(dest), suffix=".tmp")
     os.close(fd)
     try:
@@ -464,8 +512,11 @@ def create(vault, dest, now=None, prefix=PREFIX):
                 try:
                     st = путь.stat()
                     if путь in базы:
-                        add_snapshot(z, путь, имя, st.st_mtime, dest)
+                        если_сыро = add_snapshot(z, путь, имя, st.st_mtime, dest,
+                                                 raw_on_corrupt=raw_on_corrupt)
                         снимки.append(имя)
+                        if если_сыро:
+                            сырые.append(имя)
                     else:
                         z.writestr(zip_entry(имя, st.st_mtime), путь.read_bytes())
                 except (OSError, sqlite3.Error) as e:
@@ -492,6 +543,7 @@ def create(vault, dest, now=None, prefix=PREFIX):
                 "vault": vault.name,
                 "storage": вид,
                 "databases": снимки,
+                "raw_databases": сырые,
                 "files": записано,
                 "skipped": пропущено,
             }
@@ -503,7 +555,7 @@ def create(vault, dest, now=None, prefix=PREFIX):
 
     return {"file": str(target), "name": target.name,
             "created": манифест["created"], "files": манифест["files"],
-            "storage": вид, "databases": снимки,
+            "storage": вид, "databases": снимки, "raw_databases": сырые,
             "skipped": пропущено, "bytes": target.stat().st_size}
 
 
@@ -1050,7 +1102,14 @@ def restore(archive, vault, safety_dir=None, now=None):
         есть_что_терять = (vault.is_file() if если_файл
                            else bool(collect(vault, skip_dirs=[куда_копию])))
         if есть_что_терять:
-            подстраховка = create(vault, куда_копию, now=now, prefix=SAFETY_PREFIX)
+            # Вольт под замену может быть уже битым — это самый частый повод
+            # вообще запускать восстановление. Обычный create() в этом случае
+            # откажет: он специально не кладёт в архив расписания неполную
+            # копию. Здесь смысл другой — не потерять то, что было, а не
+            # подтвердить исправность, — поэтому raw_on_corrupt=True: если
+            # проверка не прошла, страховка ложится сырыми байтами как есть.
+            подстраховка = create(vault, куда_копию, now=now, prefix=SAFETY_PREFIX,
+                                  raw_on_corrupt=True)
         врем = Path(tempfile.mkdtemp(dir=str(врем_рядом), prefix=RESTORE_DIR))
         try:
             # Сначала распаковываем целиком во временную папку рядом. Если архив
@@ -1091,5 +1150,6 @@ def restore(archive, vault, safety_dir=None, now=None):
         if имя not in из_архива]
     return {"archive": str(archive),
             "safety_copy": подстраховка["file"] if подстраховка else None,
+            "safety_copy_raw": bool(подстраховка and подстраховка.get("raw_databases")),
             "restored": len(восстановлено), "files": восстановлено,
             "dropped": убрано, "extra": лишние}

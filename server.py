@@ -20,12 +20,19 @@ from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import engine  # noqa: E402
 
 STATIC = Path(__file__).resolve().parent / "static"
+
+
+def _param(path, name):
+    """Один query-параметр или None. Для GET-запросов вроде предпросмотра
+    шаблонов с датой старта — телу там взяться неоткуда."""
+    значения = parse_qs(urlsplit(path).query).get(name)
+    return значения[0] if значения else None
 
 
 def _args(**поля):
@@ -73,7 +80,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         route = unquote(self.path.split("?")[0])
-        СТРАНИЦЫ = {"/": "feed.html", "/лента": "feed.html", "/новая": "index.html"}
+        СТРАНИЦЫ = {"/": "feed.html", "/лента": "feed.html", "/новая": "index.html",
+                    "/шаблоны": "templates.html"}
         if route in СТРАНИЦЫ:
             return self._static(СТРАНИЦЫ[route], "text/html; charset=utf-8")
         if route.endswith(".css"):
@@ -84,6 +92,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, engine.cmd_feed(_args(), date.today()))
         if route == "/api/backlog":
             return self._json(200, engine.cmd_backlog(_args(), date.today()))
+        if route == "/api/templates":
+            начало = _param(self.path, "start")
+            return self._json(200, engine.cmd_templates(_args(start=начало), date.today()))
         if route == "/api/reasons":
             return self._json(200, {"reasons": engine.REASONS})
         if route == "/api/tasks":
@@ -105,6 +116,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, self._create(payload))
         if route == "/api/action":
             return self._json(200, self._action(payload))
+        if route == "/api/from-template":
+            return self._json(200, engine.cmd_from_template(
+                _args(name=payload.get("name"), start=payload.get("start"),
+                      title=payload.get("title")), date.today()))
+        if route == "/api/template-from-task":
+            return self._json(200, engine.cmd_template_from_task(
+                _args(task=payload.get("task"), name=payload.get("name")), date.today()))
         self._json(404, {"error": "нет такого адреса"})
 
     # --- действия ---

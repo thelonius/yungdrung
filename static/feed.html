@@ -14,7 +14,10 @@
   <header class="head">
     <div class="head-row">
       <h1>Что сегодня</h1>
-      <a class="ghost small" href="/новая">Новая задача</a>
+      <div class="head-links">
+        <a class="ghost small" href="/шаблоны">Шаблоны</a>
+        <a class="ghost small" href="/новая">Новая задача</a>
+      </div>
     </div>
     <div class="counters" id="counters"></div>
   </header>
@@ -78,6 +81,7 @@
 
     <footer class="control-foot">
       <button type="button" class="quiet" data-op="fail">Не будет сделано</button>
+      <button type="button" class="quiet" id="c-to-template">В шаблон</button>
       <span class="foot-hint">Esc — напомнить позже</span>
     </footer>
   </form>

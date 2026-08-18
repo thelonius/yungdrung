@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Шаблоны — Yungdrung</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/feed.css">
+<link rel="stylesheet" href="/templates.css">
+</head>
+<body>
+
+<main class="wrap">
+
+  <header class="head">
+    <div class="head-row">
+      <h1>Шаблоны</h1>
+      <div class="head-links">
+        <a class="ghost small" href="/">К ленте</a>
+      </div>
+    </div>
+    <p class="hint">Однотипные задачи заводятся по нажатию, без ручного набора шагов заново.</p>
+  </header>
+
+  <ol class="tpl-list" id="list"></ol>
+  <p class="empty" id="empty" hidden>Шаблонов пока нет. Их удобно делать из готовой задачи —
+    кнопка «В шаблон» есть в окне контроля на ленте.</p>
+
+</main>
+
+<!-- Развёртывание шаблона: дата старта → предпросмотр всех дат → создать. -->
+<dialog id="expand">
+  <form method="dialog" class="control-card">
+    <header class="control-head">
+      <p class="control-task" id="x-name"></p>
+      <h2 class="control-step">Дата старта</h2>
+    </header>
+
+    <div class="control-form" style="display:flex; flex-direction:column; gap:16px;">
+      <div class="field">
+        <label for="x-start">Когда начинать</label>
+        <div class="presets">
+          <button type="button" data-when="сегодня">сегодня</button>
+          <button type="button" data-when="завтра">завтра</button>
+          <button type="button" data-when="пн">с понедельника</button>
+        </div>
+        <input type="text" id="x-start" autocomplete="off" placeholder="или свой вариант: 18.08, +3">
+      </div>
+
+      <div class="field">
+        <label for="x-title">Название задачи <span class="opt">необязательно</span></label>
+        <input type="text" id="x-title" autocomplete="off" placeholder="по умолчанию — имя шаблона">
+      </div>
+
+      <ol class="tpl-preview" id="x-preview"></ol>
+      <p class="err" id="x-err" hidden></p>
+    </div>
+
+    <div class="control-actions">
+      <button type="button" class="primary" id="x-save">Создать задачу</button>
+      <button type="button" class="ghost" id="x-back">Отмена</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/templates.js"></script>
+</body>
+</html>
