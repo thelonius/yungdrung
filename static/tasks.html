@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Все задачи — Yungdrung</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/feed.css">
+<link rel="stylesheet" href="/tasks.css">
+</head>
+<body>
+
+<main class="wrap">
+
+  <header class="head">
+    <div class="head-row">
+      <h1>Все задачи</h1>
+      <div class="head-links">
+        <a class="ghost small" href="/">К ленте</a>
+        <a class="ghost small" href="/шаблоны">Шаблоны</a>
+        <a class="ghost small" href="/настройки">Настройки</a>
+        <a class="ghost small" href="/новая">Новая задача</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="tasks-toolbar">
+    <input type="text" id="search" class="tasks-search" autocomplete="off"
+           placeholder="Найти по названию…">
+    <div class="tasks-filters" id="status-filters"></div>
+  </div>
+
+  <p class="err" id="load-err" hidden></p>
+
+  <ol class="feed tasks-list" id="tasks-list"></ol>
+
+  <p class="empty" id="empty" hidden></p>
+
+</main>
+
+<script src="/tasks.js"></script>
+</body>
+</html>

@@ -83,7 +83,7 @@ class Handler(BaseHTTPRequestHandler):
         route = unquote(self.path.split("?")[0])
         СТРАНИЦЫ = {"/": "feed.html", "/лента": "feed.html", "/новая": "index.html",
                     "/шаблоны": "templates.html", "/задача": "task.html",
-                    "/настройки": "settings.html"}
+                    "/задачи": "tasks.html", "/настройки": "settings.html"}
         if route in СТРАНИЦЫ:
             return self._static(СТРАНИЦЫ[route], "text/html; charset=utf-8")
         if route.endswith(".css"):

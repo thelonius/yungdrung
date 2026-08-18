@@ -1,0 +1,110 @@
+/* Страница «Все задачи». Список строк, статусы, фильтры. Общие токены,
+   .wrap/.head/.row/.tag живут в style.css и feed.css — здесь только то,
+   чего там нет. */
+
+[hidden] { display: none !important; }
+
+.head-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.small { padding: 5px 11px; font-size: 13px; }
+
+.head-links { display: flex; gap: 8px; flex-shrink: 0; flex-wrap: wrap; }
+
+/* --- панель фильтров --- */
+
+.tasks-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.tasks-search {
+  font: inherit;
+  color: var(--ink);
+  background: var(--card);
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  width: 100%;
+}
+
+.tasks-search:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 22%, transparent);
+}
+
+.tasks-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.filter-btn { font-size: 13px; }
+
+.filter-btn.is-active {
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* --- список задач --- */
+
+.tasks-list .row.trow {
+  cursor: pointer;
+}
+
+.tasks-list .row.trow:hover,
+.tasks-list .row.trow:focus-visible {
+  border-color: var(--line-strong);
+}
+
+.tasks-list .row.trow:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.trow-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.trow-title-row .row-title { flex: 1 1 auto; min-width: 0; }
+
+.status-pill {
+  flex-shrink: 0;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 100px;
+  border: 1.3px solid var(--line-strong);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.status-pill-overdue { color: var(--danger); border-color: var(--danger); }
+.status-pill-due { color: var(--accent); border-color: var(--accent); }
+.status-pill-done { color: var(--ok); border-color: var(--ok); }
+.status-pill-cancelled { text-decoration: line-through; }
+
+.trow-progress {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.trow-current { color: var(--muted); }
+
+@media (max-width: 520px) {
+  .head-links { gap: 6px; }
+}

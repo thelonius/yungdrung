@@ -15,6 +15,7 @@
     <div class="head-row">
       <h1>Что сегодня</h1>
       <div class="head-links">
+        <a class="ghost small" href="/задачи">Все задачи</a>
         <a class="ghost small" href="/шаблоны">Шаблоны</a>
         <a class="ghost small" href="/настройки">Настройки</a>
         <a class="ghost small" href="/новая">Новая задача</a>
@@ -24,8 +25,17 @@
   </header>
 
   <!-- Просроченное не выводится строками: раздел 6.1 ТЗ. Пятнадцать красных
-       строк парализуют экран, поэтому одна плашка со входом в разбор. -->
+       строк парализуют экран, поэтому одна плашка со входом в разбор. Плашка
+       видна независимо от активной вкладки ниже — это отдельный вход в разбор
+       завала, не одна из вкладок. -->
   <button type="button" class="overdue-plate" id="plate" hidden></button>
+
+  <div class="tabs" id="tabs" role="tablist">
+    <button type="button" class="tab is-active" data-tab="feed" role="tab" aria-selected="true">Сегодня</button>
+    <button type="button" class="tab" data-tab="waiting" role="tab" aria-selected="false">Дальше</button>
+    <button type="button" class="tab" data-tab="stalled" role="tab" aria-selected="false">Буксует</button>
+    <button type="button" class="tab" data-tab="attention" role="tab" aria-selected="false">Внимание</button>
+  </div>
 
   <ol class="feed" id="feed"></ol>
 

@@ -54,6 +54,36 @@
 
 .overdue-plate .go { font-weight: 400; opacity: .8; }
 
+/* Переключатель вкладок ленты: Сегодня / Дальше / Буксует / Внимание.
+   Один ответ /api/feed уже содержит все четыре списка — переключение вкладки
+   не бьёт по сети, просто меняет, что рисуется в #feed. */
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.tab {
+  font: inherit;
+  background: none;
+  border: 1.5px solid var(--line-strong);
+  color: var(--muted);
+  padding: 7px 14px;
+  border-radius: 100px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab:hover { color: var(--ink); border-color: var(--ink); }
+
+.tab.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
 .feed {
   list-style: none;
   margin: 0;
@@ -62,6 +92,12 @@
   flex-direction: column;
   gap: 8px;
 }
+
+/* Строка «Внимание»: без чекбокса и кнопок действий — контракт не определяет
+   для неё action set (нет control_at/show_at, только причина). */
+.row-attention { align-items: flex-start; }
+
+.attention-reason { color: var(--danger); border-color: var(--danger); }
 
 .row {
   display: flex;

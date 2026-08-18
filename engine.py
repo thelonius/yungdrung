@@ -465,11 +465,40 @@ def collect_open(now, work):
 
     Одним проходом, потому что лента и завал — это один и тот же набор, просто
     разрезанный по-разному, и считать его дважды значит однажды разойтись.
+
+    Отменённые задачи (`cancelled: true`) не попадают ни в одну корзину: по
+    докстрингу `cmd_cancel`, отменённая задача перестаёт быть просроченной или
+    ждущей, а не просто перестаёт мозолить глаза в одной из витрин.
+
+    Шаг без `control_date` и задача вовсе без шагов не годятся ни в одну из
+    трёх дато-корзин — считать «завтра» от несуществующей даты нельзя — но
+    молча пропадать они тоже не должны, иначе заказчик заведёт шаг без даты и
+    никогда больше о нём не услышит. Такие уходят в четвёртую корзину, «внимание».
     """
-    лента, завал, ждут = [], [], []
+    лента, завал, ждут, внимание = [], [], [], []
     for task in load_tasks():
+        if task["meta"].get("cancelled") is True:
+            continue
+        steps = steps_of(task)
         step = current_step(task)
         if step is None:
+            if not steps:
+                внимание.append({
+                    "task": task["path"].stem,
+                    "step": None,
+                    "title": None,
+                    "reason": "нет шагов",
+                    "tags": task["meta"].get("tags") or [],
+                })
+            continue
+        if step.get("control_date") is None:
+            внимание.append({
+                "task": task["path"].stem,
+                "step": step.get("id"),
+                "title": step.get("title"),
+                "reason": "нет даты контроля",
+                "tags": task["meta"].get("tags") or [],
+            })
             continue
         item = feed_item(task, step, now, work)
         if item["state"] == "overdue":
@@ -479,7 +508,9 @@ def collect_open(now, work):
         else:
             ждут.append(item)
     ключ = lambda i: (i["show_at"] or "9999", i["task"])
-    return sorted(лента, key=ключ), sorted(завал, key=ключ), sorted(ждут, key=ключ)
+    внимание.sort(key=lambda i: i["task"])
+    return (sorted(лента, key=ключ), sorted(завал, key=ключ), sorted(ждут, key=ключ),
+            внимание)
 
 
 def cmd_feed(args, today):
@@ -487,18 +518,29 @@ def cmd_feed(args, today):
 
     Просроченное в строки не попадает: по 6.1 оно живёт отдельной плашкой, потому
     что пятнадцать красных строк парализуют экран. Счётчик отдаёт отдельно.
+
+    «Ждут» и «буксует» отдаются целиком, не только счётчиком: без списка оболочка
+    не может показать «что дальше» или подсветить буксующие шаги, а досчитать это
+    сама она не вправе — считает только ядро (см. КОНТРАКТ.md).
     """
     now = _now(args, today)
     work = _work(args)
-    лента, завал, ждут = collect_open(now, work)
+    лента, завал, ждут, внимание = collect_open(now, work)
     ближайший = ждут[0] if ждут else None
+    ключ = lambda i: (i["show_at"] or "9999", i["task"])
+    буксует = sorted((i for i in лента + завал + ждут if i["stalled"]), key=ключ)
     return {
         "now": now.isoformat(),
         "feed": лента,
         "overdue_count": len(завал),
-        "counts": {"overdue": len(завал), "today": len(лента), "waiting": len(ждут)},
+        "counts": {"overdue": len(завал), "today": len(лента), "waiting": len(ждут),
+                   "attention": len(внимание)},
         "next_ahead": ближайший,
-        "stalled_count": sum(1 for i in лента + завал if i["stalled"]),
+        "waiting": ждут,
+        "stalled": буксует,
+        "stalled_count": len(буксует),
+        "attention": внимание,
+        "attention_count": len(внимание),
         "broken": list(BROKEN),
     }
 
@@ -507,7 +549,7 @@ def cmd_backlog(args, today):
     """Разбор завала — раздел 6.9 ТЗ. Всё просроченное, худшее сверху."""
     now = _now(args, today)
     work = _work(args)
-    _, завал, _ = collect_open(now, work)
+    _, завал, _, _ = collect_open(now, work)
     завал.sort(key=lambda i: (not i["stalled"], i["show_at"] or "9999"))
     return {"now": now.isoformat(), "backlog": завал, "count": len(завал),
             "broken": list(BROKEN)}

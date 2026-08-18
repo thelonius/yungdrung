@@ -13,6 +13,9 @@ let текущий = null;     // шаг, про который открыто �
 let режим = null;       // 'notdone' | 'defer' | 'fail'
 let причины = [];
 
+let последнийОтвет = null; // последний /api/feed — вкладки переключаются без нового запроса
+let вкладка = 'feed';      // 'feed' | 'waiting' | 'stalled' | 'attention'
+
 async function get(url) {
   const r = await fetch(url);
   return r.json();
@@ -99,8 +102,88 @@ function строка(item, вЗавале) {
   return li;
 }
 
+// Строка для «Внимание»: шаги без даты контроля и задачи вовсе без шагов.
+// Контракт не определяет для них action set (нет control_at/show_at) — поэтому
+// ни чекбокса, ни кнопок действий, только название задачи, шага (если есть) и причина.
+function строкаВнимания(item) {
+  const li = document.createElement('li');
+  li.className = 'row row-attention';
+
+  const main = document.createElement('div');
+  main.className = 'row-main';
+
+  const title = document.createElement('div');
+  title.className = 'row-title';
+  title.textContent = item.title || item.task;
+  main.append(title);
+
+  const sub = document.createElement('div');
+  sub.className = 'row-sub';
+
+  if (item.title) {
+    const task = document.createElement('span');
+    task.textContent = item.task;
+    sub.append(task);
+  }
+
+  const reason = document.createElement('span');
+  reason.className = 'tag attention-reason';
+  reason.textContent = item.reason;
+  sub.append(reason);
+
+  for (const tag of item.tags || []) {
+    const s = document.createElement('span');
+    s.className = 'tag';
+    s.textContent = tag;
+    sub.append(s);
+  }
+
+  main.append(sub);
+  li.append(main);
+  return li;
+}
+
+const ПУСТО = {
+  feed: 'На сегодня всё.',
+  waiting: 'Дальше ничего не намечено.',
+  stalled: 'Ничего не буксует.',
+  attention: 'Ничего нет.',
+};
+
+function отрисоватьВкладку() {
+  const d = последнийОтвет;
+  if (!d) return;
+
+  const списки = { feed: d.feed, waiting: d.waiting, stalled: d.stalled, attention: d.attention };
+  const список = списки[вкладка] || [];
+
+  $('#feed').replaceChildren(...список.map((i) =>
+    вкладка === 'attention' ? строкаВнимания(i) : строка(i, false)));
+
+  const empty = $('#empty');
+  if (список.length === 0) {
+    empty.hidden = false;
+    empty.textContent = вкладка === 'feed' && d.next_ahead
+      ? `На сегодня всё. Дальше: «${d.next_ahead.title}» — ${d.next_ahead.task}.`
+      : (ПУСТО[вкладка] || 'Ничего нет.');
+  } else {
+    empty.hidden = true;
+  }
+}
+
+function выбратьВкладку(имя) {
+  вкладка = имя;
+  for (const b of $('#tabs').querySelectorAll('.tab')) {
+    const активна = b.dataset.tab === имя;
+    b.classList.toggle('is-active', активна);
+    b.setAttribute('aria-selected', активна ? 'true' : 'false');
+  }
+  отрисоватьВкладку();
+}
+
 async function обновить() {
   const d = await get('/api/feed');
+  последнийОтвет = d;
 
   $('#counters').replaceChildren(...[
     ['просрочено', d.counts.overdue, true],
@@ -121,17 +204,7 @@ async function обновить() {
     plate.hidden = true;
   }
 
-  $('#feed').replaceChildren(...d.feed.map((i) => строка(i, false)));
-
-  const empty = $('#empty');
-  if (d.feed.length === 0) {
-    empty.hidden = false;
-    empty.textContent = d.next_ahead
-      ? `На сегодня всё. Дальше: «${d.next_ahead.title}» — ${d.next_ahead.task}.`
-      : 'На сегодня всё.';
-  } else {
-    empty.hidden = true;
-  }
+  отрисоватьВкладку();
 }
 
 async function показатьЗавал() {
@@ -140,11 +213,13 @@ async function показатьЗавал() {
   $('#backlog-view').hidden = false;
   $('#feed').hidden = true;
   $('#empty').hidden = true;
+  $('#tabs').hidden = true;
 }
 
 function скрытьЗавал() {
   $('#backlog-view').hidden = true;
   $('#feed').hidden = false;
+  $('#tabs').hidden = false;
   обновить();
 }
 
@@ -243,6 +318,10 @@ async function превью() {
 
 $('#plate').addEventListener('click', показатьЗавал);
 $('#close-backlog').addEventListener('click', скрытьЗавал);
+
+for (const b of $('#tabs').querySelectorAll('.tab')) {
+  b.addEventListener('click', () => выбратьВкладку(b.dataset.tab));
+}
 
 for (const b of document.querySelectorAll('[data-op]')) {
   b.addEventListener('click', () => {
