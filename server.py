@@ -134,6 +134,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, engine.cmd_recur(
                 _args(name=payload.get("name"), force=bool(payload.get("force")),
                       limit=payload.get("limit")), date.today()))
+        if route == "/api/kb/scan":
+            return self._json(200, engine.cmd_kb_scan(
+                _args(text=payload.get("text"), source_type=payload.get("source_type"),
+                      source_id=payload.get("source_id")), date.today()))
+        if route == "/api/kb/confirm":
+            return self._json(200, engine.cmd_kb_confirm(
+                _args(source_type=payload.get("source_type"),
+                      source_id=payload.get("source_id"),
+                      mentions=payload.get("mentions")), date.today()))
+        if route == "/api/kb/reject":
+            return self._json(200, engine.cmd_kb_reject(
+                _args(mention=payload.get("mention"),
+                      mute=bool(payload.get("mute"))), date.today()))
         self._json(404, {"error": "нет такого адреса"})
 
     # --- действия ---
