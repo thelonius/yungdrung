@@ -34,6 +34,7 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import backup  # noqa: E402
 import engine  # noqa: E402
 import kb  # noqa: E402
 
@@ -1298,3 +1299,90 @@ def test_kb_reject_mute_гасит_слово_у_любой_записи(vault):
         "---\ntype: note\ntitle: Грант\n---\n\n", encoding="utf-8")
 
     assert run(engine.cmd_kb_scan, text="ждём Грант в четверг")["hypotheses"] == []
+# --- резервные копии и экспорт: тонкая обвязка вокруг backup.py -------------
+#
+# Сам backup.py и его инварианты (ротация, атомарность, целостность архива)
+# проверены в test_backup.py и здесь не дублируются. Здесь — то, что относится
+# к движку: путь по умолчанию, перевод BackupError в структурную ошибку
+# контракта, и что restore реально возвращает файлы к прежнему состоянию.
+
+def test_backup_копия_снимается_за_пределами_вольта(vault):
+    """Раздел 9 ТЗ: пропажа папки вольта не должна утащить с собой копии."""
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    r = run(engine.cmd_backup, dest=None, keep=None)
+
+    assert r["ok"], r
+    файл = Path(r["file"])
+    assert файл.is_file()
+    assert vault not in файл.parents
+
+
+def test_backup_list_пуст_пока_копий_не_было(vault, tmp_path):
+    """Отсутствие копий — не ошибка, а обычное состояние до первого снятия."""
+    чужая = tmp_path.parent / "ещё-не-существует"
+    r = run(engine.cmd_backup_list, dest=str(чужая))
+    assert r == {"copies": [], "dest": str(чужая)}
+
+
+def test_restore_несуществующего_файла_понятная_ошибка(vault, tmp_path):
+    """BackupError движок обязан завернуть в {field, error}, а не уронить
+    процесс traceback'ом — это ошибка выбора файла, а не сбой сервера."""
+    r = run(engine.cmd_backup_restore, file=str(tmp_path.parent / "нет.zip"))
+    assert r["ok"] is False
+    assert r["errors"][0]["field"] == "archive"
+    assert "нет.zip" in r["errors"][0]["error"] or "не открывается" in r["errors"][0]["error"]
+
+
+def test_restore_возвращает_вольт_к_состоянию_копии(vault):
+    """Ядро требования R25: снял копию → изменил → восстановил → получил то,
+    что было на момент копии, а не то, что стало после."""
+    путь = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    r1 = run(engine.cmd_backup, dest=None, keep=None)
+    assert r1["ok"], r1
+
+    run(engine.cmd_done, task="Грант", step="1", reason="сдал")
+    assert read(путь)[0]["steps"][0]["status"] == "done"
+
+    r2 = run(engine.cmd_backup_restore, file=r1["file"])
+    assert r2["ok"], r2
+    meta, _ = read(путь)
+    assert meta["steps"][0]["status"] == "pending"
+    assert meta["steps"][0].get("completed_date") is None
+
+
+def test_export_json_создаёт_валидный_json(vault):
+    """R11: файл должен парситься обратно и нести хотя бы заведённую задачу."""
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    out = vault / "выгрузка-тест.json"
+
+    r = run(engine.cmd_export_json, to=str(out))
+
+    assert r["ok"], r
+    данные = json.loads(out.read_text(encoding="utf-8"))
+    assert данные["format"] == "yungdrung-export"
+    assert [t["name"] for t in данные["tasks"]] == ["Грант"]
+
+
+def test_export_json_путь_по_умолчанию_тоже_за_пределами_вольта(vault):
+    """Без явного --to движок сам не должен класть выгрузку внутрь вольта —
+    та же логика, что и у копий."""
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    r = run(engine.cmd_export_json, to=None)
+
+    assert r["ok"], r
+    файл = Path(r["file"])
+    assert файл.is_file()
+    assert vault not in файл.parents
+
+
+def test_backup_повторный_с_force_не_падает_и_даёт_новый_файл(vault):
+    """Идемпотентность в смысле контракта — «не падает», а не «не создаёт
+    вторую запись»: у копии по кнопке «сейчас» это разные действия."""
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    r1 = run(engine.cmd_backup, dest=None, keep=None, force=True)
+    r2 = run(engine.cmd_backup, dest=None, keep=None, force=True)
+
+    assert r1["ok"] and r2["ok"]
+    assert r1["file"] != r2["file"]
+    dest = Path(r1["file"]).parent
+    assert len(backup.copies(dest)) == 2

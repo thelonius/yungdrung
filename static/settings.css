@@ -1,0 +1,38 @@
+/* Резервные копии и экспорт. Раздел 9 ТЗ. Общие токены — в style.css,
+   карточки списка переиспользуют .tpl-card из templates.css. */
+
+.settings-section {
+  margin-bottom: 36px;
+}
+
+.settings-section:last-child {
+  margin-bottom: 0;
+}
+
+.settings-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 6px;
+}
+
+.settings-section .hint {
+  margin: 4px 0 10px;
+}
+
+#backup-dest {
+  margin-bottom: 14px;
+  word-break: break-all;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.backup-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.backup-date { font-weight: 650; }
+.backup-meta { font-size: 13px; color: var(--muted); }
+
+.backup-safety .backup-date { color: var(--muted); }

@@ -45,6 +45,7 @@ try:
 except ImportError:
     sys.exit("нужен pyyaml: pip install pyyaml")
 
+import backup
 import kb
 import recurrence as rec
 import templates as tpl
@@ -1784,6 +1785,76 @@ def cmd_export(args, today):
             "steps": len(steps), "events": len(events)}
 
 
+# --- резервные копии и экспорт (R25, R11 — раздел 9 ТЗ) --------------------
+#
+# Копия (R25) и экспорт (R11) — разные задачи, backup.py разводит их по разным
+# функциям. Здесь только тонкая обвязка: разбор аргументов, дефолтный путь и
+# перевод backup.BackupError в структурную ошибку контракта {field, error}.
+
+def default_backup_dir():
+    """Куда класть копии по умолчанию — рядом с вольтом, не внутри него.
+
+    Если пропадёт папка вольта целиком (отвалившийся диск, случайное
+    удаление), копия обязана остаться цела. Папку заранее не создаём:
+    `backup.create` заводит её сама при первом снятии копии.
+    """
+    return VAULT.parent / f"{VAULT.name} — копии"
+
+
+def cmd_backup(args, today):
+    """Снять резервную копию вольта. Раздел 9 ТЗ, требование R25."""
+    dest = Path(args.dest) if getattr(args, "dest", None) else default_backup_dir()
+    keep = getattr(args, "keep", None) or backup.KEEP_DEFAULT
+    try:
+        итог = backup.backup(VAULT, dest, keep=keep, force=bool(getattr(args, "force", False)))
+    except backup.BackupError as e:
+        return {"ok": False, "errors": [e.as_json()]}
+    except OSError as e:
+        # Диск полон, папка недоступна — не наша ошибка с полем, но и молчать
+        # нельзя: заказчик должен узнать, что копия не снялась.
+        return {"ok": False, "errors": [{"field": None, "error": str(e)}]}
+    return {"ok": True, **итог}
+
+
+def cmd_backup_list(args, today):
+    """Список копий для интерфейса восстановления. Пустого списка не боимся —
+    первой копии могло ещё не быть, это не ошибка."""
+    dest = Path(args.dest) if getattr(args, "dest", None) else default_backup_dir()
+    return {"copies": backup.copies(dest), "dest": str(dest)}
+
+
+def cmd_backup_restore(args, today):
+    """Восстановить вольт из конкретной копии. Дефолта на «последнюю копию»
+    нет намеренно: это деструктивная операция, файл выбирает человек.
+
+    `backup.restore` сама снимает страховочную копию текущего состояния перед
+    перезаписью — вызывающему снимать её отдельно не нужно.
+    """
+    try:
+        итог = backup.restore(args.file, VAULT)
+    except backup.BackupError as e:
+        return {"ok": False, "errors": [e.as_json()]}
+    return {"ok": True, **итог}
+
+
+def cmd_export_json(args, today):
+    """Выгрузка всей базы в JSON. Раздел 9 ТЗ, требование R11.
+
+    Не Excel-выгрузка (`cmd_export`): та для «посмотреть глазами и переслать»,
+    эта — данные без нашего формата хранения, для будущей версии продукта.
+
+    Путь по умолчанию — рядом с копиями, не в самом вольте: та же логика, что
+    у `default_backup_dir` — файл не должен пропасть вместе с папкой вольта.
+    """
+    out = (Path(args.to) if getattr(args, "to", None)
+           else default_backup_dir() / f"выгрузка-{today.isoformat()}.json")
+    try:
+        итог = backup.write_export(VAULT, out)
+    except backup.BackupError as e:
+        return {"ok": False, "errors": [e.as_json()]}
+    return {"ok": True, **итог}
+
+
 def main():
     p = argparse.ArgumentParser(description="Движок шагов Yungdrung")
     p.add_argument("--today", help="подменить сегодняшнюю дату (для проверок)")
@@ -1904,6 +1975,25 @@ def main():
     x.add_argument("--to", help="куда писать; по умолчанию — «Выгрузка <дата>.xlsx» "
                                 "в корне вольта")
     x.set_defaults(func=cmd_export)
+
+    bk = sub.add_parser("backup", help="снять резервную копию вольта (R25)")
+    bk.add_argument("--dest", help="куда класть копии; по умолчанию рядом с вольтом")
+    bk.add_argument("--keep", type=int, help="сколько копий хранить, по умолчанию 7")
+    bk.add_argument("--force", action="store_true",
+                    help="снять копию сейчас, не глядя на расписание")
+    bk.set_defaults(func=cmd_backup)
+
+    bl = sub.add_parser("backups", help="список сделанных копий")
+    bl.add_argument("--dest", help="папка копий; по умолчанию рядом с вольтом")
+    bl.set_defaults(func=cmd_backup_list)
+
+    rs = sub.add_parser("restore", help="восстановить вольт из копии — перезаписывает данные")
+    rs.add_argument("file", help="путь к архиву копии")
+    rs.set_defaults(func=cmd_backup_restore)
+
+    ej = sub.add_parser("export-json", help="выгрузить всю базу в JSON (R11)")
+    ej.add_argument("--to", help="куда писать файл выгрузки; по умолчанию в корне вольта")
+    ej.set_defaults(func=cmd_export_json)
 
     args = p.parse_args()
     today = date.fromisoformat(args.today) if args.today else date.today()
