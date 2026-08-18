@@ -81,7 +81,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         route = unquote(self.path.split("?")[0])
         СТРАНИЦЫ = {"/": "feed.html", "/лента": "feed.html", "/новая": "index.html",
-                    "/шаблоны": "templates.html"}
+                    "/шаблоны": "templates.html", "/задача": "task.html"}
         if route in СТРАНИЦЫ:
             return self._static(СТРАНИЦЫ[route], "text/html; charset=utf-8")
         if route.endswith(".css"):
@@ -99,6 +99,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"reasons": engine.REASONS})
         if route == "/api/tasks":
             return self._json(200, engine.cmd_list(None, date.today()))
+        if route == "/api/task":
+            имя = _param(self.path, "name") or ""
+            try:
+                return self._json(200, engine.cmd_show(_args(task=имя), date.today()))
+            except SystemExit as e:
+                return self._json(404, {"error": str(e)})
         self._json(404, {"error": "нет такого адреса"})
 
     def do_POST(self):
@@ -134,7 +140,30 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, engine.cmd_recur(
                 _args(name=payload.get("name"), force=bool(payload.get("force")),
                       limit=payload.get("limit")), date.today()))
+        if route == "/api/task-update":
+            return self._json(200, self._task_update(payload))
+        if route == "/api/task-warnings":
+            return self._json(200, {"warnings": engine.soft_warnings(payload, date.today())})
+        if route == "/api/task-cancel":
+            return self._json(200, self._guarded(engine.cmd_cancel, _args(
+                task=payload.get("task"), reason=payload.get("reason"))))
+        if route == "/api/task-delete":
+            return self._json(200, self._guarded(engine.cmd_delete,
+                                                  _args(task=payload.get("task"))))
+        if route == "/api/task-reopen":
+            return self._json(200, self._guarded(engine.cmd_reopen, _args(
+                task=payload.get("task"), step=str(payload.get("step") or ""))))
         self._json(404, {"error": "нет такого адреса"})
+
+    def _guarded(self, команда, args):
+        """Обёртка для операций, которые движок останавливает через `sys.exit`
+        на конфликте состояния (отменить уже отменённую, переоткрыть не сделанный
+        шаг). CLI это прощает — процесс просто завершится с сообщением, странице
+        же нужен JSON и код ответа, а не оборванное соединение."""
+        try:
+            return команда(args, date.today())
+        except SystemExit as e:
+            return {"ok": False, "errors": [{"field": None, "error": str(e)}]}
 
     # --- действия ---
 
@@ -210,6 +239,17 @@ class Handler(BaseHTTPRequestHandler):
             # Движок на конфликте состояния зовёт sys.exit с текстом. Для CLI это
             # нормально, для морды — нет: страница должна показать причину, а не
             # получить оборванное соединение.
+            return {"ok": False, "errors": [{"field": None, "error": str(e)}]}
+
+    def _task_update(self, payload):
+        имя = payload.get("task")
+        if not имя:
+            return {"ok": False, "errors": [{"field": None, "error": "не указана задача"}]}
+        args = _args(task=имя, json=json.dumps(payload.get("data") or {}),
+                     force=bool(payload.get("force")))
+        try:
+            return engine.cmd_update(args, date.today())
+        except SystemExit as e:
             return {"ok": False, "errors": [{"field": None, "error": str(e)}]}
 
     def _create(self, payload):

@@ -443,6 +443,7 @@ def expand(template, start_date, title=None):
     } for шаг in шаблон["steps"]]
     return {
         "title": str(title).strip() if title else шаблон["name"],
+        "start_date": старт.strftime("%Y-%m-%d"),
         "tags": list(шаблон["tags"]),
         "steps": steps,
         "body": шаблон["body"],

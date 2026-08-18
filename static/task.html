@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Карточка задачи — Yungdrung</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/feed.css">
+<link rel="stylesheet" href="/task.css">
+</head>
+<body>
+
+<main class="wrap">
+
+  <p class="back"><a href="/" class="ghost small">← Лента</a></p>
+
+  <p class="err" id="load-err" hidden></p>
+
+  <article id="card" hidden>
+
+    <header class="card-head">
+      <div class="title-row">
+        <input type="text" id="title" class="title-input" autocomplete="off">
+        <span class="status-pill" id="status-pill"></span>
+      </div>
+      <div class="head-meta">
+        <span id="due-line"></span>
+        <span class="progress-line">
+          <span class="progress-bar"><span class="progress-fill" id="progress-fill"></span></span>
+          <span id="progress-text"></span>
+        </span>
+      </div>
+      <div class="head-actions">
+        <button type="button" class="ghost small" id="save-template">Сохранить как шаблон</button>
+        <button type="button" class="ghost small danger-hover" id="cancel-task">Отменить задачу</button>
+        <button type="button" class="ghost small danger-hover" id="delete-task">Удалить</button>
+      </div>
+    </header>
+
+    <div class="card-fields">
+      <div class="field">
+        <label for="start-date">Дата начала</label>
+        <input type="text" id="start-date" autocomplete="off" placeholder="18.08, завтра, +3">
+        <span class="date-preview" id="start-preview"></span>
+        <p class="err" id="err-start" hidden></p>
+      </div>
+
+      <div class="field">
+        <label for="tags">Категории</label>
+        <input type="text" id="tags" autocomplete="off" placeholder="финансы, отчётность">
+        <p class="note">Через запятую</p>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="body">Заметка</label>
+      <textarea id="body" rows="3"
+                placeholder="Телефоны, номера счетов, ссылки на [[Василий Говнов]]"></textarea>
+    </div>
+
+    <section class="steps-block">
+      <div class="steps-head">
+        <h2>Шаги</h2>
+        <p class="note">Перетаскивай, чтобы поменять порядок · клик по строке раскрывает</p>
+      </div>
+      <ol class="checklist" id="checklist"></ol>
+      <p class="err" id="err-steps" hidden></p>
+      <button type="button" class="ghost" id="add-step">+ Шаг</button>
+    </section>
+
+    <div class="save-row">
+      <button type="button" class="primary" id="save-card">Сохранить</button>
+      <span class="saved" id="saved" hidden></span>
+      <p class="err" id="err-general" hidden></p>
+    </div>
+
+    <section class="history-block">
+      <button type="button" class="history-toggle" id="history-toggle">
+        История <span id="history-count"></span> ▾
+      </button>
+      <ol class="history-list" id="history-list" hidden></ol>
+    </section>
+
+  </article>
+
+</main>
+
+<!-- Окно контроля — та же разметка и логика, что на ленте (раздел 6.4 ТЗ):
+     крестик и Esc значат «напомнить позже», не ответ. -->
+<dialog id="control">
+  <form method="dialog" class="control-card">
+    <header class="control-head">
+      <p class="control-task" id="c-task"></p>
+      <h2 class="control-step" id="c-step"></h2>
+      <p class="control-note" id="c-note" hidden></p>
+      <p class="control-meta" id="c-meta"></p>
+    </header>
+
+    <div class="control-actions">
+      <button type="button" class="primary" data-op="done">Сделано</button>
+      <button type="button" class="secondary" data-op="notdone">Не сделано</button>
+      <button type="button" class="secondary" data-op="defer">Перенести</button>
+    </div>
+
+    <div class="control-form" id="c-form" hidden>
+      <div class="field">
+        <label for="c-reason">Причина</label>
+        <select id="c-reason"></select>
+      </div>
+      <div class="field" id="c-date-field">
+        <label for="c-date">Новая дата контроля</label>
+        <div class="presets" id="c-presets">
+          <button type="button" data-when="+1 09:00">завтра утром</button>
+          <button type="button" data-when="+3">через 3 дня</button>
+          <button type="button" data-when="+7">через неделю</button>
+        </div>
+        <input type="text" id="c-date" autocomplete="off" placeholder="или свой вариант: 18.08, пн, +5">
+        <span class="date-preview" id="c-date-preview"></span>
+      </div>
+      <p class="err" id="c-err" hidden></p>
+      <div class="control-actions">
+        <button type="button" class="primary" id="c-save">Сохранить</button>
+        <button type="button" class="ghost" id="c-back">Отмена</button>
+      </div>
+    </div>
+
+    <footer class="control-foot">
+      <button type="button" class="quiet" data-op="fail">Не будет сделано</button>
+      <span class="foot-hint">Esc — напомнить позже</span>
+    </footer>
+  </form>
+</dialog>
+
+<template id="step-tpl">
+  <li class="checkline">
+    <div class="checkline-row">
+      <input type="checkbox" class="step-check" title="Сделано">
+      <span class="checkline-title"></span>
+      <span class="checkline-date"></span>
+      <span class="checkline-postponed"></span>
+      <span class="checkline-note-icon" title="Есть заметка" hidden>📝</span>
+      <button type="button" class="checkline-more" title="Перенести / не сделано / провалить">⋯</button>
+    </div>
+    <div class="checkline-editor" hidden>
+      <div class="field">
+        <label>Название шага</label>
+        <input type="text" class="edit-title" autocomplete="off">
+      </div>
+      <div class="card-fields">
+        <div class="field">
+          <label>Дата начала</label>
+          <input type="text" class="edit-start" autocomplete="off" placeholder="18.08, завтра">
+          <span class="date-preview edit-start-preview"></span>
+        </div>
+        <div class="field">
+          <label>Дата контроля</label>
+          <input type="text" class="edit-control" autocomplete="off" placeholder="18.08 14:00">
+          <span class="date-preview edit-control-preview"></span>
+        </div>
+      </div>
+      <div class="field">
+        <label>Заметка</label>
+        <textarea class="edit-note" rows="2"></textarea>
+      </div>
+      <p class="note edit-readonly" hidden></p>
+    </div>
+  </li>
+</template>
+
+<script src="/task.js"></script>
+</body>
+</html>

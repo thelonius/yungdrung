@@ -80,6 +80,7 @@ STATUS_RU = {
     "no_date": "без даты",
     "done": "закрыта",
     "empty": "нет шагов",
+    "cancelled": "отменена",
 }
 
 # Статусы и события шага в файле лежат по-английски — их читает движок. В Excel
@@ -97,6 +98,7 @@ EVENT_RU = {
     "not_done": "не сделан",
     "defer": "перенесён",
     "skipped": "снят",
+    "reopened": "переоткрыт",
 }
 
 
@@ -221,6 +223,11 @@ def current_step(task):
 
 
 def task_status(task, today):
+    # Отмена — состояние задачи целиком, не выводится из шагов и стоит впереди
+    # любого другого правила: отменённая задача не должна всплывать просроченной
+    # только потому, что в ней остался незакрытый шаг.
+    if task["meta"].get("cancelled"):
+        return "cancelled"
     steps = steps_of(task)
     if not steps:
         return "empty"
@@ -369,8 +376,9 @@ def save(task, today, force=True):
 
     # Порядок полей задаём явно: в редакторе свойств Obsidian сводка должна быть
     # сверху, а длинный массив шагов — в конце, иначе статуса не видно за простынёй.
-    head = ["schema", "type", "title", "created", "status", "current_step",
-            "control_date", "progress", "stalled", "tags"]
+    head = ["schema", "type", "title", "created", "start_date", "status",
+            "cancelled", "cancelled_reason", "current_step", "control_date",
+            "progress", "stalled", "tags"]
     ordered = {k: meta[k] for k in head if k in meta}
     ordered.update({k: v for k, v in meta.items() if k not in head and k != "steps"})
     if "steps" in meta:
@@ -513,8 +521,15 @@ def _не_время(token):
 
 def parse_time_part(token):
     """«14:00», «9.30», «18-45» → time. Не время — None, и это не ошибка:
-    вызывающий просто поймёт, что времени в строке не было."""
-    m = re.fullmatch(r"(\d{1,2})[:.\-](\d{2})", token)
+    вызывающий просто поймёт, что времени в строке не было.
+
+    Секунды принимаются и отбрасываются: точность продукта — минуты, но
+    `str(datetime)` печатает время с секундами, а карточка отправляет то, что
+    показал сервер, обратно как есть. Без этого «10:00:00» не опознаётся как
+    время вообще, разбор проваливается в ISO-fallback на голую дату, и время
+    у уже сохранённого шага молча пропадает при первом же сохранении карточки.
+    """
+    m = re.fullmatch(r"(\d{1,2})[:.\-](\d{2})(?::\d{2})?", token)
     if not m:
         return None
     часы, минуты = int(m.group(1)), int(m.group(2))
@@ -592,8 +607,72 @@ FORBIDDEN_IN_NAME = set('\\/:*?"<>|')
 MAX_TITLE = 120
 
 
+def _parse_optional_date(raw, today, поле, errors):
+    """Разобрать необязательную дату, добавить ошибку в список при провале.
+
+    Общий кусок между валидацией контрольной даты и даты начала — раньше жил
+    только внутри `validate_new_task`, теперь нужен в двух местах и разойтись
+    им нельзя: разное сообщение об ошибке на одну и ту же дату сбивает с толку.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        return parse_date_input(raw, today)
+    except (ValueError, TypeError):
+        errors.append({"field": поле,
+                       "error": "Дату не понял. Можно: 18.08 · завтра · +3 · пн"})
+        return None
+
+
+def default_step_start(предыдущий_контроль, старт_задачи):
+    """Дата начала шага по умолчанию — раздел 6.3.2 ТЗ: контроль предыдущего
+    шага, а для первого шага дата начала задачи."""
+    return предыдущий_контроль or старт_задачи
+
+
+def resolve_steps(steps_data, старт_задачи, today):
+    """Разобрать шаги и подставить дефолт даты начала по цепочке — один проход,
+    которым пользуются и проверка, и запись.
+
+    Раньше дефолт вычислялся заново в `build_task`, отдельно от `validate_new_task`:
+    проверка смотрела только на то, что пришло в запросе, а дефолт мог обогнать
+    control_date уже после проверки. На перестановке шагов это воспроизвелось
+    вживую — правка проходила проверку и записывала на диск шаг, где дата начала
+    позже даты контроля. Здесь дефолт и проверка смотрят на одни и те же значения.
+
+    Возвращает список словарей: title, start, control (уже разобранные даты или
+    None), note, id (как пришёл, может быть None), errors (ошибки по этому шагу).
+    """
+    resolved = []
+    предыдущий_контроль = None
+    for i, step in enumerate(steps_data or []):
+        поле = f"steps.{i}"
+        errors = []
+        if not (step.get("title") or "").strip():
+            errors.append({"field": f"{поле}.title", "error": "Название шага обязательно"})
+        control = _parse_optional_date(step.get("control_date"), today,
+                                       f"{поле}.control_date", errors)
+        явный_старт = _parse_optional_date(step.get("start_date"), today,
+                                           f"{поле}.start_date", errors)
+        start = явный_старт or default_step_start(предыдущий_контроль, старт_задачи)
+        # Жёсткая проверка из раздела 6.3.3 ТЗ: контроль раньше, чем шаг можно
+        # начать, бессмысленен как дата — блокирует сохранение, не предупреждение.
+        # Сравниваем уже с итоговым start (явным или дефолтным), а не только
+        # с явно введённым — иначе дефолт мог бы тихо пронести то же нарушение.
+        if start and control and as_date(control) < as_date(start):
+            errors.append({"field": f"{поле}.control_date",
+                           "error": "Контроль раньше даты начала шага"})
+        resolved.append({"title": step.get("title"), "start": start, "control": control,
+                         "note": step.get("note"), "id": step.get("id"), "errors": errors,
+                         "явный_старт": bool(явный_старт)})
+        предыдущий_контроль = control or предыдущий_контроль
+    return resolved
+
+
 def validate_new_task(data, existing_names, today):
-    """Проверка задачи до записи. Возвращает список ошибок по полям.
+    """Проверка задачи до записи. Возвращает список ошибок по полям — тех,
+    что блокируют сохранение. Мягкие предупреждения — отдельно, в `soft_warnings`.
 
     Отдельно от формы намеренно: правила должны быть в одном месте, иначе форма
     и CLI разойдутся, и в вольт попадёт то, что движок потом не прочитает.
@@ -619,21 +698,44 @@ def validate_new_task(data, existing_names, today):
         errors.append({"field": "title",
                        "error": "Название не должно кончаться точкой или пробелом"})
 
+    старт_задачи = _parse_optional_date(data.get("start_date"), today,
+                                        "start_date", errors) or today
+
     steps = data.get("steps") or []
     if not steps:
         errors.append({"field": "steps", "error": "Нужен хотя бы один шаг"})
-    for i, step in enumerate(steps):
-        поле = f"steps.{i}"
-        if not (step.get("title") or "").strip():
-            errors.append({"field": f"{поле}.title", "error": "Название шага обязательно"})
-        raw = (step.get("control_date") or "").strip()
-        if raw:
-            try:
-                parse_date_input(raw, today)
-            except (ValueError, TypeError):
-                errors.append({"field": f"{поле}.control_date",
-                               "error": "Дату не понял. Можно: 18.08 · завтра · +3 · пн"})
+    for r in resolve_steps(steps, старт_задачи, today):
+        errors += r["errors"]
     return errors
+
+
+def soft_warnings(data, today):
+    """Мягкие предупреждения из раздела 6.3.3 ТЗ: сохранить можно, но человек
+    должен увидеть, что даты выглядят подозрительно.
+
+    Не блокируют запись, поэтому отдельная функция, а не часть `validate_new_task`:
+    смешивать в одном списке то, что останавливает сохранение, с тем, что просто
+    предупреждает, заставило бы форму гадать, какая ошибка какая.
+
+    Сравнение идёт по явно введённой дате начала, не по дефолтной: дефолт равен
+    как раз тому, с чем его сравнивают (концу задачи или предыдущему шагу), и
+    строгое «меньше» на них никогда не сработает — предупреждать не о чем.
+    """
+    warnings = []
+    старт_задачи = _parse_optional_date(data.get("start_date"), today, None, []) or today
+    предыдущий_контроль = None
+    for i, r in enumerate(resolve_steps(data.get("steps") or [], старт_задачи, today)):
+        поле = f"steps.{i}"
+        if r["явный_старт"]:
+            if as_date(r["start"]) < as_date(старт_задачи):
+                warnings.append({"field": f"{поле}.start_date",
+                                 "warning": "Шаг начинается раньше даты начала задачи"})
+            if предыдущий_контроль and as_date(r["start"]) < as_date(предыдущий_контроль):
+                warnings.append({"field": f"{поле}.start_date",
+                                 "warning": "Шаг начинается раньше, чем закончится "
+                                           "предыдущий"})
+        предыдущий_контроль = r["control"] or предыдущий_контроль
+    return warnings
 
 
 def build_task(data, today):
@@ -642,15 +744,17 @@ def build_task(data, today):
     Идентификаторы шагов раздаёт движок, а не форма: они должны быть плотными и
     по порядку, иначе `done <задача> 3` будет попадать не туда.
     """
+    старт_задачи = _parse_optional_date(data.get("start_date"), today, None, []) or today
     steps = []
-    for i, step in enumerate(data.get("steps") or [], start=1):
-        raw = (step.get("control_date") or "").strip()
+    for i, r in enumerate(resolve_steps(data.get("steps") or [], старт_задачи, today), start=1):
         steps.append({
             "id": i,
-            "title": step["title"].strip(),
+            "title": r["title"].strip(),
             "status": OPEN,
-            "control_date": parse_date_input(raw, today) if raw else None,
+            "start_date": r["start"],
+            "control_date": r["control"],
             "completed_date": None,
+            "note": (r["note"] or "").strip() or None,
             "log": [],
         })
     tags = [t.strip() for t in (data.get("tags") or []) if t and t.strip()]
@@ -659,6 +763,7 @@ def build_task(data, today):
         "type": "task",
         "title": data["title"].strip(),
         "created": today,
+        "start_date": старт_задачи,
         "tags": tags,
         "steps": steps,
     }
@@ -691,6 +796,221 @@ def cmd_create(args, today):
     save(task, today)
     return {"ok": True, "task": path.stem, "path": str(path),
             "steps": len(meta["steps"]), "status": task["meta"]["status"]}
+
+
+# --- правка существующей задачи --------------------------------------------
+#
+# Отдельно от создания. При правке шаги приходят с уже известными `id`, и эти
+# id обязаны пережить редактирование: на них ссылаются `done`/`notdone`/
+# `defer`/`fail`/`skip`, и переезд с 1..N при каждом сохранении раскидал бы
+# отметки не по тем шагам.
+#
+# Статус, дата закрытия и журнал шага правкой не трогаются никогда — это поле
+# зоны четырёх команд перехода, а не карточки. Карточка меняет только то, что
+# заказчик видит как метаданные: заголовок, даты, заметку, порядок, состав.
+
+def resolve_steps_for_edit(steps_data, старые, старт_задачи, today):
+    """Как `resolve_steps`, но для правки существующей задачи.
+
+    Разница в одном: если дата начала шага не пришла явно, для уже существующего
+    шага (есть совпадающий `id`) берётся то, что уже сохранено, а не дефолт по
+    новому порядку. Без этого перетаскивание шага в списке карточки — без единой
+    правки дат — само по себе могло бы упереться в «контроль раньше начала»,
+    потому что дефолт нового первого шага считается от даты начала задачи, а не
+    от того, что стояло у него до перестановки. Дефолт по цепочке остаётся
+    только для шагов, которых в задаче ещё не было.
+    """
+    resolved = []
+    предыдущий_контроль = None
+    for i, step in enumerate(steps_data or []):
+        поле = f"steps.{i}"
+        errors = []
+        if not (step.get("title") or "").strip():
+            errors.append({"field": f"{поле}.title", "error": "Название шага обязательно"})
+        control = _parse_optional_date(step.get("control_date"), today,
+                                       f"{поле}.control_date", errors)
+        явный_старт = _parse_optional_date(step.get("start_date"), today,
+                                           f"{поле}.start_date", errors)
+        id_ = step.get("id")
+        сохранённый = as_date(старые[id_].get("start_date")) if id_ in старые else None
+        start = явный_старт or сохранённый or default_step_start(предыдущий_контроль,
+                                                                  старт_задачи)
+        if start and control and as_date(control) < as_date(start):
+            errors.append({"field": f"{поле}.control_date",
+                           "error": "Контроль раньше даты начала шага"})
+        resolved.append({"title": step.get("title"), "start": start, "control": control,
+                         "note": step.get("note"), "id": id_, "errors": errors,
+                         "явный_старт": bool(явный_старт)})
+        предыдущий_контроль = control or предыдущий_контроль
+    return resolved
+
+
+def validate_task_edit(task, data, existing_names, today):
+    """Проверка правки — со своими правилами дат (см. `resolve_steps_for_edit`),
+    а не `validate_new_task`: та не знает про сохранённые даты существующих
+    шагов и на чистой перестановке без единой правки дат ошибалась бы сама.
+    """
+    errors = []
+    title = (data.get("title") or "").strip()
+    свои = {n for n in existing_names if n.lower() != task["path"].stem.lower()}
+    if not title:
+        errors.append({"field": "title", "error": "Название задачи обязательно"})
+    elif len(title) > MAX_TITLE:
+        errors.append({"field": "title",
+                       "error": f"Название длиннее {MAX_TITLE} символов"})
+    elif set(title) & FORBIDDEN_IN_NAME:
+        плохие = "".join(sorted(set(title) & FORBIDDEN_IN_NAME))
+        errors.append({"field": "title",
+                       "error": f"В названии нельзя символы {плохие} — это имя файла"})
+    elif title.lower() in {n.lower() for n in свои}:
+        errors.append({"field": "title",
+                       "error": "Задача с таким названием уже есть"})
+    elif title != title.strip(". "):
+        errors.append({"field": "title",
+                       "error": "Название не должно кончаться точкой или пробелом"})
+
+    старт_задачи = _parse_optional_date(data.get("start_date"), today, "start_date",
+                                        errors) or as_date(task["meta"].get("start_date")) \
+        or today
+    старые = {s["id"]: s for s in steps_of(task)}
+
+    steps = data.get("steps") or []
+    if not steps:
+        errors.append({"field": "steps", "error": "Нужен хотя бы один шаг"})
+    for r in resolve_steps_for_edit(steps, старые, старт_задачи, today):
+        errors += r["errors"]
+    return errors
+
+
+def apply_task_edit(task, data, today):
+    """Переписать метаданные задачи по данным карточки. Возвращает список
+    id шагов, которые пропали из данных без явного «снять» — молчаливая потеря
+    шага хуже, чем отказ сохранить.
+    """
+    meta = task["meta"]
+    старые = {s["id"]: s for s in steps_of(task)}
+    старт_задачи = _parse_optional_date(data.get("start_date"), today, None, []) or \
+        as_date(meta.get("start_date")) or today
+
+    следующий_id = max([s["id"] for s in старые.values()], default=0) + 1
+    новые, увиденные = [], set()
+    for r in resolve_steps_for_edit(data.get("steps") or [], старые, старт_задачи, today):
+        если_старый = r["id"] is not None and r["id"] in старые
+        if если_старый:
+            шаг = dict(старые[r["id"]])  # статус/completed_date/log копируются как есть
+            увиденные.add(r["id"])
+        else:
+            # Тот же порядок полей, что у build_task, — иначе новый шаг в файле
+            # выглядит написанным другой рукой, хотя человеку разницы нет.
+            шаг = {"id": следующий_id, "title": None, "status": OPEN,
+                   "start_date": None, "control_date": None,
+                   "completed_date": None, "note": None, "log": []}
+            следующий_id += 1
+        шаг["title"] = r["title"].strip()
+        шаг["start_date"] = r["start"]
+        шаг["control_date"] = r["control"]
+        шаг["note"] = (r["note"] or "").strip() or None
+        новые.append(шаг)
+
+    пропали = [sid for sid in старые if sid not in увиденные]
+
+    meta["title"] = data.get("title", meta["title"]).strip()
+    meta["start_date"] = старт_задачи
+    if "tags" in data:
+        meta["tags"] = [t.strip() for t in (data.get("tags") or []) if t and t.strip()]
+    meta["steps"] = новые
+    if "body" in data:
+        task["body"] = (data.get("body") or "").strip() + "\n"
+    return пропали
+
+
+def cmd_update(args, today):
+    """Правка задачи из карточки: заголовок, даты, теги, заметка, состав и
+    порядок шагов. Статусы шагов через `done`/`notdone`/`defer`/`fail`/`skip`.
+    """
+    raw = sys.stdin.read() if args.json == "-" else args.json
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
+
+    task = find_task(args.task)
+    existing = [t["path"].stem for t in load_tasks()]
+    errors = validate_task_edit(task, data, existing, today)
+    if errors:
+        return {"ok": False, "errors": errors}
+
+    пропали = apply_task_edit(task, data, today)
+    if пропали and not getattr(args, "force", False):
+        # Шаг исчез из данных без явного «снять». Скорее всего баг интерфейса
+        # или случайное перетаскивание мимо списка — молча терять историю шага
+        # нельзя, поэтому здесь отказ, а не тихое удаление.
+        return {"ok": False, "errors": [{
+            "field": "steps",
+            "error": f"Шаг {sid} пропал из данных — сначала «снять», не убирать так"}
+            for sid in пропали]}
+
+    новое_название = data.get("title", task["path"].stem).strip()
+    если_переименовано = новое_название != task["path"].stem
+    if если_переименовано:
+        новый_путь = TASKS_DIR / f"{новое_название}.md"
+        if новый_путь.exists():
+            return {"ok": False,
+                    "errors": [{"field": "title", "error": "Файл уже существует"}]}
+
+    save(task, today)
+    if если_переименовано:
+        # Переименование — это перемещение файла, save() уже дописал содержимое
+        # по старому пути; переносим следом, чтобы не потерять данные между
+        # двумя операциями, если вторая сорвётся.
+        os.replace(task["path"], новый_путь)
+        task["path"] = новый_путь
+
+    return {"ok": True, "task": task["path"].stem, "status": task["meta"]["status"],
+            "steps": len(task["meta"]["steps"])}
+
+
+def cmd_cancel(args, today):
+    """Отменить задачу целиком — раздел 6.3 ТЗ, кнопка «Отменить задачу».
+
+    Не «снять» (это про один шаг) и не удаление (файл и история остаются).
+    Отменённая задача перестаёт быть просроченной или ждущей: её статус
+    вычисляется первым делом в `task_status`, раньше любого правила про шаги.
+    """
+    task = find_task(args.task)
+    if task["meta"].get("cancelled"):
+        sys.exit(f"задача «{task['path'].stem}» уже отменена")
+    task["meta"]["cancelled"] = True
+    task["meta"]["cancelled_reason"] = (getattr(args, "reason", None) or "").strip() or None
+    save(task, today)
+    return {"ok": True, "task": task["path"].stem, "status": task["meta"]["status"]}
+
+
+def cmd_delete(args, today):
+    """Удалить задачу насовсем. Подтверждение — дело интерфейса, не движка:
+    здесь только сам необратимый шаг."""
+    task = find_task(args.task)
+    task["path"].unlink()
+    return {"ok": True, "task": task["path"].stem, "deleted": True}
+
+
+def cmd_reopen(args, today):
+    """Отменить закрытие последнего сделанного шага — раздел 6.3.5 ТЗ:
+    задача закрывается автоматически, «показывается подтверждение с
+    возможностью отменить». Открывает конкретный шаг, не «последний вообще»:
+    порядок закрытия и порядок в списке могут не совпасть при провале/снятии
+    более раннего шага.
+    """
+    task = find_task(args.task)
+    step = get_step(task, args.step)
+    if step.get("status") != DONE:
+        sys.exit(f"шаг {args.step} не был сделан (сейчас: {step.get('status')})")
+    step["status"] = OPEN
+    step["completed_date"] = None
+    log_event(step, "reopened", today)
+    save(task, today)
+    return {"ok": True, "task": task["path"].stem, "step": args.step,
+            "task_status": task["meta"]["status"]}
 
 
 def _recurrence_view(шаблон):
@@ -995,7 +1315,13 @@ def cmd_list(args, today):
 
 
 def cmd_show(args, today):
+    """Задача целиком — для карточки. `state` шага (просрочен/сегодня/ждёт)
+    считается тут же, а не на странице: карточка не знает про рабочее время
+    и не должна вычислять просрочку сама, тот же принцип, что у ленты.
+    """
     task = find_task(args.task)
+    now = _now(args, today)
+    work = _work(args)
     return {
         "task": task["path"].stem,
         "status": task_status(task, today),
@@ -1003,7 +1329,9 @@ def cmd_show(args, today):
         "steps": [
             {**{k: (str(v) if isinstance(v, (date, datetime)) else v)
                 for k, v in s.items() if k != "log"},
-             "log": s.get("log") or []}
+             "log": s.get("log") or [],
+             "state": (worktime.due_state(s.get("control_date"), now, work)
+                       if not is_closed(s) else None)}
             for s in steps_of(task)
         ],
     }
@@ -1299,6 +1627,27 @@ def main():
     c = sub.add_parser("create", help="завести задачу из JSON (её же зовёт форма)")
     c.add_argument("json", help='JSON или "-" для stdin')
     c.set_defaults(func=cmd_create)
+
+    u = sub.add_parser("update", help="править задачу из JSON — карточка, не статусы шагов")
+    u.add_argument("task")
+    u.add_argument("json", help='JSON или "-" для stdin')
+    u.add_argument("--force", action="store_true",
+                   help="разрешить пропажу шага из данных без явного «снять»")
+    u.set_defaults(func=cmd_update)
+
+    cn = sub.add_parser("cancel", help="отменить задачу целиком")
+    cn.add_argument("task")
+    cn.add_argument("--reason")
+    cn.set_defaults(func=cmd_cancel)
+
+    dl = sub.add_parser("delete", help="удалить задачу насовсем")
+    dl.add_argument("task")
+    dl.set_defaults(func=cmd_delete)
+
+    ro = sub.add_parser("reopen", help="отменить закрытие шага (сделан → снова открыт)")
+    ro.add_argument("task")
+    ro.add_argument("step")
+    ro.set_defaults(func=cmd_reopen)
 
     s = sub.add_parser("show", help="одна задача целиком")
     s.add_argument("task")
