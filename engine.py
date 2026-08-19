@@ -49,13 +49,24 @@ import backup
 import kb
 import recurrence as rec
 import settings as cfg
+import store
 import templates as tpl
 import worktime
 
 SCHEMA = 1
 VAULT = Path(os.environ.get("YUNGDRUNG_VAULT", Path(__file__).resolve().parent))
-TASKS_DIR = VAULT / "Задачи"
 KB_DIR = VAULT / "База"
+
+
+def db_path():
+    """Путь к базе. Функция, а не константа — по той же причине, что и
+    `get_reasons()` ниже: `VAULT` в тестах подменяют через monkeypatch уже
+    после импорта, и захардкоженный путь эту подмену не увидит."""
+    return VAULT / "вольт.db"
+
+
+def get_store():
+    return store.Store(db_path())
 
 OPEN = "pending"
 DONE = "done"
@@ -152,30 +163,16 @@ def write_file(path, meta, body):
         raise
 
 
-# Файлы, которые не удалось разобрать при последнем чтении вольта. Собираются
-# здесь, чтобы попасть в JSON, а не только в stderr: заказчик правит шаги руками,
-# и опечатка в YAML не должна означать, что задача молча исчезла из трекера и из
-# утренней сборки. Молчаливая потеря опаснее падения — падение хотя бы заметно.
+# Задачи теперь читает store.py — SQLite не оставляет полуразобранных строк
+# так, как правленный руками YAML оставлял полуразобранные файлы. Список остаётся
+# (всегда пустой) ради стабильности формы ответа: `cmd_feed`/`cmd_backlog`/
+# `cmd_next`/`cmd_list`/`cmd_refresh` отдают "broken" по контракту, и снимать
+# ключ без отдельного решения — не эта задача.
 BROKEN = []
 
 
 def load_tasks():
-    if not TASKS_DIR.is_dir():
-        sys.exit(f"нет папки задач: {TASKS_DIR}")
-    BROKEN.clear()
-    out = []
-    for path in sorted(TASKS_DIR.glob("*.md")):
-        try:
-            meta, body = parse_file(path)
-        except Exception as e:
-            reason = " ".join(str(e).split())[:200]
-            BROKEN.append({"file": path.name, "error": reason})
-            print(f"[не разобран {path.name}: {reason}]", file=sys.stderr)
-            continue
-        if meta.get("type") != "task":
-            continue
-        out.append({"path": path, "meta": meta, "body": body})
-    return out
+    return get_store().load_tasks()
 
 
 def find_task(fragment):
@@ -389,47 +386,41 @@ def put_steps_into_body(body, block):
     return block + "\n\n" + body.lstrip("\n") if body.strip() else block + "\n"
 
 
-def save(task, today, force=True):
-    """Статус и сводка пересчитываются при каждой записи, руками их никто не ставит.
+def task_summary(task, today):
+    """status/current_step/control_date/stalled/progress — сводка верхнего
+    уровня, которую `save()` мержит в `task["meta"]` перед возвратом.
 
-    Сводка дублирует то, что и так лежит в шагах, но Bases читает только свойства
-    верхнего уровня и внутрь массива шагов не заглядывает. Без этих полей таблица
-    в Obsidian показывает одни имена файлов. Источник правды остаётся в шагах:
-    всё, что здесь, вычисляется заново при каждой записи.
+    Отдельная функция, а не кусок внутри save(): раньше сводку было видно
+    только прочитав только что написанный файл, теперь — сразу после чтения
+    из БД её там нет (колонок под неё нет, source of truth в шагах). Тестам и
+    любому будущему коду, которому нужен «файл как он раньше выглядел бы»,
+    нужен ровно этот пересчёт, а не второе его написание.
     """
-    meta = task["meta"]
     steps = steps_of(task)
     step = current_step(task)
     closed = sum(1 for s in steps if is_closed(s))
-
-    summary = {
-        "schema": SCHEMA,
+    return {
         "status": STATUS_RU[task_status(task, today)],
         "current_step": step.get("title") if step else None,
         "control_date": as_date(step.get("control_date")) if step else None,
         "stalled": stall_count(step) if step else 0,
         "progress": f"{closed}/{len(steps)}" if steps else None,
     }
-    body = put_steps_into_body(task["body"], render_steps(task, today))
-    changed = (any(meta.get(k) != v for k, v in summary.items())
-               or body != task["body"])
-    meta.update(summary)
-    task["body"] = body
 
-    # Порядок полей задаём явно: в редакторе свойств Obsidian сводка должна быть
-    # сверху, а длинный массив шагов — в конце, иначе статуса не видно за простынёй.
-    head = ["schema", "type", "title", "created", "start_date", "status",
-            "cancelled", "cancelled_reason", "current_step", "control_date",
-            "progress", "stalled", "tags"]
-    ordered = {k: meta[k] for k in head if k in meta}
-    ordered.update({k: v for k, v in meta.items() if k not in head and k != "steps"})
-    if "steps" in meta:
-        ordered["steps"] = meta["steps"]
-    task["meta"] = ordered
 
-    if changed or force:
-        write_file(task["path"], ordered, body)
-    return changed
+def save(task, today):
+    """Статус и сводка пересчитываются при каждой записи, руками их никто не ставит.
+
+    Сводка в БД не хранится вообще — колонок под неё нет, это была чистая
+    денормализация под таблицу Obsidian Bases. Здесь она по-прежнему мержится в
+    `task["meta"]`, потому что вызывающий код (`cmd_update`/`cmd_cancel`/
+    `cmd_reopen` и другие) читает `task["meta"]["status"]` сразу после save() —
+    источник правды остаётся в шагах, а это просто удобный снимок для JSON.
+    """
+    meta = task["meta"]
+    meta["schema"] = SCHEMA
+    meta.update(task_summary(task, today))
+    get_store().save_task(task, today)
 
 
 # --- команды ---------------------------------------------------------------
@@ -729,13 +720,16 @@ def parse_date_input(text, today):
     return as_date(s)  # ISO и всё, что понимает datetime.fromisoformat
 
 
-# Windows не пускает эти символы в имена файлов, а имя задачи — это имя файла.
-# Проверяем и на маке тоже: вольт уезжает на Windows, и задача, заведённая здесь,
-# должна там открыться.
+# После переезда на SQLite название задачи больше не имя файла — ограничение
+# сохранено, но теперь по другой причине. `|` занят синтаксисом piped-ссылок
+# базы знаний (`[[Название|как написано]]`), `\/:*?"<>` в названии задачи
+# нечитаемы и мешали бы будущим выгрузкам (Excel режет такие символы в именах
+# листов). Осознанное продуктовое правило, не отпечаток файловой системы.
 FORBIDDEN_IN_NAME = set('\\/:*?"<>|')
 
-# Имя файла целиком (с расширением и путём) на Windows ограничено 260 символами.
-# С запасом на путь к вольту берём предел на само название.
+# Экран не резиновый: 120 символов — предел, после которого название в ленте
+# и в списке шагов перестаёт помещаться в строку, а не ограничение файловой
+# системы (тем оно и было раньше, для markdown-файлов).
 MAX_TITLE = 120
 
 
@@ -822,7 +816,7 @@ def validate_new_task(data, existing_names, today):
     elif set(title) & FORBIDDEN_IN_NAME:
         плохие = "".join(sorted(set(title) & FORBIDDEN_IN_NAME))
         errors.append({"field": "title",
-                       "error": f"В названии нельзя символы {плохие} — это имя файла"})
+                       "error": f"В названии нельзя символы {плохие}"})
     elif title.lower() in {n.lower() for n in existing_names}:
         errors.append({"field": "title",
                        "error": "Задача с таким названием уже есть"})
@@ -920,13 +914,15 @@ def cmd_create(args, today):
         return {"ok": False, "errors": errors}
 
     meta = build_task(data, today)
-    path = TASKS_DIR / f"{meta['title']}.md"
-    if path.exists():
-        return {"ok": False, "errors": [{"field": "title", "error": "Файл уже существует"}]}
-
-    task = {"path": path, "meta": meta, "body": (data.get("body") or "").strip() + "\n"}
-    save(task, today)
-    return {"ok": True, "task": path.stem, "path": str(path),
+    # `path` — раньше был предвычисленный путь к файлу, теперь задачи ещё нет
+    # в БД, значит нет и id. save() увидит path=None, заведёт новую строку и
+    # сам подставит сюда TaskRef с настоящим id.
+    task = {"path": None, "meta": meta, "body": (data.get("body") or "").strip() + "\n"}
+    try:
+        save(task, today)
+    except store.DuplicateTitle:
+        return {"ok": False, "errors": [{"field": "title", "error": "Задача с таким названием уже есть"}]}
+    return {"ok": True, "task": task["path"].stem,
             "steps": len(meta["steps"]), "status": task["meta"]["status"]}
 
 
@@ -993,7 +989,7 @@ def validate_task_edit(task, data, existing_names, today):
     elif set(title) & FORBIDDEN_IN_NAME:
         плохие = "".join(sorted(set(title) & FORBIDDEN_IN_NAME))
         errors.append({"field": "title",
-                       "error": f"В названии нельзя символы {плохие} — это имя файла"})
+                       "error": f"В названии нельзя символы {плохие}"})
     elif title.lower() in {n.lower() for n in свои}:
         errors.append({"field": "title",
                        "error": "Задача с таким названием уже есть"})
@@ -1082,21 +1078,16 @@ def cmd_update(args, today):
             "error": f"Шаг {sid} пропал из данных — сначала «снять», не убирать так"}
             for sid in пропали]}
 
-    новое_название = data.get("title", task["path"].stem).strip()
-    если_переименовано = новое_название != task["path"].stem
-    if если_переименовано:
-        новый_путь = TASKS_DIR / f"{новое_название}.md"
-        if новый_путь.exists():
-            return {"ok": False,
-                    "errors": [{"field": "title", "error": "Файл уже существует"}]}
-
-    save(task, today)
-    if если_переименовано:
-        # Переименование — это перемещение файла, save() уже дописал содержимое
-        # по старому пути; переносим следом, чтобы не потерять данные между
-        # двумя операциями, если вторая сорвётся.
-        os.replace(task["path"], новый_путь)
-        task["path"] = новый_путь
+    # Переименование раньше значило перенос файла — os.replace после записи,
+    # отдельная проверка «файл уже существует» до неё. У задачи-строки id не
+    # меняется от смены title, так что переименование — то же самое save(),
+    # что и любая другая правка; `validate_task_edit` уже проверила название
+    # на совпадение с другими задачами, UNIQUE(title) в БД — подстраховка от
+    # гонки, а не источник этой проверки.
+    try:
+        save(task, today)
+    except store.DuplicateTitle:
+        return {"ok": False, "errors": [{"field": "title", "error": "Задача с таким названием уже есть"}]}
 
     return {"ok": True, "task": task["path"].stem, "status": task["meta"]["status"],
             "steps": len(task["meta"]["steps"])}
@@ -1122,7 +1113,7 @@ def cmd_delete(args, today):
     """Удалить задачу насовсем. Подтверждение — дело интерфейса, не движка:
     здесь только сам необратимый шаг."""
     task = find_task(args.task)
-    task["path"].unlink()
+    get_store().delete_task(task["path"].id)
     return {"ok": True, "task": task["path"].stem, "deleted": True}
 
 
@@ -1239,11 +1230,11 @@ def _create_task_from_data(данные, today, existing=None):
         return None, errors
 
     meta = build_task(данные, today)
-    path = TASKS_DIR / f"{meta['title']}.md"
-    if path.exists():
-        return None, [{"field": "title", "error": "Файл уже существует"}]
-    задача = {"path": path, "meta": meta, "body": (данные.get("body") or "").strip() + "\n"}
-    save(задача, today)
+    задача = {"path": None, "meta": meta, "body": (данные.get("body") or "").strip() + "\n"}
+    try:
+        save(задача, today)
+    except store.DuplicateTitle:
+        return None, [{"field": "title", "error": "Задача с таким названием уже есть"}]
     return задача, None
 
 
@@ -1414,18 +1405,24 @@ def cmd_template_from_task(args, today):
 def cmd_refresh(args, today):
     """Пересчитать сводку во всех задачах.
 
-    Статус в файле устаревает сам по себе: задача становится просроченной оттого,
-    что прошёл день, а не оттого, что кто-то её трогал. Гонять перед утренней
-    сборкой. Файлы, где ничего не изменилось, не переписываются — иначе каждое утро
-    получаем холостой коммит и перезагрузку вольта в Obsidian.
+    Статус устаревает сам по себе: задача становится просроченной оттого, что
+    прошёл день, а не оттого, что кто-то её трогал. Гонять перед утренней
+    сборкой.
+
+    Раньше второй прогон в тот же день не трогал ни одного файла: сводка
+    сравнивалась с тем, что уже лежало на диске, — экономило запись и не
+    заставляло Obsidian переиндексировать вольт впустую. В БД сравнивать не с
+    чем: сводка нигде не хранится (колонок под неё нет, source of truth в
+    шагах), поэтому каждый refresh честно пересчитывает и отдаёт всё заново, а
+    не только «изменившееся». `--force` остался в контракте ответа, но
+    поведение больше не меняет — запись каждый раз одна и та же дешёвая
+    операция.
     """
     touched = []
     for task in load_tasks():
-        changed = save(task, today, force=args.force)
-        if changed or args.force:
-            touched.append({"task": task["path"].stem,
-                            "status": task["meta"]["status"],
-                            "changed": changed})
+        save(task, today)
+        touched.append({"task": task["path"].stem,
+                        "status": task["meta"]["status"], "changed": True})
     return {"today": today.isoformat(), "written": touched, "count": len(touched),
             "forced": bool(args.force), "broken": list(BROKEN)}
 
@@ -1455,16 +1452,22 @@ def cmd_show(args, today):
     карточки ему делать нечего. Без `body` в ответе карточка показывала пустую
     заметку и отправляла эту пустоту обратно при первом же сохранении —
     заметка заказчика стиралась, хотя он её не трогал.
+
+    Сводка (status/current_step/control_date/progress/stalled) в БД не хранится
+    (см. save()), значит `task["meta"]` из Store.load_tasks() её не несёт —
+    домешиваем `task_summary()` тем же приёмом, что и save(), иначе карточка
+    получала бы задачу без срока и прогресса.
     """
     task = find_task(args.task)
     now = _now(args, today)
     work = _work(args)
     заметка, _ = _strip_steps_block(task["body"])
+    meta = {**task["meta"], **task_summary(task, today)}
     return {
         "task": task["path"].stem,
-        "status": task_status(task, today),
+        "status": task_status(task, today),   # английский, для сравнений в JS
         "body": заметка.strip(),
-        "meta": {k: v for k, v in task["meta"].items() if k != "steps"},
+        "meta": {k: v for k, v in meta.items() if k != "steps"},  # meta["status"] — русский
         "steps": [
             {**{k: (str(v) if isinstance(v, (date, datetime)) else v)
                 for k, v in s.items() if k != "log"},
@@ -1958,24 +1961,12 @@ def rename_tag_everywhere(old_name, new_name, today=None):
     и `settings.merge_tags`: те трогают только справочник (цвет, закрепление),
     а сами задачи settings.py не видит — про хранилище знает только движок.
 
-    Дубликаты после замены схлопываются: если на задаче уже стоял new_name
-    (типичный случай слияния двух тегов), второй раз его не добавляем.
+    Строки задач эта функция больше не переписывает: `tags`/`task_tags` в БД
+    хранят тег через id, а не строкой на самой задаче, так что и переименование,
+    и слияние — операции только над справочником `tags`, ни одной задачи не
+    касаются. См. `store.Store.rename_tag_everywhere`.
     """
-    today = today or date.today()
-    задето = 0
-    for задача in load_tasks():
-        теги = задача["meta"].get("tags") or []
-        if old_name not in теги:
-            continue
-        новые = []
-        for t in теги:
-            имя = new_name if t == old_name else t
-            if имя not in новые:
-                новые.append(имя)
-        задача["meta"]["tags"] = новые
-        save(задача, today)
-        задето += 1
-    return задето
+    return get_store().rename_tag_everywhere(old_name, new_name)
 
 
 def main():

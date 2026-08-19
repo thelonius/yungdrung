@@ -401,8 +401,8 @@ def main():
     ap.add_argument("--no-open", action="store_true", help="не открывать браузер")
     args = ap.parse_args()
 
-    if not engine.TASKS_DIR.is_dir():
-        sys.exit(f"нет папки задач: {engine.TASKS_DIR}")
+    if not engine.VAULT.is_dir():
+        sys.exit(f"нет папки вольта: {engine.VAULT}")
 
     адрес = f"http://127.0.0.1:{args.port}/"
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
