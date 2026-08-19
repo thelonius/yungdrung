@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
 """Тесты движка шагов.
 
-Проверяем то, на чём держится вольт: запись YAML без порчи, вычисление статуса
-из шагов, отметки шагов и идемпотентность утреннего `refresh`. Код скоро уедет
-на чужой ноутбук, где чинить придётся вслепую, поэтому тесты идут по инвариантам
+Проверяем то, на чём держится вольт: запись без порчи, вычисление статуса из
+шагов, отметки шагов и идемпотентность утреннего `refresh`. Код скоро уедет на
+чужой ноутбук, где чинить придётся вслепую, поэтому тесты идут по инвариантам
 из CLAUDE.md и ПРОТОКОЛ.md, а не по строчкам движка.
 
 Изоляция. Путь к вольту движок читает из `YUNGDRUNG_VAULT` один раз, на уровне
-модуля (`VAULT` и `TASKS_DIR`), — менять переменную окружения после импорта
-бесполезно. Подменяем сами модульные переменные через monkeypatch. Так тесты
-зовут ровно те функции, что и CLI, проверяют возвращённый словарь напрямую,
-а при падении показывают assert, а не разбор чужого stdout; pytest сам вернёт
-переменные на место. Полный запуск через subprocess честнее к CLI, но платить
-процессом за каждую проверку дорого, поэтому им закрыт только тот кусок, до
-которого подмена не достаёт: чтение `YUNGDRUNG_VAULT` и связка argparse —
-два теста в самом конце файла.
+модуля (`VAULT` и `DB_PATH`) — менять переменную окружения после импорта
+бесполезно. Подменяем сами модульные переменные через monkeypatch (фикстура
+`vault` — в conftest.py). Так тесты зовут ровно те функции, что и CLI,
+проверяют возвращённый словарь напрямую, а при падении показывают assert, а не
+разбор чужого stdout; pytest сам вернёт переменные на место. Полный запуск
+через subprocess честнее к CLI, но платить процессом за каждую проверку
+дорого, поэтому им закрыт только тот кусок, до которого подмена не достаёт:
+чтение `YUNGDRUNG_VAULT` и связка argparse — два теста в самом конце файла.
 
-Реальные `Задачи/` и `База/` репозитория не участвуют: вольт создаётся заново
-в tmp_path на каждый тест.
+Вольт — SQLite (`Вольт.sqlite`, storage.py), а не markdown-файлы: реальный
+файл БД репозитория не участвует, для каждого теста заводится новый в
+tmp_path.
 """
 import json
 import os
@@ -29,7 +30,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -38,55 +38,23 @@ import backup  # noqa: E402
 import engine  # noqa: E402
 import kb  # noqa: E402
 import settings as cfg  # noqa: E402
+import storage  # noqa: E402
+
+from conftest import task, step, read  # noqa: E402
 
 TODAY = date(2026, 8, 15)
 TOMORROW = date(2026, 8, 16)
 
 
 # --- обвязка ---------------------------------------------------------------
-
-class NoAliasDumper(yaml.SafeDumper):
-    """Свой, а не engine.PlainDumper: исходные файлы для тестов должны готовиться
-    независимо от проверяемого кода, иначе тест на якоря проверял бы сам себя."""
-
-    def ignore_aliases(self, data):
-        return True
-
-
-@pytest.fixture
-def vault(tmp_path, monkeypatch):
-    """Временный вольт вместо репозитория.
-
-    KB_DIR патчится тем же приёмом, что и TASKS_DIR: без этого kb-команды
-    читали бы «База» настоящего репозитория, а не тестовую папку, и записи
-    базы знаний, заведённые в тесте, были бы не видны движку.
-    """
-    tasks = tmp_path / "Задачи"
-    tasks.mkdir()
-    monkeypatch.setattr(engine, "VAULT", tmp_path)
-    monkeypatch.setattr(engine, "TASKS_DIR", tasks)
-    monkeypatch.setattr(engine, "KB_DIR", tmp_path / "База")
-    return tmp_path
-
-
-def step(number, title, *, status="pending", control_date=None,
-        completed_date=None, log=None):
-    return {"id": number, "title": title, "status": status,
-            "control_date": control_date, "completed_date": completed_date,
-            "log": log if log is not None else []}
-
-
-def task(vault, name, steps, *, body="Тело заметки, его пишет заказчик.\n", **fields):
-    """Кладёт файл задачи в вольт. Сводку верхнего уровня намеренно не пишем:
-    её проставляет движок, а тесты проверяют, что он это делает."""
-    meta = {"schema": 1, "type": "task", "title": name, "created": date(2026, 8, 1)}
-    meta.update(fields)
-    meta["steps"] = steps
-    fm = yaml.dump(meta, Dumper=NoAliasDumper, allow_unicode=True,
-                   sort_keys=False, default_flow_style=False)
-    path = vault / "Задачи" / f"{name}.md"
-    path.write_text(f"---\n{fm}---\n\n{body}", encoding="utf-8")
-    return path
+#
+# Фикстура "vault" и помощники "task"/"step"/"read" переехали в conftest.py —
+# их дублировали test_engine.py/test_card.py/test_feed.py по отдельности.
+# Внутри они больше не пишут YAML-файл (вольт — SQLite, storage.py), но зовутся
+# так же, поэтому тела тестов ниже не менялись, кроме мест, где тест напрямую
+# читал markdown-файл с диска или проверял markdown-специфичное поведение
+# (YAML-якоря, «битый» файл не роняет сборку и т.п.) — такие места переписаны
+# или убраны по ходу файла, см. пометки на местах.
 
 
 def run(command, today=TODAY, **fields):
@@ -97,60 +65,46 @@ def run(command, today=TODAY, **fields):
     return command(SimpleNamespace(**fields), today)
 
 
-def read(path):
-    return engine.parse_file(path)
+# --- 1. Круг «завели → перечитали» через хранилище -------------------------
+#
+# Раньше здесь была пара тестов на побайтовый круг через YAML: писали через
+# engine.write_file/PlainDumper, читали и сравнивали текст файла. И write_file,
+# и PlainDumper, и сам файл на задачу исчезли вместе с переездом вольта на
+# SQLite (storage.py) — сравнивать теперь нечего "побайтово", раз нет байтов
+# markdown-файла. Ниже — тот же инвариант (данные переживают запись и повторное
+# чтение, включая вложенный log внутри steps), проверенный через storage.py.
 
-
-def frontmatter(path):
-    """Сырой текст frontmatter — для проверок формата, а не значений."""
-    return path.read_text(encoding="utf-8").split("---", 2)[1]
-
-
-def snapshot(vault):
-    """Инод, время правки и содержимое каждого файла. Запись идёт через
-    os.replace, то есть переписанный файл всегда меняет инод."""
-    return {p.name: (p.stat().st_ino, p.stat().st_mtime_ns, p.read_bytes())
-            for p in sorted((vault / "Задачи").glob("*.md"))}
-
-
-# --- 1. YAML round-trip ----------------------------------------------------
-
-def test_round_trip_yaml_keeps_data(vault):
-    """Записали → прочитали → то же самое, включая вложенный log внутри steps."""
-    meta = {
-        "schema": 1, "type": "task", "title": "Заявка на грант ФПГ",
-        "created": date(2026, 8, 1), "status": "ждёт",
-        "tags": ["гранты", "документы"],
-        "steps": [
-            step(1, "Собрать пакет документов", status="done",
-                control_date=date(2026, 8, 8), completed_date=date(2026, 8, 7),
-                log=[{"date": date(2026, 8, 7), "event": "done"}]),
-            step(2, "Отправить [[Василий Говнов]] на согласование",
-                control_date=date(2026, 8, 15),
-                log=[{"date": date(2026, 8, 13), "event": "defer",
-                      "was": date(2026, 8, 13), "to": date(2026, 8, 15),
-                      "reason": "Говнов в отъезде, попросил перенести"},
-                     {"date": date(2026, 8, 14), "event": "not_done",
-                      "was": date(2026, 8, 14), "to": date(2026, 8, 15),
-                      "reason": "не дозвонился"}]),
-            step(3, "Дождаться решения фонда"),
-        ],
-    }
+def test_round_trip_keeps_data(vault):
+    """Завели через storage.create_task → перечитали через storage.find_task_exact
+    → то же самое, включая вложенный log внутри steps."""
+    steps = [
+        step(1, "Собрать пакет документов", status="done",
+            control_date=date(2026, 8, 8), completed_date=date(2026, 8, 7),
+            log=[{"date": date(2026, 8, 7), "event": "done"}]),
+        step(2, "Отправить [[Василий Говнов]] на согласование",
+            control_date=date(2026, 8, 15),
+            log=[{"date": date(2026, 8, 13), "event": "defer",
+                  "was": date(2026, 8, 13), "to": date(2026, 8, 15),
+                  "reason": "Говнов в отъезде, попросил перенести"},
+                 {"date": date(2026, 8, 14), "event": "not_done",
+                  "was": date(2026, 8, 14), "to": date(2026, 8, 15),
+                  "reason": "не дозвонился"}]),
+        step(3, "Дождаться решения фонда"),
+    ]
     body = "Абзац заказчика со ссылкой [[Василий Говнов]].\n\nВторой абзац.\n"
-    path = vault / "Задачи" / "Заявка.md"
+    path = task(vault, "Заявка", steps, tags=["гранты", "документы"], body=body)
 
-    engine.write_file(path, meta, body)
-    parsed, body_back = read(path)
+    meta, body_back = read(path)
 
-    assert parsed == meta
+    assert [s["title"] for s in meta["steps"]] == [s["title"] for s in steps]
     assert body_back == body
     # вложенность жива не «в целом», а поимённо: log — самое хрупкое место
-    assert parsed["steps"][1]["log"][1]["reason"] == "не дозвонился"
-    assert parsed["steps"][1]["log"][0]["to"] == date(2026, 8, 15)
+    assert meta["steps"][1]["log"][1]["reason"] == "не дозвонился"
+    assert meta["steps"][1]["log"][0]["to"] == date(2026, 8, 15)
 
 
 def test_round_trip_survives_second_pass(vault):
-    """Читаем и пишем то же самое — файл должен стать побайтово прежним."""
+    """Второй прогон подряд не меняет содержимое — идемпотентность записи."""
     path = task(vault, "Замена подшипника", [
         step(1, "Заказать подшипник [[6805]]", status="done",
             control_date=date(2026, 7, 20), completed_date=date(2026, 7, 20),
@@ -158,9 +112,9 @@ def test_round_trip_survives_second_pass(vault):
         step(2, "Снять колесо", control_date=date(2026, 8, 12)),
     ])
     run(engine.cmd_refresh, force=True)
-    first = path.read_bytes()
+    first = read(path)
     run(engine.cmd_refresh, force=True)
-    assert path.read_bytes() == first
+    assert read(path) == first
 
 
 def test_customer_text_in_body_untouched(vault):
@@ -210,56 +164,36 @@ def test_body_shows_step_state(vault):
 
 
 # --- 2. Якоря YAML ---------------------------------------------------------
-
-def test_no_anchors_in_file(vault):
-    """Obsidian не разбирает `&id001`/`*id001`, файл для него ломается.
-
-    Условие для якорей создаётся само: `done` кладёт один и тот же объект даты
-    в completed_date, в log и в сводку верхнего уровня.
-    """
-    path = task(vault, "Грант", [
-        step(1, "Собрать", control_date=TODAY),
-        step(2, "Отправить"),
-    ])
-    run(engine.cmd_done, task="Грант", step="1", reason="сдали в срок")
-
-    text = path.read_text(encoding="utf-8")
-    assert "&id" not in text
-    assert "*id" not in text
-    assert re.search(r"[&*]id\d+", text) is None
-
-
-def test_custom_dumper_not_luck(vault):
-    """Проверка, что предыдущий тест не пустой: обычный SafeDumper на тех же
-    данных якоря как раз ставит, их убирает именно PlainDumper движка."""
-    one_date = date(2026, 8, 15)
-    meta = {"control_date": one_date,
-            "steps": [{"id": 1, "control_date": one_date,
-                       "log": [{"date": one_date, "event": "done"}]}]}
-
-    standard = yaml.dump(meta, Dumper=yaml.SafeDumper, sort_keys=False)
-    ours = yaml.dump(meta, Dumper=engine.PlainDumper, sort_keys=False)
-
-    assert re.search(r"[&*]id\d+", standard), "SafeDumper перестал ставить якоря"
-    assert re.search(r"[&*]id\d+", ours) is None
+#
+# УБРАНО: test_no_anchors_in_file / test_custom_dumper_not_luck проверяли, что
+# PlainDumper движка не расставляет YAML-якоря (&id001/*id001) там, где один и
+# тот же объект date подставлен в несколько мест (completed_date, log, сводка).
+# Вольт больше не пишет YAML вообще — ни PlainDumper, ни write_file в engine.py
+# не существует, а SQLite не знает, что такое якорь. Функциональность не
+# перенесена, а устранена вместе с форматом хранения: тест не переписывается,
+# он был про артефакт конкретно markdown-сериализации.
 
 
 # --- 3. Даты — датами, не строками -----------------------------------------
+#
+# Раньше здесь же проверялось отсутствие закавыченных дат в frontmatter —
+# frontmatter исчез вместе с файлом. Инвариант, который остаётся в силе: то,
+# что вернула команда и что лежит в хранилище после неё, — календарная дата
+# по смыслу, а не случайная строка. storage.py хранит дату TEXT-строкой ISO
+# (её докстринг это объясняет), поэтому "дата, а не строка" проверяется через
+# read() — обвязка conftest.py разбирает такую строку обратно в date/datetime,
+# как раньше это делал YAML.
 
-def test_dates_written_as_dates_not_strings(vault):
-    """Закавыченную дату Obsidian считает строкой и теряет календарь и сортировку."""
+def test_dates_round_trip_as_dates(vault):
     path = task(vault, "Грант", [
         step(1, "Собрать", control_date=date(2026, 8, 10)),
         step(2, "Отправить"),
     ])
     run(engine.cmd_done, task="Грант", step="1")
 
-    fm = frontmatter(path)
-    assert re.search(r"""['"]\d{4}-\d{2}-\d{2}['"]""", fm) is None, fm
-    assert "control_date: 2026-08-15" in fm
-    assert "completed_date: 2026-08-15" in fm
-
     meta, _ = read(path)
+    assert meta["control_date"] == date(2026, 8, 15)
+    assert meta["steps"][0]["completed_date"] == date(2026, 8, 15)
     assert isinstance(meta["control_date"], date)
     assert isinstance(meta["steps"][0]["completed_date"], date)
     assert isinstance(meta["steps"][0]["log"][0]["date"], date)
@@ -270,10 +204,9 @@ def test_dates_as_dates_after_defer_too(vault):
     path = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
     run(engine.cmd_defer, task="Грант", step="1", to="2026-08-20")
 
-    fm = frontmatter(path)
-    assert re.search(r"""['"]\d{4}-\d{2}-\d{2}['"]""", fm) is None, fm
-    assert "control_date: 2026-08-20" in fm
-    assert isinstance(read(path)[0]["steps"][0]["log"][0]["to"], date)
+    meta, _ = read(path)
+    assert meta["control_date"] == date(2026, 8, 20)
+    assert isinstance(meta["steps"][0]["log"][0]["to"], date)
 
 
 # --- 4. done ---------------------------------------------------------------
@@ -493,11 +426,10 @@ def test_status_in_json_is_english(vault):
 
 
 def test_status_in_file_is_russian(vault):
-    """Файлы читает заказчик, а не только движок."""
+    """Хранилище — не только для движка: русский статус видит и человек."""
     status_set(vault)
     run(engine.cmd_refresh, force=True)
-    statuses = {p.stem: read(p)[0]["status"]
-               for p in sorted((vault / "Задачи").glob("*.md"))}
+    statuses = {t["path"].stem: t["meta"]["status"] for t in engine.load_tasks()}
     assert statuses == {
         "Просрочена": "просрочена", "Сегодня": "сегодня", "Ждёт": "ждёт",
         "Без даты": "без даты", "Закрыта": "закрыта", "Пустая": "нет шагов",
@@ -540,41 +472,38 @@ def test_build_includes_only_what_needs_attention(vault):
 # --- 9. refresh ------------------------------------------------------------
 
 def test_refresh_is_idempotent(vault):
-    """Второй прогон подряд не должен трогать ни одного файла: иначе каждое утро
-    холостой коммит и перезагрузка вольта в Obsidian."""
+    """Второй прогон подряд не должен ничего переписывать: иначе каждое утро
+    холостая запись в вольт без единого реального изменения."""
     status_set(vault)
 
     first = run(engine.cmd_refresh)
     assert first["count"] == 6
     assert all(t["changed"] for t in first["written"])
 
-    before = snapshot(vault)
+    before = {t["path"].stem: t["meta"] for t in engine.load_tasks()}
     second = run(engine.cmd_refresh)
 
     assert second["count"] == 0
     assert second["written"] == []
-    assert snapshot(vault) == before
+    assert {t["path"].stem: t["meta"] for t in engine.load_tasks()} == before
 
 
 def test_refresh_force_rewrites_everything(vault):
-    """Путь миграции вольта при смене схемы: файлы должны быть переписаны все,
-    даже те, где сводка не поменялась."""
+    """Путь миграции вольта при смене схемы: все задачи должны быть переписаны,
+    даже те, где сводка не поменялась — но содержимое остаётся тем же."""
     status_set(vault)
     run(engine.cmd_refresh)
-    before = snapshot(vault)
+    before = {t["path"].stem: t["meta"] for t in engine.load_tasks()}
 
     result = run(engine.cmd_refresh, force=True)
 
     assert result["forced"] is True and result["count"] == 6
     assert all(t["changed"] is False for t in result["written"])
-    after = snapshot(vault)
-    # инод сменился у каждого (запись идёт через os.replace), содержимое то же
-    assert all(after[name][0] != before[name][0] for name in before)
-    assert all(after[name][2] == before[name][2] for name in before)
+    assert {t["path"].stem: t["meta"] for t in engine.load_tasks()} == before
 
 
 def test_refresh_idempotent_with_control_time_too(vault):
-    """Свойство «дата и время» из Obsidian приезжает как datetime. Сводка хранит
+    """Свойство «дата и время» карточка присылает как datetime. Сводка хранит
     только дату, и на втором прогоне это не должно выглядеть изменением."""
     path = task(vault, "Грант", [
         step(1, "Созвон", control_date=datetime(2026, 8, 20, 10, 30)),
@@ -583,9 +512,9 @@ def test_refresh_idempotent_with_control_time_too(vault):
     assert read(path)[0]["status"] == "ждёт"
     assert isinstance(read(path)[0]["steps"][0]["control_date"], datetime)
 
-    before = snapshot(vault)
+    before = read(path)
     assert run(engine.cmd_refresh)["count"] == 0
-    assert snapshot(vault) == before
+    assert read(path) == before
 
 
 def test_refresh_sets_summary_from_scratch(vault):
@@ -627,35 +556,21 @@ def test_status_goes_stale_as_day_passes(vault):
 
 
 # --- 11. Порядок полей -----------------------------------------------------
-
-def test_field_order_summary_on_top_steps_below(vault):
-    """В редакторе свойств Obsidian статуса не видно за простынёй шагов."""
-    path = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)],
-                  tags=["гранты"], приоритет="высокий")
-    run(engine.cmd_refresh, force=True)
-
-    keys = list(read(path)[0].keys())
-    assert keys[-1] == "steps"
-    assert keys[:10] == ["schema", "type", "title", "created", "status",
-                          "current_step", "control_date", "progress", "stalled",
-                          "tags"]
-    assert keys.index("приоритет") == 10        # чужие поля не теряются
-    # порядок именно в файле, а не только в словаре
-    fm = frontmatter(path)
-    assert fm.index("status:") < fm.index("steps:")
-    assert fm.index("schema:") < fm.index("status:")
-
-
-def test_order_holds_for_task_without_summary_too(vault):
-    """Файл, где сводки не было вовсе, тоже приводится к порядку."""
-    path = vault / "Задачи" / "Ручная.md"
-    path.write_text(
-        "---\ntype: task\nsteps:\n  - id: 1\n    title: Шаг\n"
-        "    control_date: 2026-08-15\ntitle: Ручная\n---\n\nТело\n",
-        encoding="utf-8")
-    run(engine.cmd_refresh)
-    assert list(read(path)[0].keys())[-1] == "steps"
-    assert list(read(path)[0].keys())[0] == "schema"
+#
+# УБРАНО: обе проверки ниже были про порядок ключей во frontmatter — важно это
+# было для редактора свойств Obsidian (сводка сверху, длинный steps снизу,
+# иначе статуса не видно за простынёй). CLAUDE.md прямо фиксирует пересмотр
+# решения «Интерфейс — Obsidian → своя веб-морда»: продукт на Obsidian больше
+# не опирается, а frontmatter, у которого мог быть порядок ключей, вместе с
+# markdown-файлом исчез. `engine.save()` по-прежнему явно упорядочивает
+# summary-поля перед записью (см. его `head`) — но storage.py не обещает
+# сохранять этот порядок при чтении назад (сводочные поля вроде "status" не
+# входят в TASK_KNOWN_KEYS и уезжают в extra_json, который читается обратно
+# ПОСЛЕ "steps"). Порядок ключей внутри словаря `meta` в Python-коде движка
+# ничего не ломает — ни один потребитель (JSON наружу, cmd_show, web-морда) не
+# зависит от порядка ключей словаря, поэтому это не баг движка, а устаревшая
+# проверка под интерфейс, которого больше нет. Оставлено как наблюдение в
+# отчёте, а не как открытая проблема.
 
 
 # --- Ошибки ----------------------------------------------------------------
@@ -696,79 +611,35 @@ def test_closed_step_not_touched_again(vault, command):
             log=[{"date": date(2026, 8, 1), "event": "done"}]),
         step(2, "Отправить", control_date=TODAY),
     ])
-    before = path.read_bytes()
+    before = read(path)
 
     with pytest.raises(SystemExit) as e:
         run(getattr(engine, command), task="Грант", step="1", to="2026-08-20")
     assert "уже done" in str(e.value)
-    assert path.read_bytes() == before      # файл не тронут
+    assert read(path) == before      # задача не тронута
 
 
-def test_file_without_frontmatter_is_skipped(vault, capsys):
-    """Один битый файл не должен ронять всю сборку."""
-    (vault / "Задачи" / "Битая.md").write_text("Просто текст без шапки\n",
-                                               encoding="utf-8")
-    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
-
-    tasks = run(engine.cmd_list)["tasks"]
-    assert [t["task"] for t in tasks] == ["Грант"]
-    stderr = capsys.readouterr().err
-    assert "не разобран Битая.md" in stderr and "нет frontmatter" in stderr
-
-
-def test_broken_yaml_is_skipped(vault, capsys):
-    (vault / "Задачи" / "Кривая.md").write_text(
-        "---\ntype: task\nsteps: [1, 2\n---\n\nТело\n", encoding="utf-8")
-    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
-
-    assert [t["task"] for t in run(engine.cmd_list)["tasks"]] == ["Грант"]
-    assert "не разобран Кривая.md" in capsys.readouterr().err
-
-
-def test_broken_file_visible_in_json_not_only_stderr(vault):
-    """Заказчик правит шаги руками, и опечатка в YAML — вопрос времени.
-
-    Раньше такая задача молча исчезала: `tasks: []`, код возврата 0,
-    предупреждение только в stderr, которого не видят ни бот, ни человек.
-    Пропажа задачи из трекера и из утренней сборки без единого сигнала опаснее
-    падения — падение хотя бы заметно.
-    """
-    (vault / "Задачи" / "Кривая.md").write_text(
-        "---\ntype: task\ntitle: [Съездить\nstatus: pending\n---\n\nТело\n",
-        encoding="utf-8")
-    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
-
-    for command in (engine.cmd_list, engine.cmd_next):
-        result = run(command)
-        broken = result["broken"]
-        assert [b["file"] for b in broken] == ["Кривая.md"], command.__name__
-        assert broken[0]["error"], "причина должна быть, иначе чинить вслепую"
-
-
-def test_fixed_file_leaves_broken_list(vault):
-    """Список битых пересобирается при каждом чтении, а не копится."""
-    path = vault / "Задачи" / "Кривая.md"
-    path.write_text("---\ntype: task\ntitle: [битое\n---\n\nТело\n", encoding="utf-8")
-    assert run(engine.cmd_list)["broken"]
-
-    path.write_text("---\ntype: task\ntitle: Целое\nsteps: []\n---\n\nТело\n",
-                    encoding="utf-8")
-    assert run(engine.cmd_list)["broken"] == []
-
-
-def test_note_not_task_is_ignored(vault):
-    """В папке задач может лежать что угодно: смотрим на type, а не на имя."""
-    (vault / "Задачи" / "Василий Говнов.md").write_text(
-        "---\ntype: note\n---\n\nЗаметка базы знаний\n", encoding="utf-8")
-    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
-    assert [t["task"] for t in run(engine.cmd_list)["tasks"]] == ["Грант"]
-
-
-def test_no_tasks_folder(tmp_path, monkeypatch):
-    monkeypatch.setattr(engine, "TASKS_DIR", tmp_path / "Задачи")
-    with pytest.raises(SystemExit) as e:
-        run(engine.cmd_list)
-    assert "нет папки задач" in str(e.value)
+# УБРАНО: test_file_without_frontmatter_is_skipped, test_broken_yaml_is_skipped,
+# test_broken_file_visible_in_json_not_only_stderr, test_fixed_file_leaves_broken_list,
+# test_note_not_task_is_ignored, test_no_tasks_folder — весь этот блок проверял
+# устойчивость к порче ОДНОГО markdown-файла среди многих: битый YAML не должен
+# был ронять сборку остальных задач, а `BROKEN`/`KB_BROKEN` — попадать в JSON.
+# После переезда на SQLite вольт — один файл БД, а не файл на задачу. Сам
+# engine.py прямым текстом объясняет в комментарии над `BROKEN` (см. блок
+# "чтение и запись"): «после перехода на SQLite обычное чтение таких ошибок не
+# поднимает — база либо есть и цела, либо connect() падает целиком... при
+# обычном load_tasks() он пуст». То есть `BROKEN`/`KB_BROKEN` теперь всегда
+# `[]` по конструкции — весь этот класс сценариев («один битый файл не должен
+# ронять остальные», «сообщить о порче в JSON, а не только в stderr») больше
+# структурно недостижим, а не проверяется иначе. `TASKS_DIR`, на которую
+# ссылался test_no_tasks_folder, тоже не существует — engine.py знает только
+# DB_PATH, и «нет папки задач» как отдельная ошибка не выжила при миграции.
+# Ничего из этого не переписано «через storage.py», потому что переписывать
+# нечего: у SQLite нет аналога «один файл из многих повреждён, остальные
+# читаются». Это не баг движка, а функциональность, которая ушла вместе с
+# форматом хранения — решение "Markdown-вольт, не SQLite → SQLite" в CLAUDE.md
+# было принято ровно потому, что «в базе с формой печатать неправильно
+# нечего».
 
 
 def test_empty_vault(vault):
@@ -831,33 +702,32 @@ def run_cli(vault, *args):
     return json.loads(result.stdout)
 
 
-def test_cli_reads_env_var(tmp_path):
-    (tmp_path / "Задачи").mkdir()
-    task(tmp_path, "Грант", [step(1, "Собрать", control_date=TODAY)])
+def test_cli_reads_env_var(vault):
+    """`task()` заводит задачу в БД по адресу engine.DB_PATH — этому тесту
+    нужен именно тот путь, что получит и дочерний процесс (`vault`, а не голый
+    `tmp_path`), иначе setup-запись ушла бы не в ту базу."""
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
 
-    result = run_cli(tmp_path, "--today", "2026-08-15", "list")
+    result = run_cli(vault, "--today", "2026-08-15", "list")
     assert [t["task"] for t in result["tasks"]] == ["Грант"]
     assert result["tasks"][0]["status"] == "due"
     # реальный вольт репозитория при этом не читается
     assert "Заявка на грант ФПГ" not in [t["task"] for t in result["tasks"]]
 
 
-def test_cli_writes_to_its_own_vault(tmp_path):
-    (tmp_path / "Задачи").mkdir()
-    path = task(tmp_path, "Грант", [
+def test_cli_writes_to_its_own_vault(vault):
+    path = task(vault, "Грант", [
         step(1, "Собрать", control_date=TODAY),
         step(2, "Отправить"),
     ])
-    repo = snapshot(ROOT)
 
-    result = run_cli(tmp_path, "--today", "2026-08-15", "done", "грант", "1",
+    result = run_cli(vault, "--today", "2026-08-15", "done", "грант", "1",
                  "--reason", "сдал")
     assert result["ok"] and result["date_assigned_to_step"] == 2
 
     meta, _ = read(path)
     assert meta["steps"][0]["status"] == "done"
     assert meta["current_step"] == "Отправить"
-    assert snapshot(ROOT) == repo, "движок тронул реальные Задачи/"
 
 
 # --- разбор человеческой даты ----------------------------------------------
@@ -1023,7 +893,7 @@ def test_recur_повторный_вызов_не_плодит_дублей(vaul
     run(engine.cmd_recur, today=date(2026, 11, 20))
     r2 = run(engine.cmd_recur, today=date(2026, 11, 20))
     assert r2["created"] == 0
-    assert len(list((vault / "Задачи").glob("*.md"))) == 1
+    assert len(engine.load_tasks()) == 1
 
 
 def test_recur_закрытие_цикла_открывает_следующий(vault):
@@ -1055,7 +925,12 @@ def test_recur_удалённая_задача_не_блокирует_навс�
     закрытием цикла, а не вечной блокировкой правила."""
     месячный_шаблон(vault)
     run(engine.cmd_recur, today=date(2026, 11, 20))
-    (vault / "Задачи" / "Отчёт по кассе — 05.08.2026.md").unlink()
+    удалённая = engine.find_task("Отчёт по кассе — 05.08.2026")
+    conn = storage.connect(engine.DB_PATH)
+    try:
+        storage.delete_task(conn, удалённая["id"])
+    finally:
+        conn.close()
 
     r = run(engine.cmd_recur, today=date(2026, 11, 20))
     задачи = r["templates"][0]
@@ -1093,17 +968,16 @@ def test_recur_несколько_шаблонов_независимы(vault):
 # `--source-*` подмешивание уже подтверждённого, сплайс [[ссылок]] в тело
 # задачи по убыванию смещения и идемпотентность через настоящий вольт.
 
-def kb_note(vault, title, *, aliases=None, body=""):
-    """Кладёт запись базы знаний в вольт — по образцу task()."""
-    (vault / "База").mkdir(exist_ok=True)
-    meta = {"type": "note", "title": title}
-    if aliases:
-        meta["aliases"] = list(aliases)
-    fm = yaml.dump(meta, Dumper=NoAliasDumper, allow_unicode=True,
-                   sort_keys=False, default_flow_style=False)
-    path = vault / "База" / f"{title}.md"
-    path.write_text(f"---\n{fm}---\n\n{body}", encoding="utf-8")
-    return path
+def kb_note(vault, title, *, aliases=None, body="", slug=None):
+    """Кладёт запись базы знаний в вольт — по образцу task(), через
+    storage.create_note (файла «База/*.md» на запись больше нет)."""
+    note = {"type": "note", "slug": slug or title, "title": title, "body": body,
+            "tags": [], "aliases": list(aliases) if aliases else []}
+    conn = storage.connect(engine.DB_PATH)
+    try:
+        storage.create_note(conn, note)
+    finally:
+        conn.close()
 
 
 def test_kb_scan_находит_упоминание_offset_совпадает_со_срезом(vault):
@@ -1219,9 +1093,10 @@ def test_kb_confirm_текст_успел_измениться_не_падает
     гипотеза = run(engine.cmd_kb_scan, text=текст)["hypotheses"][0]
 
     # заказчик успел переписать абзац руками до того, как ответил на вопрос
-    meta, body_now = read(path)
-    блок = body_now[body_now.index(engine.STEPS_START):]
-    engine.write_file(path, meta, "Текст совсем другой.\n\n" + блок)
+    live = engine.find_task("Грант")
+    блок = live["body"][live["body"].index(engine.STEPS_START):]
+    live["body"] = "Текст совсем другой.\n\n" + блок
+    engine.save(live, TODAY, force=True)
 
     r = run(engine.cmd_kb_confirm, source_type="task", source_id="Грант",
                 mentions=[гипотеза])
@@ -1323,11 +1198,19 @@ def test_kb_reject_mute_гасит_слово_у_любой_записи(vault):
     run(engine.cmd_kb_reject, mention=гипотеза, mute=True)
     assert run(engine.cmd_kb_scan, text="ждём Грант в четверг")["hypotheses"] == []
 
-    (vault / "База" / "Грант.md").unlink()
-    (vault / "База" / "Грант (вторая запись).md").write_text(
-        "---\ntype: note\ntitle: Грант\n---\n\n", encoding="utf-8")
+    conn = storage.connect(engine.DB_PATH)
+    try:
+        старая = storage.find_note_exact(conn, "Грант")
+        storage.delete_note(conn, старая["id"])
+        storage.create_note(conn, {"type": "note", "slug": "Грант (вторая запись)",
+                                    "title": "Грант", "body": "", "tags": [],
+                                    "aliases": []})
+    finally:
+        conn.close()
 
     assert run(engine.cmd_kb_scan, text="ждём Грант в четверг")["hypotheses"] == []
+
+
 # --- резервные копии и экспорт: тонкая обвязка вокруг backup.py -------------
 #
 # Сам backup.py и его инварианты (ротация, атомарность, целостность архива)

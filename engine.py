@@ -26,7 +26,6 @@ import os
 import re
 import sys
 import tempfile
-import time
 from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
@@ -49,13 +48,17 @@ import backup
 import kb
 import recurrence as rec
 import settings as cfg
+import storage
 import templates as tpl
 import worktime
 
 SCHEMA = 1
 VAULT = Path(os.environ.get("YUNGDRUNG_VAULT", Path(__file__).resolve().parent))
-TASKS_DIR = VAULT / "Задачи"
-KB_DIR = VAULT / "База"
+# Единственный источник правды — файл SQLite в корне вольта (раньше здесь были
+# TASKS_DIR/KB_DIR, папки Задачи/ и База/; storage.py их заменяет одной базой).
+# Модульная константа, как раньше — тесты monkeypatch'ят её напрямую тем же
+# приёмом, что и старые TASKS_DIR/KB_DIR.
+DB_PATH = VAULT / "Вольт.sqlite"
 
 OPEN = "pending"
 DONE = "done"
@@ -108,74 +111,21 @@ EVENT_RU = {
 
 # --- чтение и запись -------------------------------------------------------
 
-def parse_file(path):
-    """Frontmatter + тело. Тело сохраняем как есть: его пишет заказчик, не мы."""
-    raw = path.read_text(encoding="utf-8")
-    if not raw.startswith("---"):
-        raise ValueError(f"{path.name}: нет frontmatter")
-    _, fm, body = raw.split("---", 2)
-    return yaml.safe_load(fm) or {}, body.lstrip("\n")
-
-
-class PlainDumper(yaml.SafeDumper):
-    """Без якорей и ссылок: одна и та же дата в нескольких полях — обычное дело,
-    а `&id001`/`*id001` Obsidian не разбирает и файл для него ломается."""
-
-    def ignore_aliases(self, data):
-        return True
-
-
-def write_file(path, meta, body):
-    """Атомарно: Obsidian держит файлы открытыми и кэширует, дописывать на месте нельзя.
-
-    На Windows os.replace может ненадолго упасть с PermissionError, если файл в
-    этот момент держит антивирус, OneDrive-индексатор или сам Obsidian — на маке
-    так почти не бывает. Несколько коротких повторов дешевле, чем терять запись.
-    """
-    fm = yaml.dump(meta, Dumper=PlainDumper, allow_unicode=True, sort_keys=False,
-                   default_flow_style=False)
-    content = f"---\n{fm}---\n\n{body}"
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        for attempt in range(5):
-            try:
-                os.replace(tmp, path)
-                break
-            except PermissionError:
-                if attempt == 4:
-                    raise
-                time.sleep(0.2 * (attempt + 1))
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
-
-
-# Файлы, которые не удалось разобрать при последнем чтении вольта. Собираются
-# здесь, чтобы попасть в JSON, а не только в stderr: заказчик правит шаги руками,
-# и опечатка в YAML не должна означать, что задача молча исчезла из трекера и из
-# утренней сборки. Молчаливая потеря опаснее падения — падение хотя бы заметно.
+# Раньше здесь собирались файлы, не разобравшиеся при чтении markdown-вольта.
+# После перехода на SQLite (storage.py) обычное чтение таких ошибок не поднимает
+# — база либо есть и цела, либо connect() падает целиком. Список оставляем как
+# механизм и как место для сигнала на случай будущей порчи БД, но при обычном
+# load_tasks() он пуст.
 BROKEN = []
 
 
 def load_tasks():
-    if not TASKS_DIR.is_dir():
-        sys.exit(f"нет папки задач: {TASKS_DIR}")
     BROKEN.clear()
-    out = []
-    for path in sorted(TASKS_DIR.glob("*.md")):
-        try:
-            meta, body = parse_file(path)
-        except Exception as e:
-            reason = " ".join(str(e).split())[:200]
-            BROKEN.append({"file": path.name, "error": reason})
-            print(f"[не разобран {path.name}: {reason}]", file=sys.stderr)
-            continue
-        if meta.get("type") != "task":
-            continue
-        out.append({"path": path, "meta": meta, "body": body})
-    return out
+    conn = storage.connect(DB_PATH)
+    try:
+        return storage.load_tasks(conn)
+    finally:
+        conn.close()
 
 
 def find_task(fragment):
@@ -190,40 +140,19 @@ def find_task(fragment):
 
 # Записи базы знаний, которые не разобрались при последнем чтении. Та же логика,
 # что у BROKEN: опечатка в заметке заказчика не должна тихо выкидывать запись
-# из автораспознавания без единого сигнала об этом.
+# из автораспознавания без единого сигнала об этом. После перехода на SQLite
+# обычное чтение таких ошибок не поднимает — механизм остаётся пустым списком.
 KB_BROKEN = []
 
 
 def load_kb_entries():
-    """Записи базы знаний для kb.build_index — раздел 5.7 ТЗ.
-
-    Источник — `База/*.md` в том же формате frontmatter, что и задачи. Папки
-    может не быть вовсе: заказчик вправе завести первую задачу раньше первой
-    записи базы, и это не поломка, а нет — пустой список.
-    """
+    """Записи базы знаний для kb.build_index — раздел 5.7 ТЗ."""
     KB_BROKEN.clear()
-    if not KB_DIR.is_dir():
-        return []
-    out = []
-    for path in sorted(KB_DIR.glob("*.md")):
-        try:
-            meta, _ = parse_file(path)
-        except Exception as e:
-            reason = " ".join(str(e).split())[:200]
-            KB_BROKEN.append({"file": path.name, "error": reason})
-            continue
-        if meta.get("type") != "note":
-            continue
-        title = (meta.get("title") or "").strip()
-        if not title:
-            KB_BROKEN.append({"file": path.name, "error": "нет названия"})
-            continue
-        out.append({
-            "id": path.stem,
-            "title": title,
-            "aliases": meta.get("aliases") or meta.get("synonyms") or [],
-        })
-    return out
+    conn = storage.connect(DB_PATH)
+    try:
+        return storage.load_notes(conn)
+    finally:
+        conn.close()
 
 
 # --- вычисления ------------------------------------------------------------
@@ -411,7 +340,15 @@ def save(task, today, force=True):
         "progress": f"{closed}/{len(steps)}" if steps else None,
     }
     body = put_steps_into_body(task["body"], render_steps(task, today))
-    changed = (any(meta.get(k) != v for k, v in summary.items())
+    # Сравниваем через isoformat(), а не значения как есть: старое значение
+    # summary-поля читается из extra_json (JSON дат не знает — control_date
+    # там всегда строка), а свежепосчитанное здесь — объект date. "2026-08-21"
+    # != date(2026, 8, 21) в Python всегда True, и без нормализации changed
+    # был бы истинным при каждой записи, даже когда реально ничего не изменилось.
+    def _для_сравнения(v):
+        return v.isoformat() if isinstance(v, (date, datetime)) else v
+    changed = (any(_для_сравнения(meta.get(k)) != _для_сравнения(v)
+                   for k, v in summary.items())
                or body != task["body"])
     meta.update(summary)
     task["body"] = body
@@ -428,7 +365,11 @@ def save(task, today, force=True):
     task["meta"] = ordered
 
     if changed or force:
-        write_file(task["path"], ordered, body)
+        conn = storage.connect(DB_PATH)
+        try:
+            storage.save_task(conn, task)
+        finally:
+            conn.close()
     return changed
 
 
@@ -906,13 +847,18 @@ def cmd_create(args, today):
         return {"ok": False, "errors": errors}
 
     meta = build_task(data, today)
-    path = TASKS_DIR / f"{meta['title']}.md"
-    if path.exists():
-        return {"ok": False, "errors": [{"field": "title", "error": "Файл уже существует"}]}
+    conn = storage.connect(DB_PATH)
+    try:
+        if storage.task_exists(conn, meta["title"]):
+            return {"ok": False, "errors": [{"field": "title", "error": "Файл уже существует"}]}
+        created = storage.create_task(conn, meta)
+    finally:
+        conn.close()
 
-    task = {"path": path, "meta": meta, "body": (data.get("body") or "").strip() + "\n"}
+    task = {"id": created["id"], "path": created["path"], "meta": created["meta"],
+            "body": (data.get("body") or "").strip() + "\n"}
     save(task, today)
-    return {"ok": True, "task": path.stem, "path": str(path),
+    return {"ok": True, "task": task["path"].stem, "path": task["path"].stem,
             "steps": len(meta["steps"]), "status": task["meta"]["status"]}
 
 
@@ -1068,21 +1014,27 @@ def cmd_update(args, today):
             "error": f"Шаг {sid} пропал из данных — сначала «снять», не убирать так"}
             for sid in пропали]}
 
-    новое_название = data.get("title", task["path"].stem).strip()
-    если_переименовано = новое_название != task["path"].stem
+    старое_название = task["path"].stem
+    новое_название = task["meta"]["title"]
+    если_переименовано = новое_название != старое_название
     if если_переименовано:
-        новый_путь = TASKS_DIR / f"{новое_название}.md"
-        if новый_путь.exists():
-            return {"ok": False,
-                    "errors": [{"field": "title", "error": "Файл уже существует"}]}
+        # Переименование в SQL — смена title у той же строки (task["id"]
+        # стабилен через переименование, в отличие от старого пути-имени
+        # файла), а не перенос файла. Делаем это до save(): storage.save_task
+        # ищет строку по meta["title"], который apply_task_edit уже поставил
+        # новым, — если не переименовать заранее, поиск по новому title
+        # не найдёт ничего, потому что в базе всё ещё лежит старое.
+        conn = storage.connect(DB_PATH)
+        try:
+            try:
+                storage.rename_task(conn, task["id"], новое_название)
+            except ValueError as e:
+                return {"ok": False, "errors": [{"field": "title", "error": str(e)}]}
+        finally:
+            conn.close()
+        task["path"] = storage.TaskRef(новое_название)
 
     save(task, today)
-    if если_переименовано:
-        # Переименование — это перемещение файла, save() уже дописал содержимое
-        # по старому пути; переносим следом, чтобы не потерять данные между
-        # двумя операциями, если вторая сорвётся.
-        os.replace(task["path"], новый_путь)
-        task["path"] = новый_путь
 
     return {"ok": True, "task": task["path"].stem, "status": task["meta"]["status"],
             "steps": len(task["meta"]["steps"])}
@@ -1108,7 +1060,11 @@ def cmd_delete(args, today):
     """Удалить задачу насовсем. Подтверждение — дело интерфейса, не движка:
     здесь только сам необратимый шаг."""
     task = find_task(args.task)
-    task["path"].unlink()
+    conn = storage.connect(DB_PATH)
+    try:
+        storage.delete_task(conn, task["id"])
+    finally:
+        conn.close()
     return {"ok": True, "task": task["path"].stem, "deleted": True}
 
 
@@ -1225,10 +1181,15 @@ def _create_task_from_data(данные, today, existing=None):
         return None, errors
 
     meta = build_task(данные, today)
-    path = TASKS_DIR / f"{meta['title']}.md"
-    if path.exists():
-        return None, [{"field": "title", "error": "Файл уже существует"}]
-    задача = {"path": path, "meta": meta, "body": (данные.get("body") or "").strip() + "\n"}
+    conn = storage.connect(DB_PATH)
+    try:
+        if storage.task_exists(conn, meta["title"]):
+            return None, [{"field": "title", "error": "Файл уже существует"}]
+        created = storage.create_task(conn, meta)
+    finally:
+        conn.close()
+    задача = {"id": created["id"], "path": created["path"], "meta": created["meta"],
+              "body": (данные.get("body") or "").strip() + "\n"}
     save(задача, today)
     return задача, None
 
@@ -1595,12 +1556,13 @@ def cmd_kb_scan(args, today):
 
 
 def _find_task_by_stem(name):
-    """Точное имя файла задачи, без нечёткого поиска `find_task`: гипотезы уже
+    """Точное имя задачи, без нечёткого поиска `find_task`: гипотезы уже
     посчитаны на конкретной, уже созданной задаче — мазать мимо здесь нельзя."""
-    for t in load_tasks():
-        if t["path"].stem == name:
-            return t
-    return None
+    conn = storage.connect(DB_PATH)
+    try:
+        return storage.find_task_exact(conn, name)
+    finally:
+        conn.close()
 
 
 def _strip_steps_block(body):
@@ -1713,6 +1675,120 @@ def cmd_kb_reject(args, today):
     else:
         склад.reject(гипотеза)
     return {"ok": True}
+
+
+# --- CRUD записей базы знаний ------------------------------------------------
+#
+# Раньше записи базы знаний правились только руками в Obsidian — движок их
+# только читал (load_kb_entries). После перехода на SQLite этот путь исчезает
+# вместе с markdown-файлами, а замены не было вовсе — реальный пробел, который
+# закрываем здесь минимальным CRUD по образцу cmd_create/cmd_update/cmd_delete
+# для задач. Валидация здесь проще, чем у задач: обязательны только slug и
+# title, дат и шагов у записи базы нет. Страницы интерфейса под эти команды
+# нет — это отдельная задача, здесь только сам механизм записи.
+
+def cmd_kb_note_create(args, today):
+    """Завести запись базы знаний из JSON: {"slug", "title", "body", "tags",
+    "aliases"}. slug — человекочитаемый идентификатор записи (то, что раньше
+    было именем файла без расширения), должен быть уникален."""
+    raw = sys.stdin.read() if args.json == "-" else args.json
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
+
+    slug = (data.get("slug") or "").strip()
+    title = (data.get("title") or "").strip()
+    errors = []
+    if not slug:
+        errors.append({"field": "slug", "error": "Slug обязателен"})
+    if not title:
+        errors.append({"field": "title", "error": "Название обязательно"})
+    if errors:
+        return {"ok": False, "errors": errors}
+
+    conn = storage.connect(DB_PATH)
+    try:
+        if storage.find_note_exact(conn, slug) is not None:
+            return {"ok": False, "errors": [{"field": "slug", "error": "Такой slug уже есть"}]}
+        note = storage.create_note(conn, {
+            "slug": slug,
+            "title": title,
+            "body": data.get("body") or "",
+            "tags": [t.strip() for t in (data.get("tags") or []) if t and t.strip()],
+            "aliases": [a.strip() for a in (data.get("aliases") or []) if a and a.strip()],
+        })
+    finally:
+        conn.close()
+    return {"ok": True, "note": note["slug"], "title": note["title"]}
+
+
+def cmd_kb_note_update(args, today):
+    """Править запись базы знаний: заголовок, тело, теги, синонимы, сам slug.
+
+    Поля, которых нет в присланном JSON, остаются как были — правка частичная,
+    не полная перезапись (в отличие от cmd_update для задач, где карточка шлёт
+    состав целиком: у записи базы нет отдельного механизма отметить «поле
+    удалено», поэтому «не прислано» и «удалить» не различить, и трактуем как
+    первое).
+    """
+    raw = sys.stdin.read() if args.json == "-" else args.json
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
+
+    conn = storage.connect(DB_PATH)
+    try:
+        existing = storage.find_note_exact(conn, args.slug)
+        if existing is None:
+            return {"ok": False,
+                    "errors": [{"field": "slug", "error": f"нет записи «{args.slug}»"}]}
+
+        new_slug = (data.get("slug") if "slug" in data else existing["slug"]) or ""
+        new_slug = new_slug.strip()
+        title = (data.get("title") if "title" in data else existing["title"]) or ""
+        title = title.strip()
+        errors = []
+        if not new_slug:
+            errors.append({"field": "slug", "error": "Slug обязателен"})
+        if not title:
+            errors.append({"field": "title", "error": "Название обязательно"})
+        if errors:
+            return {"ok": False, "errors": errors}
+
+        try:
+            note = storage.update_note(conn, existing["id"], {
+                "slug": new_slug,
+                "title": title,
+                "body": (data.get("body") if "body" in data else existing["body"]) or "",
+                "tags": [t.strip() for t in
+                        ((data.get("tags") if "tags" in data else existing["tags"]) or [])
+                        if t and t.strip()],
+                "aliases": [a.strip() for a in
+                           ((data.get("aliases") if "aliases" in data else existing["aliases"]) or [])
+                           if a and a.strip()],
+            })
+        except ValueError as e:
+            return {"ok": False, "errors": [{"field": "slug", "error": str(e)}]}
+    finally:
+        conn.close()
+    return {"ok": True, "note": note["slug"], "title": note["title"]}
+
+
+def cmd_kb_note_delete(args, today):
+    """Удалить запись базы знаний насовсем. Подтверждение — дело интерфейса,
+    не движка, как и у cmd_delete для задач."""
+    conn = storage.connect(DB_PATH)
+    try:
+        existing = storage.find_note_exact(conn, args.slug)
+        if existing is None:
+            return {"ok": False,
+                    "errors": [{"field": "slug", "error": f"нет записи «{args.slug}»"}]}
+        storage.delete_note(conn, existing["id"])
+    finally:
+        conn.close()
+    return {"ok": True, "note": args.slug, "deleted": True}
 
 
 # --- выгрузка в Excel ------------------------------------------------------
@@ -2072,6 +2148,19 @@ def main():
     kr.add_argument("--mention", required=True, help='JSON гипотезы или "-" для stdin')
     kr.add_argument("--mute", action="store_true", help="слово никогда не ссылка, у любой записи")
     kr.set_defaults(func=cmd_kb_reject)
+
+    kbc = sub.add_parser("kb-create", help="завести запись базы знаний из JSON")
+    kbc.add_argument("json", help='JSON или "-" для stdin')
+    kbc.set_defaults(func=cmd_kb_note_create)
+
+    kbu = sub.add_parser("kb-update", help="править запись базы знаний из JSON")
+    kbu.add_argument("slug")
+    kbu.add_argument("json", help='JSON или "-" для stdin')
+    kbu.set_defaults(func=cmd_kb_note_update)
+
+    kbd = sub.add_parser("kb-delete", help="удалить запись базы знаний насовсем")
+    kbd.add_argument("slug")
+    kbd.set_defaults(func=cmd_kb_note_delete)
 
     x = sub.add_parser("export", help="выгрузить весь вольт в Excel")
     x.add_argument("--to", help="куда писать; по умолчанию — «Выгрузка <дата>.xlsx» "

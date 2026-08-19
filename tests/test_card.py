@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Тесты карточки задачи — R27: дата начала, правка, отмена, переоткрытие.
 
-Тот же приём изоляции, что в test_engine.py: подменяем VAULT/TASKS_DIR через
-monkeypatch, зовём функции движка напрямую в обход argparse.
+Тот же приём изоляции, что в test_engine.py: фикстура "vault" (conftest.py)
+подменяет VAULT/DB_PATH через monkeypatch на временный SQLite-вольт, тесты
+зовут функции движка напрямую в обход argparse.
 
 Отдельным блоком — тесты на `resolve_steps`: этот путь ловил настоящий баг
 при разработке. Перестановка шагов пересчитывает дефолт даты начала по новому
@@ -16,39 +17,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import engine  # noqa: E402
 
+from conftest import task, read  # noqa: E402
+
 TODAY = date(2026, 8, 18)
-
-
-class NoAliasDumper(yaml.SafeDumper):
-    def ignore_aliases(self, data):
-        return True
-
-
-@pytest.fixture
-def vault(tmp_path, monkeypatch):
-    tasks = tmp_path / "Задачи"
-    tasks.mkdir()
-    monkeypatch.setattr(engine, "VAULT", tmp_path)
-    monkeypatch.setattr(engine, "TASKS_DIR", tasks)
-    return tmp_path
-
-
-def task(vault, name, steps, *, body="Тело заметки.\n", **fields):
-    meta = {"schema": 1, "type": "task", "title": name, "created": date(2026, 8, 1)}
-    meta.update(fields)
-    meta["steps"] = steps
-    fm = yaml.dump(meta, Dumper=NoAliasDumper, allow_unicode=True,
-                   sort_keys=False, default_flow_style=False)
-    path = vault / "Задачи" / f"{name}.md"
-    path.write_text(f"---\n{fm}---\n\n{body}", encoding="utf-8")
-    return path
 
 
 def run(command, today=TODAY, **fields):
@@ -58,8 +35,10 @@ def run(command, today=TODAY, **fields):
     return command(SimpleNamespace(**fields), today)
 
 
-def read(path):
-    return engine.parse_file(path)
+def existing_titles():
+    """Замена файловому `(... / "Задачи" / "Имя.md").exists()` — файла на
+    задачу больше нет, есть только строка в БД."""
+    return {t["path"].stem for t in engine.load_tasks()}
 
 
 # --- resolve_steps: дефолт даты начала --------------------------------------
@@ -290,8 +269,8 @@ def test_update_переименование_переносит_файл(vault):
     r = run(engine.cmd_update, task="Черновик", json='{"title":"Итоговое название",'
            '"steps":[{"id":1,"title":"A","control_date":"19.08"}]}')
     assert r["ok"] and r["task"] == "Итоговое название"
-    assert not (vault / "Задачи" / "Черновик.md").exists()
-    assert (vault / "Задачи" / "Итоговое название.md").exists()
+    assert "Черновик" not in existing_titles()
+    assert "Итоговое название" in existing_titles()
 
 
 def test_update_переименование_в_занятое_имя_отказывает(vault):
@@ -304,7 +283,7 @@ def test_update_переименование_в_занятое_имя_отказ
     r = run(engine.cmd_update, task="Первая",
            json='{"title":"Вторая","steps":[{"id":1,"title":"A","control_date":"19.08"}]}')
     assert not r["ok"]
-    assert (vault / "Задачи" / "Первая.md").exists()
+    assert "Первая" in existing_titles()
 
 
 def test_update_невалидные_даты_не_переименовывают_и_не_пишут(vault):
@@ -316,8 +295,8 @@ def test_update_невалидные_даты_не_переименовываю�
     r = run(engine.cmd_update, task="Аренда", json='{"title":"Аренда 2","steps":['
            '{"id":1,"title":"A","start_date":"25.08","control_date":"19.08"}]}')
     assert not r["ok"]
-    assert (vault / "Задачи" / "Аренда.md").exists()
-    assert not (vault / "Задачи" / "Аренда 2.md").exists()
+    assert "Аренда" in existing_titles()
+    assert "Аренда 2" not in existing_titles()
 
 
 # --- отмена, удаление, переоткрытие ------------------------------------------
@@ -359,7 +338,7 @@ def test_delete_убирает_файл(vault):
          "completed_date": None, "log": []}], start_date=date(2026, 8, 1))
     r = run(engine.cmd_delete, task="Грант")
     assert r["ok"] and r["deleted"]
-    assert not (vault / "Задачи" / "Грант.md").exists()
+    assert "Грант" not in existing_titles()
 
 
 def test_reopen_возвращает_шаг_в_работу(vault):

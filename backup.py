@@ -25,9 +25,10 @@ Excel-выгрузка (`engine.cmd_export`) решает третью зада�
 прочитанный на ходу файл окажется из середины чужой транзакции. Такая копия
 открывается битой, и узнаётся это в тот единственный день, когда она нужна.
 
-Копии и восстановление намеренно не зависят от pyyaml: разбор frontmatter нужен
-только экспорту, и он импортирует `engine` внутри функции. Сломанный разбор не
-должен лишать заказчика возможности снять копию — это последняя защита данных.
+Копии и восстановление намеренно не зависят от pyyaml: чтение вольта через
+`engine`/`storage` (а значит и pyyaml, который тянет `engine.py`) нужно только
+экспорту, и он импортирует `engine` внутри функции. Сломанное чтение не должно
+лишать заказчика возможности снять копию — это последняя защита данных.
 
   import backup
   backup.backup(vault, "D:/Копии", keep=7, every_hours=24)   # по расписанию
@@ -722,6 +723,35 @@ def strip_steps_block(body, start, end):
     return body.strip()
 
 
+# Поля задачи и заметки, которые не идут в `extra`, потому что у них уже есть
+# своё место в записи экспорта. Для задач сюда же входит DERIVED — движок
+# пишет сводку в те же строки базы, что и произвольные поля заказчика
+# (`storage.TASK_KNOWN_KEYS` их не отделяет, это чисто экспортное правило),
+# и без исключения статус с прогрессом задвоили бы то, что уже выводится из
+# `steps`.
+TASK_CORE_FIELDS = {"title", "tags", "steps", "schema", "type", "created"} | DERIVED
+
+# У заметки после переезда на SQLite `id` и `slug` — детали хранения
+# (`storage._row_to_note`), а не то, что заказчик писал во frontmatter, и в
+# `extra` им делать нечего.
+NOTE_CORE_FIELDS = {"id", "slug", "title", "body", "tags"}
+
+
+def strip_storage_defaults(extra, fields):
+    """Убрать из `extra` поля, которые SQLite всегда возвращает своим значением
+    по умолчанию (`None`, пустой список), даже когда заказчик их не задавал.
+
+    Старый markdown-frontmatter такой ключ просто не писал — в файле его не
+    было вовсе. Строки `tasks`/`notes` в базе, наоборот, заводят колонку под
+    каждое из этих полей всегда: `start_date` и `cancelled_reason` — в
+    `tasks`, `aliases` — в `notes` (см. `storage.TASK_KNOWN_KEYS` и
+    `storage.NOTE_KNOWN_KEYS`). Без фильтра пустое значение колонки попадало
+    бы в `extra` как новый мусор источника данных, а не как поле, которое
+    заказчик действительно заполнил.
+    """
+    return {k: v for k, v in extra.items() if k not in fields or v not in (None, [])}
+
+
 def templates_of(vault, broken):
     """Шаблоны задач из файла шаблонов. Требование R11.
 
@@ -837,77 +867,99 @@ def export(vault, now=None):
     `notify`): оно описывает, какое уведомление уже показали, и после переноса
     в новую версию не значит ничего. Файлы, которые не разобрались, перечислены
     в `broken` — молча потерянная задача хуже видимой ошибки.
+
+    Источник данных — `engine.load_tasks()` / `engine.load_kb_entries()`, то
+    есть тот же `Вольт.sqlite`, что читает и пишет движок; собственного разбора
+    frontmatter здесь больше нет (раньше был — вольт был папкой markdown-файлов,
+    решение об этом см. в CLAUDE.md). `vault` при этом остаётся путём наружу:
+    либо папка, внутри которой лежит `Вольт.sqlite`, либо сам файл базы — как и
+    для `create`/`restore`, вид определяет `storage_kind`. Для чтения используем
+    ровно те функции, что видит любой другой клиент движка: `load_tasks()` не
+    принимает путь к базе, поэтому `engine.DB_PATH` на время чтения указывает на
+    базу из `vault`, а не на ту, что задана окружением `YUNGDRUNG_VAULT`, —
+    иначе экспорт вольта заказчика по ошибке читал бы чужую базу.
     """
-    # Импорт внутри функции: разбор frontmatter требует pyyaml, а копии и
-    # восстановление должны работать и без него.
+    # Импорт внутри функции: чтение вольта требует pyyaml (его тянет engine.py),
+    # а копии и восстановление должны работать и без него.
     import engine
+    import storage
 
     vault = Path(vault)
-    if not vault.is_dir():
-        # Отдельная ветка для базы: после переезда путь вольта станет файлом, и
-        # сообщение «нет папки вольта» отправило бы человека искать пропавшую
-        # папку вместо того, чтобы сказать правду — читать базу движок пока не
-        # умеет, а копии (`create`) с ней уже работают.
-        if storage_kind(vault) == "sqlite":
-            raise BackupError("vault", f"экспорт из базы {vault.name} ещё не написан: "
-                                       "движок читает markdown")
-        raise BackupError("vault", f"нет папки вольта: {vault}")
+    вид = storage_kind(vault)
+    if вид == "folder":
+        db_path = vault / engine.DB_PATH.name
+        if not (db_path.is_file() and is_sqlite(db_path)):
+            raise BackupError("vault", f"в папке {vault} нет базы вольта "
+                                       f"({engine.DB_PATH.name})")
+    elif вид == "sqlite":
+        db_path = vault
+    elif вид == "file":
+        raise BackupError("vault", f"{vault.name} — не база SQLite и не папка вольта")
+    else:
+        raise BackupError("vault", f"нет вольта по пути: {vault}")
 
-    tasks, notes, broken = [], [], []
-    for путь, имя in collect(vault):
-        if путь.suffix.lower() != ".md":
-            continue
+    broken = []
+    старый_db_path = engine.DB_PATH
+    engine.DB_PATH = db_path
+    try:
+        сырые_задачи = engine.load_tasks()
+        ссылки_на_заметки = engine.load_kb_entries()
+        conn = storage.connect(db_path)
         try:
-            raw = путь.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as e:
-            broken.append({"file": имя, "error": " ".join(str(e).split())[:200]})
-            continue
-        if not raw.startswith("---"):
-            continue  # обычный markdown рядом с вольтом, не запись трекера
-        try:
-            meta, body = engine.parse_file(путь)
-        except Exception as e:
-            # Молчаливая потеря опаснее падения: сломанный файл попадает в ответ,
-            # чтобы человек увидел, что задача не уехала в новую версию.
-            broken.append({"file": имя, "error": " ".join(str(e).split())[:200]})
-            continue
+            # engine.load_kb_entries() отдаёт минимальную форму (id/title/aliases)
+            # — её достаточно для автосвязывания (kb.build_index), но не для
+            # экспорта: там нужны тело, теги и всё, что заказчик дописал сам.
+            # Полную запись знает только storage.find_note_exact.
+            заметки = [n for n in (storage.find_note_exact(conn, ссылка["id"])
+                                   for ссылка in ссылки_на_заметки)
+                      if n is not None]
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        raise BackupError("vault", f"база {db_path.name} не читается: "
+                                   f"{' '.join(str(e).split())[:200]}")
+    finally:
+        engine.DB_PATH = старый_db_path
 
-        тип = meta.get("type")
-        if тип not in ("task", "note"):
-            continue
-        # Пересчитываемые поля выкидываем только у задач: у заметки базы знаний
-        # движок ничего не считает, и `status: черновик`, дописанный руками,
-        # там данные заказчика, а не наша сводка.
-        свои = {"title", "tags", "steps", "schema", "type"}
-        if тип == "task":
-            свои = свои | DERIVED | {"created"}
-        # Порядок ключей задаём явно: файл экспорта открывают глазами, и читать
-        # его удобнее сверху вниз — что за запись, чем названа, что внутри.
-        #
-        # Название приводим к строке: YAML читает `title: 6805` (это заметка про
-        # типоразмер подшипника из примеров) как число, и на ту сторону оно
-        # уехало бы числом в поле, где везде текст.
-        запись = {"file": имя, "name": путь.stem,
-                  "title": str(meta.get("title") or путь.stem)}
-        if тип == "task":
-            запись["created"] = jsonable(meta.get("created"))
-        запись["tags"] = tags_of(meta)
-        запись["body"] = (strip_steps_block(body, engine.STEPS_START, engine.STEPS_END)
-                          if тип == "task" else body.strip())
-        запись["extra"] = jsonable({k: v for k, v in meta.items() if k not in свои})
-        if тип == "task":
-            шаги = meta.get("steps") or []
-            # Вольт правится руками, и `steps: перенести` вместо списка там
-            # достижимо (ровно поэтому хранилище и переезжает в базу — решение в
-            # CLAUDE.md). Без проверки строка разошлась бы по буквам, и на той
-            # стороне у задачи оказалось бы девять шагов из одной опечатки.
-            if not isinstance(шаги, list) or not all(isinstance(s, dict) for s in шаги):
-                broken.append({"file": имя, "error": "поле steps — не список шагов"})
-                continue
-            запись["steps"] = [jsonable(s) for s in шаги]
-            tasks.append(запись)
-        else:
-            notes.append(запись)
+    # Порядок ключей задаём явно: файл экспорта открывают глазами, и читать
+    # его удобнее сверху вниз — что за запись, чем названа, что внутри.
+    tasks = []
+    for задача in сырые_задачи:
+        meta = задача["meta"]
+        # Название приводим к строке на всякий случай: раньше YAML мог прочитать
+        # `title: 6805` числом, и через `str(...)` оно не уезжало бы на ту
+        # сторону в поле, где везде текст. Хранилище пишет title строкой само,
+        # но проверка ничего не стоит и переживёт будущую миграцию обратно.
+        title = str(meta.get("title") or задача["path"].stem)
+        extra = strip_storage_defaults(
+            {k: v for k, v in meta.items() if k not in TASK_CORE_FIELDS},
+            {"start_date", "cancelled_reason"})
+        tasks.append({
+            "file": f"Задачи/{title}.md",
+            "name": задача["path"].stem,
+            "title": title,
+            "created": jsonable(meta.get("created")),
+            "tags": tags_of(meta),
+            "body": strip_steps_block(задача["body"], engine.STEPS_START, engine.STEPS_END),
+            "extra": jsonable(extra),
+            "steps": jsonable(meta.get("steps") or []),
+        })
+
+    notes = []
+    for заметка in заметки:
+        slug = заметка.get("slug") or заметка.get("id")
+        title = str(заметка.get("title") or slug)
+        extra = strip_storage_defaults(
+            {k: v for k, v in заметка.items() if k not in NOTE_CORE_FIELDS},
+            {"aliases"})
+        notes.append({
+            "file": f"База/{slug}.md",
+            "name": slug,
+            "title": title,
+            "tags": tags_of(заметка),
+            "body": (заметка.get("body") or "").strip(),
+            "extra": jsonable(extra),
+        })
 
     return {
         "format": EXPORT_FORMAT,

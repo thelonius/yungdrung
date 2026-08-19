@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Тесты ленты «Что сегодня» — `collect_open` / `cmd_feed` / `cmd_backlog`.
 
-Тот же приём изоляции, что в test_engine.py: подменяем VAULT/TASKS_DIR через
-monkeypatch, зовём функции движка напрямую в обход argparse.
+Тот же приём изоляции, что в test_engine.py: фикстура "vault" (conftest.py)
+подменяет VAULT/DB_PATH через monkeypatch на временный SQLite-вольт, тесты
+зовут функции движка напрямую в обход argparse.
 
 `TODAY` здесь — понедельник, не суббота, как в test_engine.py: рабочее время
 (9:00–21:00, без выходных по умолчанию) двигает показ шага на понедельник, если
@@ -19,49 +20,18 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import engine  # noqa: E402
 
+from conftest import task, step  # noqa: E402
+
 TODAY = date(2026, 8, 17)       # понедельник
 TOMORROW = date(2026, 8, 18)    # вторник
 OVERDUE = date(2026, 8, 10)     # понедельник неделей раньше — давно просрочено
 NOW = "2026-08-17T10:00:00"     # будний день, рабочее время
-
-
-class NoAliasDumper(yaml.SafeDumper):
-    def ignore_aliases(self, data):
-        return True
-
-
-@pytest.fixture
-def vault(tmp_path, monkeypatch):
-    tasks = tmp_path / "Задачи"
-    tasks.mkdir()
-    monkeypatch.setattr(engine, "VAULT", tmp_path)
-    monkeypatch.setattr(engine, "TASKS_DIR", tasks)
-    return tmp_path
-
-
-def step(number, title, *, status="pending", control_date=None,
-        completed_date=None, log=None):
-    return {"id": number, "title": title, "status": status,
-            "control_date": control_date, "completed_date": completed_date,
-            "log": log if log is not None else []}
-
-
-def task(vault, name, steps, *, body="Тело заметки, его пишет заказчик.\n", **fields):
-    meta = {"schema": 1, "type": "task", "title": name, "created": date(2026, 8, 1)}
-    meta.update(fields)
-    meta["steps"] = steps
-    fm = yaml.dump(meta, Dumper=NoAliasDumper, allow_unicode=True,
-                   sort_keys=False, default_flow_style=False)
-    path = vault / "Задачи" / f"{name}.md"
-    path.write_text(f"---\n{fm}---\n\n{body}", encoding="utf-8")
-    return path
 
 
 def run(command, today=TODAY, now=NOW, **fields):
