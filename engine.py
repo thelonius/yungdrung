@@ -1791,6 +1791,40 @@ def cmd_kb_note_delete(args, today):
     return {"ok": True, "note": args.slug, "deleted": True}
 
 
+def cmd_kb_note_list(args, today):
+    """Полный список записей базы знаний — каждая запись целиком (slug, title,
+    body, tags, aliases), не обрезанная форма load_kb_entries. Страницы
+    интерфейса читают этим, а не load_notes напрямую: там нужен только состав
+    для поиска ссылок, здесь — весь текст для списка/карточек.
+
+    N+1 запросов (list slug'ов, потом find_note_exact на каждый) — сознательно:
+    записей базы знаний не тысячи, а зависимость от storage.py остаётся только
+    через уже существующие функции."""
+    conn = storage.connect(DB_PATH)
+    try:
+        stubs = storage.load_notes(conn)
+        notes = [storage.find_note_exact(conn, stub["id"]) for stub in stubs]
+        notes = [n for n in notes if n is not None]
+    finally:
+        conn.close()
+    notes.sort(key=lambda n: n["title"])
+    return {"notes": notes}
+
+
+def cmd_kb_note_show(args, today):
+    """Одна запись базы знаний по slug целиком, тем же плоским словарём, что
+    отдаёт storage.find_note_exact — без лишнего уровня вложенности."""
+    conn = storage.connect(DB_PATH)
+    try:
+        note = storage.find_note_exact(conn, args.slug)
+    finally:
+        conn.close()
+    if note is None:
+        return {"ok": False,
+                "errors": [{"field": "slug", "error": f"нет записи «{args.slug}»"}]}
+    return note
+
+
 # --- выгрузка в Excel ------------------------------------------------------
 
 # Предел Excel на длину текста в ячейке. Тело заметки пишет заказчик, и упереться
@@ -2161,6 +2195,13 @@ def main():
     kbd = sub.add_parser("kb-delete", help="удалить запись базы знаний насовсем")
     kbd.add_argument("slug")
     kbd.set_defaults(func=cmd_kb_note_delete)
+
+    kbl = sub.add_parser("kb-list", help="полный список записей базы знаний")
+    kbl.set_defaults(func=cmd_kb_note_list)
+
+    kbs = sub.add_parser("kb-show", help="одна запись базы знаний по slug")
+    kbs.add_argument("slug")
+    kbs.set_defaults(func=cmd_kb_note_show)
 
     x = sub.add_parser("export", help="выгрузить весь вольт в Excel")
     x.add_argument("--to", help="куда писать; по умолчанию — «Выгрузка <дата>.xlsx» "

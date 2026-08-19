@@ -1386,3 +1386,43 @@ def test_rename_tag_everywhere_не_трогает_задачи_без_тега(
     assert задето == 0
     meta, _ = read(vault / "Задачи" / "Без тега.md")
     assert meta["tags"] == ["другое"]
+
+
+# --- база знаний: список и карточка одной записи (cmd_kb_note_list/show) ----
+#
+# Интерфейса для kb-create/kb-update/kb-delete не хватало ещё и по чтению:
+# страница списка и карточка записи нуждаются в записи целиком (slug, title,
+# body, tags, aliases), а не в обрезанной форме load_kb_entries. Обе команды
+# читают только через уже существующий kb_note()-помощник выше — своего пути
+# завести запись здесь не заводим.
+
+def test_kb_note_list_пустой_вольт(vault):
+    assert run(engine.cmd_kb_note_list) == {"notes": []}
+
+
+def test_kb_note_list_сортирует_по_title_а_не_по_slug(vault):
+    """slug у «Ярослав» меньше по алфавиту, чем у «Андрей», но список читает
+    человек — сортировка идёт по заголовку, а не по идентификатору записи."""
+    kb_note(vault, "Ярослав", slug="a-ярослав")
+    kb_note(vault, "Андрей", slug="z-андрей", aliases=["Андрюха"], body="Тело.")
+    result = run(engine.cmd_kb_note_list)
+    assert [n["title"] for n in result["notes"]] == ["Андрей", "Ярослав"]
+    андрей = result["notes"][0]
+    assert андрей["slug"] == "z-андрей"
+    assert андрей["aliases"] == ["Андрюха"]
+    assert андрей["body"] == "Тело."
+
+
+def test_kb_note_show_находит_запись_по_slug(vault):
+    kb_note(vault, "Василий Говнов", aliases=["Вася"], body="Контакт заказчика.")
+    result = run(engine.cmd_kb_note_show, slug="Василий Говнов")
+    assert result["slug"] == "Василий Говнов"
+    assert result["title"] == "Василий Говнов"
+    assert result["aliases"] == ["Вася"]
+    assert result["body"] == "Контакт заказчика."
+
+
+def test_kb_note_show_нет_записи(vault):
+    result = run(engine.cmd_kb_note_show, slug="нет-такой")
+    assert result["ok"] is False
+    assert result["errors"][0]["field"] == "slug"

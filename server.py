@@ -83,7 +83,8 @@ class Handler(BaseHTTPRequestHandler):
         route = unquote(self.path.split("?")[0])
         СТРАНИЦЫ = {"/": "feed.html", "/лента": "feed.html", "/новая": "index.html",
                     "/шаблоны": "templates.html", "/задача": "task.html",
-                    "/задачи": "tasks.html", "/настройки": "settings.html"}
+                    "/задачи": "tasks.html", "/настройки": "settings.html",
+                    "/база": "kb.html", "/база/запись": "kb-note.html"}
         if route in СТРАНИЦЫ:
             return self._static(СТРАНИЦЫ[route], "text/html; charset=utf-8")
         if route.endswith(".css"):
@@ -113,6 +114,11 @@ class Handler(BaseHTTPRequestHandler):
                 _args(dest=назначение), date.today()))
         if route == "/api/settings":
             return self._json(200, self._settings_load())
+        if route == "/api/kb/notes":
+            return self._json(200, engine.cmd_kb_note_list(_args(), date.today()))
+        if route == "/api/kb/note":
+            слаг = _param(self.path, "slug") or ""
+            return self._json(200, engine.cmd_kb_note_show(_args(slug=слаг), date.today()))
         self._json(404, {"error": "нет такого адреса"})
 
     def do_POST(self):
@@ -207,6 +213,20 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/tags-merge":
             return self._json(200, self._tag_rewrite(
                 cfg.merge_tags, payload.get("source"), payload.get("target")))
+        if route == "/api/kb/note-create":
+            return self._json(200, engine.cmd_kb_note_create(
+                _args(json=json.dumps(payload)), date.today()))
+        if route == "/api/kb/note-update":
+            # Слаг для поиска записи берём из query-строки (тот же приём, что у
+            # GET /api/kb/note?slug=...), а не из тела: тело может переименовывать
+            # запись (data["slug"] — новое значение), и тогда оба смысла в одном
+            # поле payload["slug"] не различить — старая запись не находится.
+            текущий_слаг = _param(self.path, "slug") or payload.get("slug")
+            return self._json(200, engine.cmd_kb_note_update(
+                _args(slug=текущий_слаг, json=json.dumps(payload)), date.today()))
+        if route == "/api/kb/note-delete":
+            return self._json(200, engine.cmd_kb_note_delete(
+                _args(slug=payload.get("slug")), date.today()))
         self._json(404, {"error": "нет такого адреса"})
 
     def _settings_path(self):

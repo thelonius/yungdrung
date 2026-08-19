@@ -1,0 +1,30 @@
+/* Карточка записи базы знаний. Токены и базовые формы — из style.css,
+   .toast — из feed.css; здесь только то, чего там нет. */
+
+.back { margin: 0 0 18px; }
+
+.card-head { margin-bottom: 22px; }
+
+#page-title {
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+#card {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.save-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 4px;
+}
+
+@media (max-width: 640px) {
+  .card-fields { grid-template-columns: 1fr; }
+}

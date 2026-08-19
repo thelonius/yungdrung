@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Запись базы знаний — Yungdrung</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/feed.css">
+<link rel="stylesheet" href="/kb-note.css">
+</head>
+<body>
+
+<main class="wrap">
+
+  <p class="back"><a href="/база" class="ghost small">← База знаний</a></p>
+
+  <p class="err" id="load-err" hidden></p>
+
+  <article id="card" hidden>
+
+    <header class="card-head">
+      <h1 id="page-title">Новая запись</h1>
+    </header>
+
+    <div class="field">
+      <label for="slug">Slug</label>
+      <input type="text" id="slug" autocomplete="off" placeholder="vasily-govnov">
+      <p class="note">Короткий идентификатор латиницей — по нему записи ссылаются друг на друга</p>
+      <p class="err" id="err-slug" hidden></p>
+    </div>
+
+    <div class="field">
+      <label for="title">Название</label>
+      <input type="text" id="title" autocomplete="off" placeholder="Василий Говнов">
+      <p class="err" id="err-title" hidden></p>
+    </div>
+
+    <div class="card-fields">
+      <div class="field">
+        <label for="tags">Категории <span class="opt">необязательно</span></label>
+        <input type="text" id="tags" autocomplete="off" placeholder="люди, контакты">
+        <p class="note">Через запятую</p>
+      </div>
+
+      <div class="field">
+        <label for="aliases">Синонимы <span class="opt">необязательно</span></label>
+        <input type="text" id="aliases" autocomplete="off" placeholder="Вася, ВГ">
+        <p class="note">Через запятую — по ним тоже найдёт автораспознавание</p>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="body">Текст</label>
+      <textarea id="body" rows="8" placeholder="Контакты, договорённости, ссылки на [[другие записи]]"></textarea>
+    </div>
+
+    <div class="save-row">
+      <button type="button" class="primary" id="save-note">Сохранить</button>
+      <button type="button" class="ghost small danger-hover" id="delete-note" hidden>Удалить</button>
+      <span class="saved" id="saved" hidden></span>
+      <p class="err" id="err-general" hidden></p>
+    </div>
+
+  </article>
+
+</main>
+
+<script src="/kb-note.js"></script>
+</body>
+</html>
