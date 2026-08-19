@@ -175,7 +175,7 @@ def очистить():
     убрано = 0
     for task in engine.load_tasks():
         if МЕТКА in (task["meta"].get("tags") or []):
-            task["path"].unlink()
+            engine.get_store().delete_task(task["path"].id)
             убрано += 1
     for имя in ЗАМЕТКИ:
         путь = engine.KB_DIR / f"{имя}.md"
