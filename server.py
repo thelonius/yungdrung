@@ -388,22 +388,11 @@ class Handler(BaseHTTPRequestHandler):
         return {"errors": errors}
 
     def _create(self, payload):
-        today = date.today()
-        existing = [t["path"].stem for t in engine.load_tasks()]
-        errors = engine.validate_new_task(payload, existing, today)
-        if errors:
-            return {"ok": False, "errors": errors}
-
-        meta = engine.build_task(payload, today)
-        path = engine.TASKS_DIR / f"{meta['title']}.md"
-        if path.exists():
-            return {"ok": False,
-                    "errors": [{"field": "title", "error": "Файл уже существует"}]}
-        task = {"path": path, "meta": meta,
-                "body": (payload.get("body") or "").strip() + "\n"}
-        engine.save(task, today)
-        return {"ok": True, "task": path.stem, "status": task["meta"]["status"],
-                "steps": len(meta["steps"])}
+        # Раньше здесь дублировалась логика engine.cmd_create (свой сбор пути,
+        # свой вызов save()) — два места, которые обязаны были совпадать и
+        # рано или поздно разошлись бы. КОНТРАКТ.md прямо запрещает оболочке
+        # писать данные в обход ядра; зовём ту же команду, что и CLI.
+        return engine.cmd_create(_args(json=json.dumps(payload)), date.today())
 
 
 def main():
