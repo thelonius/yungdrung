@@ -16,8 +16,8 @@
 у буксующих шагов в журнале три переноса с разными датами, а не счётчик,
 проставленный из головы.
 
-    python3 демо.py             # завести
-    python3 демо.py --очистить  # убрать только своё
+    python3 demo.py          # завести
+    python3 demo.py --clean  # убрать только своё
 
 Своё — это задачи с тегом «демо». Чужие файлы скрипт не трогает ни при
 наполнении, ни при очистке: вольт разработчика обычно не пустой.
@@ -187,11 +187,11 @@ def очистить():
 
 def main():
     ap = argparse.ArgumentParser(description="Тестовое наполнение вольта")
-    ap.add_argument("--очистить", action="store_true", dest="очистить",
+    ap.add_argument("--clean", action="store_true", dest="clean",
                     help="убрать задачи с тегом «демо» и вернуться к пустому вольту")
     args = ap.parse_args()
 
-    if args.очистить:
+    if args.clean:
         print(f"убрано файлов: {очистить()}")
         return
 
@@ -202,7 +202,7 @@ def main():
     новых = [t for t in стало if t["path"].stem not in было]
     print(f"заведено задач: {len(новых)}, всего в вольте: {len(стало)}")
     print(f"вольт: {engine.VAULT}")
-    print("убрать обратно: python3 демо.py --очистить")
+    print("убрать обратно: python3 demo.py --clean")
 
 
 if __name__ == "__main__":
