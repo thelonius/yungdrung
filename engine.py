@@ -48,17 +48,26 @@ import backup
 import kb
 import recurrence as rec
 import settings as cfg
-import storage
+import store
 import templates as tpl
 import worktime
 
 SCHEMA = 1
 VAULT = Path(os.environ.get("YUNGDRUNG_VAULT", Path(__file__).resolve().parent))
-# Единственный источник правды — файл SQLite в корне вольта (раньше здесь были
-# TASKS_DIR/KB_DIR, папки Задачи/ и База/; storage.py их заменяет одной базой).
-# Модульная константа, как раньше — тесты monkeypatch'ят её напрямую тем же
-# приёмом, что и старые TASKS_DIR/KB_DIR.
-DB_PATH = VAULT / "Вольт.sqlite"
+# База знаний ещё не переехала на SQLite (этап (b) в ПЛАН.md) — читается и
+# пишется как раньше, папкой markdown-файлов.
+KB_DIR = VAULT / "База"
+
+
+def db_path():
+    """Путь к базе. Функция, а не константа — по той же причине, что и
+    `get_reasons()` ниже: `VAULT` в тестах подменяют через monkeypatch уже
+    после импорта, и захардкоженный путь эту подмену не увидит."""
+    return VAULT / "вольт.db"
+
+
+def get_store():
+    return store.Store(db_path())
 
 OPEN = "pending"
 DONE = "done"
@@ -111,21 +120,60 @@ EVENT_RU = {
 
 # --- чтение и запись -------------------------------------------------------
 
-# Раньше здесь собирались файлы, не разобравшиеся при чтении markdown-вольта.
-# После перехода на SQLite (storage.py) обычное чтение таких ошибок не поднимает
-# — база либо есть и цела, либо connect() падает целиком. Список оставляем как
-# механизм и как место для сигнала на случай будущей порчи БД, но при обычном
-# load_tasks() он пуст.
+def parse_file(path):
+    """Frontmatter + тело. Тело сохраняем как есть: его пишет заказчик, не мы."""
+    raw = path.read_text(encoding="utf-8")
+    if not raw.startswith("---"):
+        raise ValueError(f"{path.name}: нет frontmatter")
+    _, fm, body = raw.split("---", 2)
+    return yaml.safe_load(fm) or {}, body.lstrip("\n")
+
+
+class PlainDumper(yaml.SafeDumper):
+    """Без якорей и ссылок: одна и та же дата в нескольких полях — обычное дело,
+    а `&id001`/`*id001` Obsidian не разбирает и файл для него ломается."""
+
+    def ignore_aliases(self, data):
+        return True
+
+
+def write_file(path, meta, body):
+    """Атомарно: Obsidian держит файлы открытыми и кэширует, дописывать на месте нельзя.
+
+    На Windows os.replace может ненадолго упасть с PermissionError, если файл в
+    этот момент держит антивирус, OneDrive-индексатор или сам Obsidian — на маке
+    так почти не бывает. Несколько коротких повторов дешевле, чем терять запись.
+    """
+    fm = yaml.dump(meta, Dumper=PlainDumper, allow_unicode=True, sort_keys=False,
+                   default_flow_style=False)
+    content = f"---\n{fm}---\n\n{body}"
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+        for attempt in range(5):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.2 * (attempt + 1))
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+# Задачи теперь читает store.py — SQLite не оставляет полуразобранных строк
+# так, как правленный руками YAML оставлял полуразобранные файлы. Список остаётся
+# (всегда пустой) ради стабильности формы ответа: `cmd_feed`/`cmd_backlog`/
+# `cmd_next`/`cmd_list`/`cmd_refresh` отдают "broken" по контракту, и снимать
+# ключ без отдельного решения — не эта задача.
 BROKEN = []
 
 
 def load_tasks():
-    BROKEN.clear()
-    conn = storage.connect(DB_PATH)
-    try:
-        return storage.load_tasks(conn)
-    finally:
-        conn.close()
+    return get_store().load_tasks()
 
 
 def find_task(fragment):
@@ -146,13 +194,35 @@ KB_BROKEN = []
 
 
 def load_kb_entries():
-    """Записи базы знаний для kb.build_index — раздел 5.7 ТЗ."""
+    """Записи базы знаний для kb.build_index — раздел 5.7 ТЗ.
+
+    Источник — `База/*.md` в том же формате frontmatter, что и задачи были до
+    переезда на SQLite. Папки может не быть вовсе: заказчик вправе завести
+    первую задачу раньше первой записи базы, и это не поломка, а пустой список.
+    """
     KB_BROKEN.clear()
-    conn = storage.connect(DB_PATH)
-    try:
-        return storage.load_notes(conn)
-    finally:
-        conn.close()
+    if not KB_DIR.is_dir():
+        return []
+    out = []
+    for path in sorted(KB_DIR.glob("*.md")):
+        try:
+            meta, _ = parse_file(path)
+        except Exception as e:
+            reason = " ".join(str(e).split())[:200]
+            KB_BROKEN.append({"file": path.name, "error": reason})
+            continue
+        if meta.get("type") != "note":
+            continue
+        title = (meta.get("title") or "").strip()
+        if not title:
+            KB_BROKEN.append({"file": path.name, "error": "нет названия"})
+            continue
+        out.append({
+            "id": path.stem,
+            "title": title,
+            "aliases": meta.get("aliases") or meta.get("synonyms") or [],
+        })
+    return out
 
 
 # --- вычисления ------------------------------------------------------------
@@ -318,59 +388,41 @@ def put_steps_into_body(body, block):
     return block + "\n\n" + body.lstrip("\n") if body.strip() else block + "\n"
 
 
-def save(task, today, force=True):
-    """Статус и сводка пересчитываются при каждой записи, руками их никто не ставит.
+def task_summary(task, today):
+    """status/current_step/control_date/stalled/progress — сводка верхнего
+    уровня, которую `save()` мержит в `task["meta"]` перед возвратом.
 
-    Сводка дублирует то, что и так лежит в шагах, но Bases читает только свойства
-    верхнего уровня и внутрь массива шагов не заглядывает. Без этих полей таблица
-    в Obsidian показывает одни имена файлов. Источник правды остаётся в шагах:
-    всё, что здесь, вычисляется заново при каждой записи.
+    Отдельная функция, а не кусок внутри save(): раньше сводку было видно
+    только прочитав только что написанный файл, теперь — сразу после чтения
+    из БД её там нет (колонок под неё нет, source of truth в шагах). Тестам и
+    любому будущему коду, которому нужен «файл как он раньше выглядел бы»,
+    нужен ровно этот пересчёт, а не второе его написание.
     """
-    meta = task["meta"]
     steps = steps_of(task)
     step = current_step(task)
     closed = sum(1 for s in steps if is_closed(s))
-
-    summary = {
-        "schema": SCHEMA,
+    return {
         "status": STATUS_RU[task_status(task, today)],
         "current_step": step.get("title") if step else None,
         "control_date": as_date(step.get("control_date")) if step else None,
         "stalled": stall_count(step) if step else 0,
         "progress": f"{closed}/{len(steps)}" if steps else None,
     }
-    body = put_steps_into_body(task["body"], render_steps(task, today))
-    # Сравниваем через isoformat(), а не значения как есть: старое значение
-    # summary-поля читается из extra_json (JSON дат не знает — control_date
-    # там всегда строка), а свежепосчитанное здесь — объект date. "2026-08-21"
-    # != date(2026, 8, 21) в Python всегда True, и без нормализации changed
-    # был бы истинным при каждой записи, даже когда реально ничего не изменилось.
-    def _для_сравнения(v):
-        return v.isoformat() if isinstance(v, (date, datetime)) else v
-    changed = (any(_для_сравнения(meta.get(k)) != _для_сравнения(v)
-                   for k, v in summary.items())
-               or body != task["body"])
-    meta.update(summary)
-    task["body"] = body
 
-    # Порядок полей задаём явно: в редакторе свойств Obsidian сводка должна быть
-    # сверху, а длинный массив шагов — в конце, иначе статуса не видно за простынёй.
-    head = ["schema", "type", "title", "created", "start_date", "status",
-            "cancelled", "cancelled_reason", "current_step", "control_date",
-            "progress", "stalled", "tags"]
-    ordered = {k: meta[k] for k in head if k in meta}
-    ordered.update({k: v for k, v in meta.items() if k not in head and k != "steps"})
-    if "steps" in meta:
-        ordered["steps"] = meta["steps"]
-    task["meta"] = ordered
 
-    if changed or force:
-        conn = storage.connect(DB_PATH)
-        try:
-            storage.save_task(conn, task)
-        finally:
-            conn.close()
-    return changed
+def save(task, today):
+    """Статус и сводка пересчитываются при каждой записи, руками их никто не ставит.
+
+    Сводка в БД не хранится вообще — колонок под неё нет, это была чистая
+    денормализация под таблицу Obsidian Bases. Здесь она по-прежнему мержится в
+    `task["meta"]`, потому что вызывающий код (`cmd_update`/`cmd_cancel`/
+    `cmd_reopen` и другие) читает `task["meta"]["status"]` сразу после save() —
+    источник правды остаётся в шагах, а это просто удобный снимок для JSON.
+    """
+    meta = task["meta"]
+    meta["schema"] = SCHEMA
+    meta.update(task_summary(task, today))
+    get_store().save_task(task, today)
 
 
 # --- команды ---------------------------------------------------------------
@@ -418,7 +470,12 @@ def collect_open(now, work):
     """
     лента, завал, ждут, внимание = [], [], [], []
     for task in load_tasks():
-        if task["meta"].get("cancelled") is True:
+        # Отменённая задача уходит из всех наборов целиком. Шаг в ней остаётся
+        # открытым — по нему просто больше не работают, — поэтому без явной
+        # проверки она каждый день всплывала бы просроченной, хотя
+        # `task_status` считает её отменённой первым же правилом. Заодно это
+        # снимает напоминания: `remind.py` ходит за списком сюда же.
+        if task["meta"].get("cancelled"):
             continue
         steps = steps_of(task)
         step = current_step(task)
@@ -553,6 +610,18 @@ def cmd_next(args, today):
 
 ОТНОСИТЕЛЬНЫЕ = {"сегодня": 0, "завтра": 1, "послезавтра": 2}
 
+# Предлоги-связки. У шага одна точка времени, а не диапазон, поэтому «в 9»,
+# «до 9» и «к 9» называют один и тот же час: разница есть для человека, для
+# движка её нет. Выкидываем их и разбираем то, что осталось — иначе «завтра в
+# 9-30» падает на слове «в», хотя и дата, и время в строке написаны.
+СВЯЗКИ = {"в", "во", "на", "до", "после", "к", "ко"}
+
+# Время суток словом: «7 вечера» пишут чаще, чем «19:00».
+ЧАСТИ_СУТОК = {"утра", "дня", "вечера", "ночи"}
+
+# Названия часов — просто другая запись времени, разворачиваем до разбора.
+ИМЕНА_ЧАСОВ = {"полдень": "12:00", "полночь": "00:00"}
+
 
 def _не_время(token):
     raise ValueError(f"не время: {token}")
@@ -577,6 +646,30 @@ def parse_time_part(token):
     return dtime(часы, минуты)
 
 
+def _час_или_время(token):
+    """Хвост строки как время: и «9:30», и голый час «9»."""
+    т = parse_time_part(token)
+    if т is not None:
+        return т
+    if token.isdigit() and len(token) <= 2 and int(token) <= 23:
+        return dtime(int(token), 0)
+    return None
+
+
+def _время_суток(t, слово):
+    """«7 вечера» → 19:00, «12 ночи» → 00:00.
+
+    Часы больше двенадцати не трогаем: «19 вечера» пишут редко, но кто написал,
+    тот имел в виду ровно то, что написал, — доворачивать там нечего.
+    """
+    ч = t.hour
+    if слово in ("дня", "вечера") and ч < 12:
+        ч += 12
+    elif слово in ("утра", "ночи") and ч == 12:
+        ч = 0
+    return dtime(ч, t.minute)
+
+
 def parse_date_input(text, today):
     """Человеческий ввод → date или datetime. Здесь, а не в браузере.
 
@@ -585,11 +678,13 @@ def parse_date_input(text, today):
     только показывает, во что он превратился.
 
     Понимает: 2026-08-18 · 18.08.2026 · 18.08 · сегодня · завтра · послезавтра ·
-    +3 (через три дня) · пн, вторник (ближайший такой день после сегодня).
+    +3 и «через 3 дня» · пн, вторник (ближайший такой день после сегодня).
 
-    Со временем: «завтра 14:00», «18.08 09:30», «+3 18:00». Просто «14:00» —
-    сегодня в это время. Без времени возвращается date, и шаг считается
-    назначенным на весь день: рабочие часы для него считаются от начала дня.
+    Со временем: «завтра 14:00», «завтра в 9-30», «18.08 в 9», «+3 18:00»,
+    «в 7 вечера», «завтра в полдень». Предлоги «в/во/на/до/после/к» выкидываются,
+    время суток словом доворачивает час до суточного. Просто «14:00» — сегодня
+    в это время. Без времени возвращается date, и шаг считается назначенным на
+    весь день: рабочие часы для него считаются от начала дня.
     """
     if text is None:
         return None
@@ -597,38 +692,47 @@ def parse_date_input(text, today):
     if not s:
         return None
 
+    слова = [ИМЕНА_ЧАСОВ.get(w, w) for w in s.split() if w not in СВЯЗКИ]
+    if not слова:
+        raise ValueError(f"не дата: {text!r}")
+    s = " ".join(слова)
+
     # «через 3 дня» — то же самое, что «+3», просто длиннее написано. Хвост
     # («18:00» после «дня») не теряем — он уйдёт в обычный разбор времени ниже.
     через = re.match(r"^через\s+(\d+)\s*д(?:ень|ня|ней)?\b\s*(.*)$", s)
     if через:
         s = f"+{через.group(1)} {через.group(2)}".strip()
 
-    # «до», «после», «к» — без модели диапазона (у шага одна точка времени, не
-    # начало и конец) это предлоги без своего смысла: «до 18:00» и «после 14»
-    # обе называют один и тот же час. Разница видна человеку в тексте, не движку.
-    for предлог in ("до ", "после ", "к "):
-        if s.startswith(предлог):
-            s = s[len(предлог):].strip()
-            break
-
-    # Час без минут: «после 14» после снятия предлога — это просто «14». Не
-    # путаем с «+14» (там уже отработал startswith("+") веткой выше) и с датами
-    # («18.08» ловится дальше своим форматом, до которого голое число не доходит).
-    if s.isdigit() and len(s) <= 2 and int(s) <= 23:
-        return datetime.combine(today, dtime(int(s), 0))
+    # «вечера» относится к часу перед собой, поэтому слово снимаем заранее:
+    # дальше время разбирается обычным путём, как если бы его написали цифрами.
+    # Порядок важен — «дня» из «через 3 дня» разобрано выше и сюда не доходит.
+    части = s.split()
+    суточное = None
+    if len(части) > 1 and части[-1] in ЧАСТИ_СУТОК:
+        суточное = части.pop()
+        s = " ".join(части)
 
     # Время отделяем до всего остального: «18.08 09:30» — это дата и время, а не
-    # два непонятных числа. Голое «14:00» означает сегодня в это время.
-    части = s.split()
+    # два непонятных числа.
     if len(части) > 1:
-        часть_времени = parse_time_part(части[-1])
+        часть_времени = _час_или_время(части[-1])
         if часть_времени is not None:
+            if суточное:
+                часть_времени = _время_суток(часть_времени, суточное)
             день = parse_date_input(" ".join(части[:-1]), today)
             if день is None:
                 raise ValueError(f"есть время, но нет даты: {text!r}")
             return datetime.combine(as_date(день), часть_времени)
-    elif ":" in s:
-        return datetime.combine(today, parse_time_part(s) or _не_время(s))
+    else:
+        # Одно слово. Часом его считаем, только когда это однозначно час: стоит
+        # двоеточие, приписано время суток или это короткое число вроде «9».
+        # Голое «18» не путаем с датой: «18.08» ловится дальше своим форматом.
+        if суточное or ":" in s:
+            часы = _час_или_время(s) or _не_время(s)
+            return datetime.combine(
+                today, _время_суток(часы, суточное) if суточное else часы)
+        if s.isdigit() and len(s) <= 2 and int(s) <= 23:
+            return datetime.combine(today, dtime(int(s), 0))
 
     if s in ОТНОСИТЕЛЬНЫЕ:
         return today + timedelta(days=ОТНОСИТЕЛЬНЫЕ[s])
@@ -636,9 +740,7 @@ def parse_date_input(text, today):
     if s.startswith("+") and s[1:].isdigit():
         return today + timedelta(days=int(s[1:]))
 
-    день = ДНИ_НЕДЕЛИ.get(s.replace("воскресенье", "воскресенье"))
-    if день is None:
-        день = ДНИ_НЕДЕЛИ.get(s)
+    день = ДНИ_НЕДЕЛИ.get(s)
     if день is not None:
         вперёд = (день - today.weekday()) % 7 or 7  # «пн» в понедельник — следующий
         return today + timedelta(days=вперёд)
@@ -647,6 +749,10 @@ def parse_date_input(text, today):
     if m:
         д, мес, год = int(m.group(1)), int(m.group(2)), m.group(3)
         if год is None:
+            # «9-30» — не тридцатый месяц, а половина десятого. Если датой строка
+            # не читается, пробуем прочитать её временем, а не роняем разбор.
+            if мес > 12:
+                return datetime.combine(today, parse_time_part(s) or _не_время(s))
             дата = date(today.year, мес, д)
             # «18.08» в сентябре — это следующий год, а не прошедшая дата
             return дата if дата >= today else date(today.year + 1, мес, д)
@@ -656,13 +762,16 @@ def parse_date_input(text, today):
     return as_date(s)  # ISO и всё, что понимает datetime.fromisoformat
 
 
-# Windows не пускает эти символы в имена файлов, а имя задачи — это имя файла.
-# Проверяем и на маке тоже: вольт уезжает на Windows, и задача, заведённая здесь,
-# должна там открыться.
+# После переезда на SQLite название задачи больше не имя файла — ограничение
+# сохранено, но теперь по другой причине. `|` занят синтаксисом piped-ссылок
+# базы знаний (`[[Название|как написано]]`), `\/:*?"<>` в названии задачи
+# нечитаемы и мешали бы будущим выгрузкам (Excel режет такие символы в именах
+# листов). Осознанное продуктовое правило, не отпечаток файловой системы.
 FORBIDDEN_IN_NAME = set('\\/:*?"<>|')
 
-# Имя файла целиком (с расширением и путём) на Windows ограничено 260 символами.
-# С запасом на путь к вольту берём предел на само название.
+# Экран не резиновый: 120 символов — предел, после которого название в ленте
+# и в списке шагов перестаёт помещаться в строку, а не ограничение файловой
+# системы (тем оно и было раньше, для markdown-файлов).
 MAX_TITLE = 120
 
 
@@ -749,7 +858,7 @@ def validate_new_task(data, existing_names, today):
     elif set(title) & FORBIDDEN_IN_NAME:
         плохие = "".join(sorted(set(title) & FORBIDDEN_IN_NAME))
         errors.append({"field": "title",
-                       "error": f"В названии нельзя символы {плохие} — это имя файла"})
+                       "error": f"В названии нельзя символы {плохие}"})
     elif title.lower() in {n.lower() for n in existing_names}:
         errors.append({"field": "title",
                        "error": "Задача с таким названием уже есть"})
@@ -847,18 +956,15 @@ def cmd_create(args, today):
         return {"ok": False, "errors": errors}
 
     meta = build_task(data, today)
-    conn = storage.connect(DB_PATH)
+    # `path` — раньше был предвычисленный путь к файлу, теперь задачи ещё нет
+    # в БД, значит нет и id. save() увидит path=None, заведёт новую строку и
+    # сам подставит сюда TaskRef с настоящим id.
+    task = {"path": None, "meta": meta, "body": (data.get("body") or "").strip() + "\n"}
     try:
-        if storage.task_exists(conn, meta["title"]):
-            return {"ok": False, "errors": [{"field": "title", "error": "Файл уже существует"}]}
-        created = storage.create_task(conn, meta)
-    finally:
-        conn.close()
-
-    task = {"id": created["id"], "path": created["path"], "meta": created["meta"],
-            "body": (data.get("body") or "").strip() + "\n"}
-    save(task, today)
-    return {"ok": True, "task": task["path"].stem, "path": task["path"].stem,
+        save(task, today)
+    except store.DuplicateTitle:
+        return {"ok": False, "errors": [{"field": "title", "error": "Задача с таким названием уже есть"}]}
+    return {"ok": True, "task": task["path"].stem,
             "steps": len(meta["steps"]), "status": task["meta"]["status"]}
 
 
@@ -925,7 +1031,7 @@ def validate_task_edit(task, data, existing_names, today):
     elif set(title) & FORBIDDEN_IN_NAME:
         плохие = "".join(sorted(set(title) & FORBIDDEN_IN_NAME))
         errors.append({"field": "title",
-                       "error": f"В названии нельзя символы {плохие} — это имя файла"})
+                       "error": f"В названии нельзя символы {плохие}"})
     elif title.lower() in {n.lower() for n in свои}:
         errors.append({"field": "title",
                        "error": "Задача с таким названием уже есть"})
@@ -1014,27 +1120,16 @@ def cmd_update(args, today):
             "error": f"Шаг {sid} пропал из данных — сначала «снять», не убирать так"}
             for sid in пропали]}
 
-    старое_название = task["path"].stem
-    новое_название = task["meta"]["title"]
-    если_переименовано = новое_название != старое_название
-    if если_переименовано:
-        # Переименование в SQL — смена title у той же строки (task["id"]
-        # стабилен через переименование, в отличие от старого пути-имени
-        # файла), а не перенос файла. Делаем это до save(): storage.save_task
-        # ищет строку по meta["title"], который apply_task_edit уже поставил
-        # новым, — если не переименовать заранее, поиск по новому title
-        # не найдёт ничего, потому что в базе всё ещё лежит старое.
-        conn = storage.connect(DB_PATH)
-        try:
-            try:
-                storage.rename_task(conn, task["id"], новое_название)
-            except ValueError as e:
-                return {"ok": False, "errors": [{"field": "title", "error": str(e)}]}
-        finally:
-            conn.close()
-        task["path"] = storage.TaskRef(новое_название)
-
-    save(task, today)
+    # Переименование раньше значило перенос файла — os.replace после записи,
+    # отдельная проверка «файл уже существует» до неё. У задачи-строки id не
+    # меняется от смены title, так что переименование — то же самое save(),
+    # что и любая другая правка; `validate_task_edit` уже проверила название
+    # на совпадение с другими задачами, UNIQUE(title) в БД — подстраховка от
+    # гонки, а не источник этой проверки.
+    try:
+        save(task, today)
+    except store.DuplicateTitle:
+        return {"ok": False, "errors": [{"field": "title", "error": "Задача с таким названием уже есть"}]}
 
     return {"ok": True, "task": task["path"].stem, "status": task["meta"]["status"],
             "steps": len(task["meta"]["steps"])}
@@ -1060,11 +1155,7 @@ def cmd_delete(args, today):
     """Удалить задачу насовсем. Подтверждение — дело интерфейса, не движка:
     здесь только сам необратимый шаг."""
     task = find_task(args.task)
-    conn = storage.connect(DB_PATH)
-    try:
-        storage.delete_task(conn, task["id"])
-    finally:
-        conn.close()
+    get_store().delete_task(task["path"].id)
     return {"ok": True, "task": task["path"].stem, "deleted": True}
 
 
@@ -1181,16 +1272,11 @@ def _create_task_from_data(данные, today, existing=None):
         return None, errors
 
     meta = build_task(данные, today)
-    conn = storage.connect(DB_PATH)
+    задача = {"path": None, "meta": meta, "body": (данные.get("body") or "").strip() + "\n"}
     try:
-        if storage.task_exists(conn, meta["title"]):
-            return None, [{"field": "title", "error": "Файл уже существует"}]
-        created = storage.create_task(conn, meta)
-    finally:
-        conn.close()
-    задача = {"id": created["id"], "path": created["path"], "meta": created["meta"],
-              "body": (данные.get("body") or "").strip() + "\n"}
-    save(задача, today)
+        save(задача, today)
+    except store.DuplicateTitle:
+        return None, [{"field": "title", "error": "Задача с таким названием уже есть"}]
     return задача, None
 
 
@@ -1361,18 +1447,24 @@ def cmd_template_from_task(args, today):
 def cmd_refresh(args, today):
     """Пересчитать сводку во всех задачах.
 
-    Статус в файле устаревает сам по себе: задача становится просроченной оттого,
-    что прошёл день, а не оттого, что кто-то её трогал. Гонять перед утренней
-    сборкой. Файлы, где ничего не изменилось, не переписываются — иначе каждое утро
-    получаем холостой коммит и перезагрузку вольта в Obsidian.
+    Статус устаревает сам по себе: задача становится просроченной оттого, что
+    прошёл день, а не оттого, что кто-то её трогал. Гонять перед утренней
+    сборкой.
+
+    Раньше второй прогон в тот же день не трогал ни одного файла: сводка
+    сравнивалась с тем, что уже лежало на диске, — экономило запись и не
+    заставляло Obsidian переиндексировать вольт впустую. В БД сравнивать не с
+    чем: сводка нигде не хранится (колонок под неё нет, source of truth в
+    шагах), поэтому каждый refresh честно пересчитывает и отдаёт всё заново, а
+    не только «изменившееся». `--force` остался в контракте ответа, но
+    поведение больше не меняет — запись каждый раз одна и та же дешёвая
+    операция.
     """
     touched = []
     for task in load_tasks():
-        changed = save(task, today, force=args.force)
-        if changed or args.force:
-            touched.append({"task": task["path"].stem,
-                            "status": task["meta"]["status"],
-                            "changed": changed})
+        save(task, today)
+        touched.append({"task": task["path"].stem,
+                        "status": task["meta"]["status"], "changed": True})
     return {"today": today.isoformat(), "written": touched, "count": len(touched),
             "forced": bool(args.force), "broken": list(BROKEN)}
 
@@ -1397,14 +1489,27 @@ def cmd_show(args, today):
     """Задача целиком — для карточки. `state` шага (просрочен/сегодня/ждёт)
     считается тут же, а не на странице: карточка не знает про рабочее время
     и не должна вычислять просрочку сама, тот же принцип, что у ленты.
+
+    Заметка отдаётся без блока шагов: блок пишет `render_steps`, и в поле
+    карточки ему делать нечего. Без `body` в ответе карточка показывала пустую
+    заметку и отправляла эту пустоту обратно при первом же сохранении —
+    заметка заказчика стиралась, хотя он её не трогал.
+
+    Сводка (status/current_step/control_date/progress/stalled) в БД не хранится
+    (см. save()), значит `task["meta"]` из Store.load_tasks() её не несёт —
+    домешиваем `task_summary()` тем же приёмом, что и save(), иначе карточка
+    получала бы задачу без срока и прогресса.
     """
     task = find_task(args.task)
     now = _now(args, today)
     work = _work(args)
+    заметка, _ = _strip_steps_block(task["body"])
+    meta = {**task["meta"], **task_summary(task, today)}
     return {
         "task": task["path"].stem,
-        "status": task_status(task, today),
-        "meta": {k: v for k, v in task["meta"].items() if k != "steps"},
+        "status": task_status(task, today),   # английский, для сравнений в JS
+        "body": заметка.strip(),
+        "meta": {k: v for k, v in meta.items() if k != "steps"},  # meta["status"] — русский
         "steps": [
             {**{k: (str(v) if isinstance(v, (date, datetime)) else v)
                 for k, v in s.items() if k != "log"},
@@ -1558,11 +1663,10 @@ def cmd_kb_scan(args, today):
 def _find_task_by_stem(name):
     """Точное имя задачи, без нечёткого поиска `find_task`: гипотезы уже
     посчитаны на конкретной, уже созданной задаче — мазать мимо здесь нельзя."""
-    conn = storage.connect(DB_PATH)
-    try:
-        return storage.find_task_exact(conn, name)
-    finally:
-        conn.close()
+    for t in load_tasks():
+        if t["path"].stem == name:
+            return t
+    return None
 
 
 def _strip_steps_block(body):
@@ -1687,10 +1791,37 @@ def cmd_kb_reject(args, today):
 # title, дат и шагов у записи базы нет. Страницы интерфейса под эти команды
 # нет — это отдельная задача, здесь только сам механизм записи.
 
+def _kb_note_path(slug):
+    return KB_DIR / f"{slug}.md"
+
+
+def _read_kb_note(slug):
+    """Запись целиком (slug/title/body/tags/aliases) или None, если файла нет
+    или это не запись базы (`type` не "note"). База знаний ещё на markdown
+    (этап (b) переезда на SQLite в ПЛАН.md не начат) — читаем тем же
+    `parse_file`, что и раньше, а не через store.py."""
+    path = _kb_note_path(slug)
+    if not path.is_file():
+        return None
+    try:
+        meta, body = parse_file(path)
+    except Exception:
+        return None
+    if meta.get("type") != "note":
+        return None
+    return {
+        "slug": slug,
+        "title": (meta.get("title") or slug).strip(),
+        "body": body.strip(),
+        "tags": meta.get("tags") or [],
+        "aliases": meta.get("aliases") or meta.get("synonyms") or [],
+    }
+
+
 def cmd_kb_note_create(args, today):
     """Завести запись базы знаний из JSON: {"slug", "title", "body", "tags",
-    "aliases"}. slug — человекочитаемый идентификатор записи (то, что раньше
-    было именем файла без расширения), должен быть уникален."""
+    "aliases"}. slug — человекочитаемый идентификатор записи, он же имя файла
+    без расширения (как раньше у задач было имя файла) — должен быть уникален."""
     raw = sys.stdin.read() if args.json == "-" else args.json
     try:
         data = json.loads(raw)
@@ -1702,29 +1833,38 @@ def cmd_kb_note_create(args, today):
     errors = []
     if not slug:
         errors.append({"field": "slug", "error": "Slug обязателен"})
+    elif set(slug) & FORBIDDEN_IN_NAME:
+        плохие = "".join(sorted(set(slug) & FORBIDDEN_IN_NAME))
+        errors.append({"field": "slug", "error": f"В slug нельзя символы {плохие}"})
     if not title:
         errors.append({"field": "title", "error": "Название обязательно"})
     if errors:
         return {"ok": False, "errors": errors}
 
-    conn = storage.connect(DB_PATH)
-    try:
-        if storage.find_note_exact(conn, slug) is not None:
-            return {"ok": False, "errors": [{"field": "slug", "error": "Такой slug уже есть"}]}
-        note = storage.create_note(conn, {
-            "slug": slug,
-            "title": title,
-            "body": data.get("body") or "",
-            "tags": [t.strip() for t in (data.get("tags") or []) if t and t.strip()],
-            "aliases": [a.strip() for a in (data.get("aliases") or []) if a and a.strip()],
-        })
-    finally:
-        conn.close()
-    return {"ok": True, "note": note["slug"], "title": note["title"]}
+    KB_DIR.mkdir(parents=True, exist_ok=True)
+    if _kb_note_path(slug).is_file():
+        return {"ok": False, "errors": [{"field": "slug", "error": "Такой slug уже есть"}]}
+
+    meta = {
+        "type": "note",
+        "title": title,
+        "tags": [t.strip() for t in (data.get("tags") or []) if t and t.strip()],
+        "aliases": [a.strip() for a in (data.get("aliases") or []) if a and a.strip()],
+    }
+    write_file(_kb_note_path(slug), meta, (data.get("body") or "").strip() + "\n")
+    return {"ok": True, "note": slug, "title": title}
 
 
 def cmd_kb_note_update(args, today):
     """Править запись базы знаний: заголовок, тело, теги, синонимы, сам slug.
+
+    `args.slug` — под каким именем запись сейчас лежит (identity, приходит из
+    query-строки на стороне server.py), не то, во что её переименовывают: тело
+    может прислать новый slug в `data["slug"]`, и оба смысла в одном поле не
+    различить, если брать его из одного источника — тот же приём, что и при
+    переименовании задачи в `cmd_update`, только там роль identity играет
+    стабильный `task["id"]`, а у записи базы, пока она файл, identity — само
+    имя файла, и переименование значит написать новый и убрать старый.
 
     Поля, которых нет в присланном JSON, остаются как были — правка частичная,
     не полная перезапись (в отличие от cmd_update для задач, где карточка шлёт
@@ -1738,87 +1878,75 @@ def cmd_kb_note_update(args, today):
     except json.JSONDecodeError as e:
         return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
 
-    conn = storage.connect(DB_PATH)
-    try:
-        existing = storage.find_note_exact(conn, args.slug)
-        if existing is None:
-            return {"ok": False,
-                    "errors": [{"field": "slug", "error": f"нет записи «{args.slug}»"}]}
+    existing = _read_kb_note(args.slug)
+    if existing is None:
+        return {"ok": False,
+                "errors": [{"field": "slug", "error": f"нет записи «{args.slug}»"}]}
 
-        new_slug = (data.get("slug") if "slug" in data else existing["slug"]) or ""
-        new_slug = new_slug.strip()
-        title = (data.get("title") if "title" in data else existing["title"]) or ""
-        title = title.strip()
-        errors = []
-        if not new_slug:
-            errors.append({"field": "slug", "error": "Slug обязателен"})
-        if not title:
-            errors.append({"field": "title", "error": "Название обязательно"})
-        if errors:
-            return {"ok": False, "errors": errors}
+    new_slug = ((data.get("slug") if "slug" in data else existing["slug"]) or "").strip()
+    title = ((data.get("title") if "title" in data else existing["title"]) or "").strip()
+    errors = []
+    if not new_slug:
+        errors.append({"field": "slug", "error": "Slug обязателен"})
+    elif set(new_slug) & FORBIDDEN_IN_NAME:
+        плохие = "".join(sorted(set(new_slug) & FORBIDDEN_IN_NAME))
+        errors.append({"field": "slug", "error": f"В slug нельзя символы {плохие}"})
+    if not title:
+        errors.append({"field": "title", "error": "Название обязательно"})
+    if errors:
+        return {"ok": False, "errors": errors}
 
-        try:
-            note = storage.update_note(conn, existing["id"], {
-                "slug": new_slug,
-                "title": title,
-                "body": (data.get("body") if "body" in data else existing["body"]) or "",
-                "tags": [t.strip() for t in
-                        ((data.get("tags") if "tags" in data else existing["tags"]) or [])
-                        if t and t.strip()],
-                "aliases": [a.strip() for a in
-                           ((data.get("aliases") if "aliases" in data else existing["aliases"]) or [])
-                           if a and a.strip()],
-            })
-        except ValueError as e:
-            return {"ok": False, "errors": [{"field": "slug", "error": str(e)}]}
-    finally:
-        conn.close()
-    return {"ok": True, "note": note["slug"], "title": note["title"]}
+    переименовано = new_slug != args.slug
+    if переименовано and _kb_note_path(new_slug).is_file():
+        return {"ok": False, "errors": [{"field": "slug", "error": "Такой slug уже есть"}]}
+
+    meta = {
+        "type": "note",
+        "title": title,
+        "tags": [t.strip() for t in
+                ((data.get("tags") if "tags" in data else existing["tags"]) or [])
+                if t and t.strip()],
+        "aliases": [a.strip() for a in
+                   ((data.get("aliases") if "aliases" in data else existing["aliases"]) or [])
+                   if a and a.strip()],
+    }
+    body = ((data.get("body") if "body" in data else existing["body"]) or "").strip() + "\n"
+    write_file(_kb_note_path(new_slug), meta, body)
+    if переименовано:
+        _kb_note_path(args.slug).unlink(missing_ok=True)
+    return {"ok": True, "note": new_slug, "title": title}
 
 
 def cmd_kb_note_delete(args, today):
     """Удалить запись базы знаний насовсем. Подтверждение — дело интерфейса,
     не движка, как и у cmd_delete для задач."""
-    conn = storage.connect(DB_PATH)
-    try:
-        existing = storage.find_note_exact(conn, args.slug)
-        if existing is None:
-            return {"ok": False,
-                    "errors": [{"field": "slug", "error": f"нет записи «{args.slug}»"}]}
-        storage.delete_note(conn, existing["id"])
-    finally:
-        conn.close()
+    path = _kb_note_path(args.slug)
+    if not path.is_file():
+        return {"ok": False,
+                "errors": [{"field": "slug", "error": f"нет записи «{args.slug}»"}]}
+    path.unlink()
     return {"ok": True, "note": args.slug, "deleted": True}
 
 
 def cmd_kb_note_list(args, today):
     """Полный список записей базы знаний — каждая запись целиком (slug, title,
     body, tags, aliases), не обрезанная форма load_kb_entries. Страницы
-    интерфейса читают этим, а не load_notes напрямую: там нужен только состав
-    для поиска ссылок, здесь — весь текст для списка/карточек.
-
-    N+1 запросов (list slug'ов, потом find_note_exact на каждый) — сознательно:
-    записей базы знаний не тысячи, а зависимость от storage.py остаётся только
-    через уже существующие функции."""
-    conn = storage.connect(DB_PATH)
-    try:
-        stubs = storage.load_notes(conn)
-        notes = [storage.find_note_exact(conn, stub["id"]) for stub in stubs]
-        notes = [n for n in notes if n is not None]
-    finally:
-        conn.close()
+    интерфейса читают этим, а не load_kb_entries напрямую: там нужен только
+    состав для поиска ссылок, здесь — весь текст для списка/карточек."""
+    if not KB_DIR.is_dir():
+        return {"notes": []}
+    notes = []
+    for path in sorted(KB_DIR.glob("*.md")):
+        note = _read_kb_note(path.stem)
+        if note is not None:
+            notes.append(note)
     notes.sort(key=lambda n: n["title"])
     return {"notes": notes}
 
 
 def cmd_kb_note_show(args, today):
-    """Одна запись базы знаний по slug целиком, тем же плоским словарём, что
-    отдаёт storage.find_note_exact — без лишнего уровня вложенности."""
-    conn = storage.connect(DB_PATH)
-    try:
-        note = storage.find_note_exact(conn, args.slug)
-    finally:
-        conn.close()
+    """Одна запись базы знаний по slug целиком."""
+    note = _read_kb_note(args.slug)
     if note is None:
         return {"ok": False,
                 "errors": [{"field": "slug", "error": f"нет записи «{args.slug}»"}]}
@@ -2047,24 +2175,12 @@ def rename_tag_everywhere(old_name, new_name, today=None):
     и `settings.merge_tags`: те трогают только справочник (цвет, закрепление),
     а сами задачи settings.py не видит — про хранилище знает только движок.
 
-    Дубликаты после замены схлопываются: если на задаче уже стоял new_name
-    (типичный случай слияния двух тегов), второй раз его не добавляем.
+    Строки задач эта функция больше не переписывает: `tags`/`task_tags` в БД
+    хранят тег через id, а не строкой на самой задаче, так что и переименование,
+    и слияние — операции только над справочником `tags`, ни одной задачи не
+    касаются. См. `store.Store.rename_tag_everywhere`.
     """
-    today = today or date.today()
-    задето = 0
-    for задача in load_tasks():
-        теги = задача["meta"].get("tags") or []
-        if old_name not in теги:
-            continue
-        новые = []
-        for t in теги:
-            имя = new_name if t == old_name else t
-            if имя not in новые:
-                новые.append(имя)
-        задача["meta"]["tags"] = новые
-        save(задача, today)
-        задето += 1
-    return задето
+    return get_store().rename_tag_everywhere(old_name, new_name)
 
 
 def main():

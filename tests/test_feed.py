@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Тесты ленты «Что сегодня» — `collect_open` / `cmd_feed` / `cmd_backlog`.
 
-Тот же приём изоляции, что в test_engine.py: фикстура "vault" (conftest.py)
-подменяет VAULT/DB_PATH через monkeypatch на временный SQLite-вольт, тесты
-зовут функции движка напрямую в обход argparse.
+Тот же приём изоляции, что в test_engine.py/test_card.py: подменяем VAULT
+через monkeypatch, зовём функции движка напрямую в обход argparse. Хранилище
+задач — SQLite (`вольт.db`), `task()` пишет строки в БД напрямую, в обход
+движка.
 
 `TODAY` здесь — понедельник, не суббота, как в test_engine.py: рабочее время
 (9:00–21:00, без выходных по умолчанию) двигает показ шага на понедельник, если
@@ -14,6 +15,7 @@
 стенных часов машины, на которой идёт pytest, и попадание шага в «сегодня» vs
 «завтра» через is_working_moment переставало бы быть детерминированным.
 """
+import sqlite3
 import sys
 from datetime import date
 from pathlib import Path
@@ -25,8 +27,65 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import engine  # noqa: E402
+import store  # noqa: E402
 
-from conftest import task, step  # noqa: E402
+
+@pytest.fixture
+def vault(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "VAULT", tmp_path)
+    return tmp_path
+
+
+def step(number, title, *, status="pending", control_date=None,
+        completed_date=None, log=None):
+    return {"id": number, "title": title, "status": status,
+            "control_date": control_date, "completed_date": completed_date,
+            "log": log if log is not None else []}
+
+
+def task(vault, name, steps, *, body="Тело заметки, его пишет заказчик.\n", **fields):
+    """Кладёт задачу прямо в вольт.db, в обход движка. См. test_card.py — та
+    же функция, тот же принцип независимой затравки данных."""
+    created = fields.pop("created", date(2026, 8, 1))
+    start_date = fields.pop("start_date", created)
+    tags = fields.pop("tags", [])
+    cancelled = fields.pop("cancelled", False)
+    cancelled_reason = fields.pop("cancelled_reason", None)
+    assert not fields, f"task(): неизвестные поля {list(fields)}"
+
+    conn = sqlite3.connect(str(vault / "вольт.db"))
+    store.migrate_schema(conn)
+    cur = conn.execute(
+        "INSERT INTO tasks (title, schema, created, start_date, cancelled, "
+        "cancelled_reason, body) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (name, 1, store._iso(created), store._iso(start_date),
+         int(bool(cancelled)), cancelled_reason, body))
+    task_id = cur.lastrowid
+    for i, s in enumerate(steps):
+        conn.execute(
+            "INSERT INTO steps (task_id, step_id, position, title, status, "
+            "start_date, control_date, completed_date, note) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (task_id, s["id"], i, s["title"], s.get("status", "pending"),
+             store._iso(s.get("start_date")), store._iso(s.get("control_date")),
+             store._iso(s.get("completed_date")), s.get("note")))
+        for e in s.get("log") or []:
+            conn.execute(
+                "INSERT INTO step_log (task_id, step_id, date, event, reason, "
+                "was, to_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (task_id, s["id"], store._iso(e.get("date")), e["event"],
+                 e.get("reason"), store._iso(e.get("was")), store._iso(e.get("to"))))
+    for name_ in tags:
+        row = conn.execute("SELECT id FROM tags WHERE name=?", (name_,)).fetchone()
+        tag_id = row[0] if row else conn.execute(
+            "INSERT INTO tags (name, color, pinned) VALUES (?, '#999999', 0)",
+            (name_,)).lastrowid
+        conn.execute("INSERT OR IGNORE INTO task_tags (task_id, tag_id) VALUES (?, ?)",
+                     (task_id, tag_id))
+    conn.commit()
+    conn.close()
+    return store.TaskRef(task_id, name)
+
 
 TODAY = date(2026, 8, 17)       # понедельник
 TOMORROW = date(2026, 8, 18)    # вторник

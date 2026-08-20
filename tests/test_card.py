@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Тесты карточки задачи — R27: дата начала, правка, отмена, переоткрытие.
 
-Тот же приём изоляции, что в test_engine.py: фикстура "vault" (conftest.py)
-подменяет VAULT/DB_PATH через monkeypatch на временный SQLite-вольт, тесты
-зовут функции движка напрямую в обход argparse.
+Тот же приём изоляции, что в test_engine.py: подменяем VAULT через monkeypatch,
+зовём функции движка напрямую в обход argparse. Хранилище задач — SQLite
+(`вольт.db`), `task()` пишет строки в БД напрямую, в обход движка.
 
 Отдельным блоком — тесты на `resolve_steps`: этот путь ловил настоящий баг
 при разработке. Перестановка шагов пересчитывает дефолт даты начала по новому
@@ -11,6 +11,8 @@
 на диск шаг, где дата начала обгоняла дату контроля. Тесты ниже воспроизводят
 ровно этот сценарий, а не абстрактную перестановку.
 """
+import json
+import sqlite3
 import sys
 from datetime import date
 from pathlib import Path
@@ -22,10 +24,59 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import engine  # noqa: E402
-
-from conftest import task, read  # noqa: E402
+import store  # noqa: E402
 
 TODAY = date(2026, 8, 18)
+
+
+@pytest.fixture
+def vault(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "VAULT", tmp_path)
+    return tmp_path
+
+
+def task(vault, name, steps, *, body="Тело заметки.\n", **fields):
+    """Кладёт задачу прямо в вольт.db, в обход движка. См. test_engine.py —
+    та же функция, тот же принцип независимой затравки данных."""
+    created = fields.pop("created", date(2026, 8, 1))
+    start_date = fields.pop("start_date", created)
+    tags = fields.pop("tags", [])
+    cancelled = fields.pop("cancelled", False)
+    cancelled_reason = fields.pop("cancelled_reason", None)
+    assert not fields, f"task(): неизвестные поля {list(fields)}"
+
+    conn = sqlite3.connect(str(vault / "вольт.db"))
+    store.migrate_schema(conn)
+    cur = conn.execute(
+        "INSERT INTO tasks (title, schema, created, start_date, cancelled, "
+        "cancelled_reason, body) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (name, 1, store._iso(created), store._iso(start_date),
+         int(bool(cancelled)), cancelled_reason, body))
+    task_id = cur.lastrowid
+    for i, s in enumerate(steps):
+        conn.execute(
+            "INSERT INTO steps (task_id, step_id, position, title, status, "
+            "start_date, control_date, completed_date, note) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (task_id, s["id"], i, s["title"], s.get("status", "pending"),
+             store._iso(s.get("start_date")), store._iso(s.get("control_date")),
+             store._iso(s.get("completed_date")), s.get("note")))
+        for e in s.get("log") or []:
+            conn.execute(
+                "INSERT INTO step_log (task_id, step_id, date, event, reason, "
+                "was, to_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (task_id, s["id"], store._iso(e.get("date")), e["event"],
+                 e.get("reason"), store._iso(e.get("was")), store._iso(e.get("to"))))
+    for name_ in tags:
+        row = conn.execute("SELECT id FROM tags WHERE name=?", (name_,)).fetchone()
+        tag_id = row[0] if row else conn.execute(
+            "INSERT INTO tags (name, color, pinned) VALUES (?, '#999999', 0)",
+            (name_,)).lastrowid
+        conn.execute("INSERT OR IGNORE INTO task_tags (task_id, tag_id) VALUES (?, ?)",
+                     (task_id, tag_id))
+    conn.commit()
+    conn.close()
+    return store.TaskRef(task_id, name)
 
 
 def run(command, today=TODAY, **fields):
@@ -39,6 +90,14 @@ def existing_titles():
     """Замена файловому `(... / "Задачи" / "Имя.md").exists()` — файла на
     задачу больше нет, есть только строка в БД."""
     return {t["path"].stem for t in engine.load_tasks()}
+
+
+def read(ref, today=TODAY):
+    found = engine._find_task_by_stem(ref.stem)
+    assert found is not None, f"нет задачи «{ref.stem}»"
+    meta = dict(found["meta"])
+    meta.update(engine.task_summary(found, today))
+    return meta, found["body"]
 
 
 # --- resolve_steps: дефолт даты начала --------------------------------------
@@ -262,6 +321,8 @@ def test_update_с_force_разрешает_пропажу_шага(vault):
 
 
 def test_update_переименование_переносит_файл(vault):
+    """«Переносит файл» — старое название теста: у задачи-строки id не меняется
+    от смены title, переименование — обычный UPDATE, никакого переноса нет."""
     task(vault, "Черновик", [
         {"id": 1, "title": "A", "status": "pending",
          "control_date": date(2026, 8, 19), "completed_date": None, "log": []},
@@ -269,8 +330,8 @@ def test_update_переименование_переносит_файл(vault):
     r = run(engine.cmd_update, task="Черновик", json='{"title":"Итоговое название",'
            '"steps":[{"id":1,"title":"A","control_date":"19.08"}]}')
     assert r["ok"] and r["task"] == "Итоговое название"
-    assert "Черновик" not in existing_titles()
-    assert "Итоговое название" in existing_titles()
+    assert engine._find_task_by_stem("Черновик") is None
+    assert engine._find_task_by_stem("Итоговое название") is not None
 
 
 def test_update_переименование_в_занятое_имя_отказывает(vault):
@@ -283,20 +344,77 @@ def test_update_переименование_в_занятое_имя_отказ
     r = run(engine.cmd_update, task="Первая",
            json='{"title":"Вторая","steps":[{"id":1,"title":"A","control_date":"19.08"}]}')
     assert not r["ok"]
-    assert "Первая" in existing_titles()
+    assert engine._find_task_by_stem("Первая") is not None
 
 
 def test_update_невалидные_даты_не_переименовывают_и_не_пишут(vault):
-    """Отказ по датам должен случиться до переименования файла — иначе останется
-    файл под новым именем с недописанными или противоречивыми шагами."""
+    """Отказ по датам должен случиться до записи — иначе останется задача под
+    новым именем с недописанными или противоречивыми шагами."""
     task(vault, "Аренда", [
         {"id": 1, "title": "A", "status": "pending", "control_date": date(2026, 8, 19),
          "completed_date": None, "log": []}], start_date=date(2026, 8, 18))
     r = run(engine.cmd_update, task="Аренда", json='{"title":"Аренда 2","steps":['
            '{"id":1,"title":"A","start_date":"25.08","control_date":"19.08"}]}')
     assert not r["ok"]
-    assert "Аренда" in existing_titles()
-    assert "Аренда 2" not in existing_titles()
+    assert engine._find_task_by_stem("Аренда") is not None
+    assert engine._find_task_by_stem("Аренда 2") is None
+
+
+# --- заметка задачи: показ и обратное сохранение ----------------------------
+
+def test_show_отдаёт_заметку_без_блока_шагов(vault):
+    task(vault, "Грант", [
+        {"id": 1, "title": "A", "status": "pending", "control_date": date(2026, 8, 20),
+         "completed_date": None, "log": []}],
+        body="Юрист — [[Василий Говнов]], телефон в договоре.")
+    r = run(engine.cmd_show, task="Грант")
+    assert r["body"] == "Юрист — [[Василий Говнов]], телефон в договоре."
+    assert engine.STEPS_START not in r["body"]
+
+
+def test_show_отдаёт_сводку_хотя_в_бд_её_нет_колонкой(vault):
+    """Живой баг переезда на SQLite: `cmd_show` строил `meta` прямо из
+    Store.load_tasks(), а там нет status/current_step/control_date/progress —
+    для них нет колонок, их всегда считал заново save(). Карточка получала
+    задачу без срока и прогресса. `status` верхнего уровня остаётся
+    английским (JS сравнивает с ним классы), meta["status"] — русским
+    (текст на плашке) — это разные поля, не опечатка."""
+    task(vault, "Грант", [
+        {"id": 1, "title": "A", "status": "done", "control_date": date(2026, 8, 10),
+         "completed_date": date(2026, 8, 10), "log": []},
+        {"id": 2, "title": "B", "status": "pending", "control_date": date(2026, 8, 25),
+         "completed_date": None, "log": []},
+    ], start_date=date(2026, 8, 1))
+    r = run(engine.cmd_show, task="Грант")
+    assert r["status"] == "waiting"
+    assert r["meta"]["status"] == "ждёт"
+    assert r["meta"]["progress"] == "1/2"
+    assert r["meta"]["current_step"] == "B"
+    assert r["meta"]["control_date"] == date(2026, 8, 25)
+
+
+def test_заметка_переживает_сохранение_карточки(vault):
+    """Живой баг на демо-данных: `cmd_show` не отдавал `body`, карточка
+    показывала пустую заметку и отправляла эту пустоту обратно — заметка
+    стиралась при первом же сохранении, хотя человек её не трогал.
+
+    Проверяем весь круг, а не только показ: карточка шлёт ровно то, что ей
+    отдали, и текст должен вернуться в файл нетронутым."""
+    task(vault, "Грант", [
+        {"id": 1, "title": "A", "status": "pending", "control_date": date(2026, 8, 20),
+         "completed_date": None, "log": []}],
+        body="Сумма 840 тыс. Контакт: +7 900 000-00-00.")
+    показано = run(engine.cmd_show, task="Грант")
+
+    данные = {"title": "Грант", "tags": [], "body": показано["body"],
+              "steps": [{"id": s["id"], "title": s["title"],
+                         "control_date": s.get("control_date"), "note": s.get("note")}
+                        for s in показано["steps"]]}
+    r = run(engine.cmd_update, task="Грант", json=json.dumps(данные))
+    assert r["ok"], r
+
+    снова = run(engine.cmd_show, task="Грант")
+    assert снова["body"] == "Сумма 840 тыс. Контакт: +7 900 000-00-00."
 
 
 # --- отмена, удаление, переоткрытие ------------------------------------------
@@ -321,6 +439,25 @@ def test_отменённая_задача_не_просроченная(vault):
     r = run(engine.cmd_list)
     строка = next(t for t in r["tasks"] if t["task"] == "Грант")
     assert строка["status"] == "cancelled"
+
+
+def test_отменённая_не_попадает_в_ленту_и_завал(vault):
+    """Найдено на демо-данных: `task_status` отменённую отсекает первым правилом,
+    а `collect_open` — источник ленты, завала и напоминаний — про отмену не знал
+    вовсе и каждый день показывал её просроченной. Шаг в отменённой задаче так
+    и остаётся открытым, поэтому проверка нужна явная."""
+    task(vault, "Грант", [
+        {"id": 1, "title": "A", "status": "pending", "control_date": date(2026, 8, 1),
+         "completed_date": None, "log": []}], start_date=date(2026, 8, 1))
+    завал_до = run(engine.cmd_backlog)
+    assert завал_до["count"] == 1
+
+    run(engine.cmd_cancel, task="Грант")
+
+    assert run(engine.cmd_backlog)["count"] == 0
+    лента = run(engine.cmd_feed)
+    assert лента["counts"] == {"overdue": 0, "today": 0, "waiting": 0, "attention": 0}
+    assert лента["feed"] == []
 
 
 def test_cancel_дважды_отказывает(vault):

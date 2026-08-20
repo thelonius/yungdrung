@@ -408,11 +408,10 @@ class Handler(BaseHTTPRequestHandler):
         return {"errors": errors}
 
     def _create(self, payload):
-        # Валидация, сборка meta, проверка занятого имени (storage.task_exists)
-        # и запись — всё это теперь целиком внутри engine.cmd_create. Раньше
-        # здесь был свой путь через engine.TASKS_DIR/path.exists(), но это была
-        # логика поверх файлового вольта; дублировать её под SQLite незачем —
-        # движок уже умеет ровно то же самое через один вызов.
+        # Раньше здесь дублировалась логика engine.cmd_create (свой сбор пути,
+        # свой вызов save()) — два места, которые обязаны были совпадать и
+        # рано или поздно разошлись бы. КОНТРАКТ.md прямо запрещает оболочке
+        # писать данные в обход ядра; зовём ту же команду, что и CLI.
         return engine.cmd_create(_args(json=json.dumps(payload)), date.today())
 
 
@@ -422,16 +421,8 @@ def main():
     ap.add_argument("--no-open", action="store_true", help="не открывать браузер")
     args = ap.parse_args()
 
-    # Прежде это была проверка каталога задач (engine.TASKS_DIR.is_dir()) — с
-    # переездом движка на SQLite каталога нет, есть engine.DB_PATH. Держать
-    # тут sqlite-специфичную проверку незачем: "прогреваем" соединение тем же
-    # вызовом, что и любой обработчик, — если вольт совсем недоступен (нет
-    # каталога, нет прав и т.п.), storage.connect уронит исключение здесь же,
-    # при старте, а не на первом запросе.
-    try:
-        engine.load_tasks()
-    except Exception as e:
-        sys.exit(f"вольт недоступен ({engine.DB_PATH}): {e}")
+    if not engine.VAULT.is_dir():
+        sys.exit(f"нет папки вольта: {engine.VAULT}")
 
     адрес = f"http://127.0.0.1:{args.port}/"
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
