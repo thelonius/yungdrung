@@ -2067,3 +2067,52 @@ def test_миграция_доращивает_старую_базу(tmp_path, m
     conn = sqlite3.connect(str(db))
     assert conn.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA
     conn.close()
+
+
+# --- настройки доходят до потребителя ---------------------------------------
+#
+# Сверка покрытия 2026-08-24 нашла восемь ключей, которые сохранялись и
+# валидировались, но не читались никем: человек менял настройку и делал вывод,
+# что она работает. Тесты ниже стерегут те, у которых потребитель появился.
+
+def test_счётчик_переносов_карточка_берёт_у_движка(vault):
+    """Раньше карточка считала переносы сама и считала иначе, чем лента: брала
+    обычный `defer`, которого движок намеренно не считает. Один шаг показывал
+    два разных числа на двух экранах, и ни одно нельзя было назвать верным."""
+    т = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY, log=[
+        {"date": TODAY, "event": "not_done", "reason": "не успел"},
+        {"date": TODAY, "event": "defer", "to": TODAY},
+        {"date": TODAY, "event": "mass_defer", "reason": "завал"},
+    ])])
+    показ = run(engine.cmd_show, task=т.stem)
+    шаг = показ["steps"][0]
+    # not_done + mass_defer = 2; одиночный defer не в счёт
+    assert шаг["stalled"] == 2
+    # То же число, что видит лента: у обоих экранов один источник.
+    meta, _ = read(т)
+    assert шаг["stalled"] == engine.stall_count(meta["steps"][0])
+
+
+def test_бэкап_берёт_папку_и_число_копий_из_настроек(vault, tmp_path):
+    """`backup.folder` и `backup.keep_count` лежали в файле мёртвым грузом:
+    `cmd_backup` брал папку рядом с вольтом и константу `KEEP_DEFAULT`."""
+    своя = tmp_path / "своя-папка-копий"
+    данные = cfg.defaults()
+    данные["backup"]["folder"] = str(своя)
+    данные["backup"]["keep_count"] = 2
+    cfg.save(данные, cfg.settings_path(vault))
+
+    настройки = engine._backup_settings()
+    assert настройки["folder"] == str(своя)
+    assert настройки["keep_count"] == 2
+
+    итог = run(engine.cmd_backup, dest=None, keep=None, force=True)
+    assert итог["ok"], итог
+    assert своя.is_dir(), "копия легла не в папку из настроек"
+
+
+def test_битые_настройки_бэкапа_не_роняют_копию(vault):
+    """Тот же принцип, что у рабочих часов: почему файл битый — разбирается в
+    настройках-интерфейсе, а не в момент снятия копии."""
+    cfg.settings_path(vault).write_text("{ это не json", encoding="utf-8")
+    assert engine._backup_settings() == cfg.defaults()["backup"]

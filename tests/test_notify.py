@@ -151,3 +151,58 @@ def test_опасные_символы_в_названии_экранируют�
     ломать разметку тоста."""
     assert notify.WindowsToast.escape('Иванов & Ко <"тест">') == \
         "Иванов &amp; Ко &lt;&quot;тест&quot;&gt;"
+
+
+# --- remind.py: настройки вольта доходят до напоминаний ----------------------
+#
+# У `remind.py` не было ни одного теста, и обе найденные при сверке ошибки
+# жили именно там: рабочие часы и повтор брались из констант, а не из файла
+# настроек. Настройка была, кнопка была, эффекта не было.
+
+import settings as cfg  # noqa: E402
+import engine  # noqa: E402
+import remind  # noqa: E402
+
+
+@pytest.fixture
+def вольт(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "VAULT", tmp_path)
+    monkeypatch.setattr(cfg, "VAULT", tmp_path)
+    return tmp_path
+
+
+def test_рабочие_часы_напоминаний_берутся_из_настроек(вольт):
+    """`remind.py` жил на зашитых 09:00–21:00: заказчик ставил конец дня в
+    18:00, лента и завал его слушались, а тосты шли до девяти вечера."""
+    данные = cfg.defaults()
+    данные["notifications"]["start"] = "10:00"
+    данные["notifications"]["end"] = "18:00"
+    cfg.save(данные, cfg.settings_path(вольт))
+
+    work = engine._work(None)
+    assert (work["start"].hour, work["end"].hour) == (10, 18)
+    # Ровно то, что теперь зовёт remind.main() вместо worktime.settings():
+    # зашитые значения дали бы 09:00–21:00 и тосты после конца рабочего дня.
+    зашитые = worktime.settings()
+    assert (work["start"], work["end"]) != (зашитые["start"], зашитые["end"])
+
+
+def test_повтор_берётся_из_настроек_а_аргумент_его_перекрывает(вольт):
+    """`repeat_minutes` лежал в файле мёртвым ключом: аргумент `--repeat` имел
+    значение по умолчанию, поэтому «никто не просил» было неотличимо от
+    «человек попросил 15», и файл не спрашивали никогда."""
+    данные = cfg.defaults()
+    данные["notifications"]["repeat_minutes"] = 45
+    cfg.save(данные, cfg.settings_path(вольт))
+
+    from types import SimpleNamespace
+    assert remind.повтор_минут(SimpleNamespace(repeat=None)) == 45
+    assert remind.повтор_минут(SimpleNamespace(repeat=5)) == 5
+
+
+def test_битый_файл_настроек_не_отменяет_напоминание(вольт):
+    """Молчать вместо напоминания из-за испорченного JSON нельзя: почему файл
+    битый, разбирается в настройках-интерфейсе."""
+    cfg.settings_path(вольт).write_text("{ не json", encoding="utf-8")
+    from types import SimpleNamespace
+    assert remind.повтор_минут(SimpleNamespace(repeat=None)) == notify.ПОВТОР_МИНУТ

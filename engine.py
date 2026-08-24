@@ -1856,6 +1856,13 @@ def cmd_show(args, today):
              # closed отдаётся явно: у группы нет статуса, её закрытие
              # вычисляется из детей, и карточка не должна считать это сама
              "closed": закрыт(s),
+             # stalled — по той же причине. Карточка считала его сама и считала
+             # иначе, чем движок: брала `not_done` и `defer`, тогда как обычный
+             # одиночный `defer` в счётчик намеренно не идёт (`stall_count`,
+             # тест `test_defer_does_not_count_as_stalling`), зато идёт массовый
+             # `mass_defer`. Один и тот же шаг показывал в ленте и в карточке
+             # разные числа.
+             "stalled": stall_count(s),
              "state": (None if is_group(s) else
                        worktime.due_state(s.get("control_date"), now, work)
                        if not is_closed(s) else None)}
@@ -2373,10 +2380,27 @@ def default_backup_dir():
     return VAULT.parent / f"{VAULT.name} — копии"
 
 
+def _backup_settings():
+    """Папка, частота и число копий из настроек вольта.
+
+    Читается тем же приёмом, что рабочие часы в `_work`: файл — база, битый
+    файл не роняет операцию. Раньше эти три ключа лежали в `Настройки.json`
+    мёртвыми: форма их не показывала, а `cmd_backup` брал папку рядом с вольтом
+    и `backup.KEEP_DEFAULT`, что бы в них ни стояло.
+    """
+    try:
+        сохранённые = cfg.load(cfg.settings_path(VAULT))["backup"]
+    except cfg.SettingsError:
+        сохранённые = cfg.defaults()["backup"]
+    return сохранённые
+
+
 def cmd_backup(args, today):
     """Снять резервную копию вольта. Раздел 9 ТЗ, требование R25."""
-    dest = Path(args.dest) if getattr(args, "dest", None) else default_backup_dir()
-    keep = getattr(args, "keep", None) or backup.KEEP_DEFAULT
+    настройки = _backup_settings()
+    dest = Path(args.dest) if getattr(args, "dest", None) else (
+        Path(настройки["folder"]) if настройки.get("folder") else default_backup_dir())
+    keep = getattr(args, "keep", None) or настройки.get("keep_count") or backup.KEEP_DEFAULT
     try:
         итог = backup.backup(VAULT, dest, keep=keep, force=bool(getattr(args, "force", False)))
     except backup.BackupError as e:

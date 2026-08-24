@@ -22,7 +22,29 @@ from types import SimpleNamespace
 
 import engine
 import notify
+import settings as cfg
 import worktime
+
+
+def повтор_минут(args):
+    """Через сколько минут напоминать повторно: аргумент вызова, иначе настройки
+    вольта, иначе значение по умолчанию из `notify`.
+
+    Тот же порядок, что у рабочих часов в `engine._work`: файл — база, аргумент
+    — оверрайд. Раньше значение из настроек не читалось вовсе, и `repeat_minutes`
+    лежал в `Настройки.json` мёртвым ключом: форма его не показывала, а повтор
+    всё равно шёл через пятнадцать минут.
+    """
+    if getattr(args, "repeat", None) is not None:
+        return args.repeat
+    try:
+        сохранённые = cfg.load(cfg.settings_path(engine.VAULT))["notifications"]
+    except cfg.SettingsError:
+        # Битый файл настроек не повод молчать вместо напоминания — почему он
+        # битый, разбирается в настройках-интерфейсе. Тот же принцип, что в
+        # `engine._work`.
+        сохранённые = cfg.defaults()["notifications"]
+    return сохранённые.get("repeat_minutes") or notify.ПОВТОР_МИНУТ
 
 
 class ЛенивыйЛог:
@@ -56,8 +78,12 @@ def main():
                     help="чем показывать")
     ap.add_argument("--url", default="http://127.0.0.1:8765/",
                     help="куда ведёт клик по уведомлению")
-    ap.add_argument("--repeat", type=int, default=notify.ПОВТОР_МИНУТ,
-                    help="через сколько минут напоминать повторно")
+    # default=None, а не константа: иначе аргумент всегда «задан», и отличить
+    # «человек попросил 30» от «никто не просил» нельзя — настройка из файла
+    # оказывалась перекрыта дефолтом ещё до того, как её прочитали.
+    ap.add_argument("--repeat", type=int, default=None,
+                    help="через сколько минут напоминать повторно "
+                         "(по умолчанию — из настроек вольта)")
     ap.add_argument("--dry-run", action="store_true", help="ничего не показывать")
     ap.add_argument("--quiet-empty", action="store_true",
                     help="молчать, когда показывать нечего — для планировщика")
@@ -76,7 +102,13 @@ def main():
 
     now = worktime.as_datetime(args.now) if args.now else datetime.now()
     today = now.date()
-    work = worktime.settings()
+
+    # Через `engine._work`, а не `worktime.settings()`: та отдаёт зашитые
+    # 09:00–21:00, и напоминания жили по ним, чей бы вольт ни обслуживали.
+    # Заказчик ставил конец дня в 18:00, лента и завал его слушались (они
+    # считаются движком), а тосты продолжали приходить до девяти вечера —
+    # настройка была, кнопка была, эффекта не было.
+    work = engine._work(None)
 
     # Статус устаревает от того, что прошёл день, а не от того, что кто-то трогал
     # задачу. Без пересчёта лента считалась бы по вчерашним данным.
@@ -92,7 +124,7 @@ def main():
     items = лента["feed"]
 
     state = notify.load_state(engine.VAULT)
-    показать = notify.pick(items, state, now, work, args.repeat)
+    показать = notify.pick(items, state, now, work, повтор_минут(args))
 
     if not показать:
         if not args.quiet_empty:

@@ -279,7 +279,9 @@ function строкаШага(s, индекс) {
     : (s.control_date ? короткаяДата(s.control_date) : '—');
 
   const счётчик = $('.checkline-postponed', li);
-  const переносов = (s.log || []).filter((e) => e.event === 'not_done' || e.event === 'defer').length;
+  // Считает движок (`stall_count`), карточка показывает. Раньше считала сама и
+  // расходилась с лентой: обычный `defer` она брала в счёт, а движок нет.
+  const переносов = s.stalled || 0;
   if (переносов > 0) { счётчик.textContent = `переносов: ${переносов}`; }
   else счётчик.remove();
 
