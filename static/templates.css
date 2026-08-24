@@ -75,3 +75,30 @@
 .tpl-preview .p-title { flex: 1 1 auto; }
 .tpl-preview .p-when { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .tpl-preview .p-when.weekend { color: var(--danger); }
+
+/* Диалог нового шаблона держит список шагов — 460px по умолчанию из feed.css
+   тут тесноват, полям сдвига и времени негде встать в ряд. */
+dialog.wide { max-width: 660px; }
+
+/* Дата старта для примера: она не часть шаблона, а способ показать сдвиги
+   настоящими датами, поэтому стоит отдельной строкой над списком шагов. */
+.nt-start-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.nt-start-row label {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.nt-start-row input { max-width: 150px; }
+
+.step-gap-label, .step-gap-unit { white-space: nowrap; }
+
+/* Посчитанная ядром дата шага прижата вправо — по ней глаз и проверяет,
+   что промежутки набраны верно. */
+.step-when { margin-left: auto; font-weight: 600; }

@@ -200,6 +200,20 @@ def control_text(moment):
     return moment.strftime("%Y-%m-%d")
 
 
+def human_moment(moment):
+    """Момент контроля так, как его читает человек: «вт 26.08» или «вт 26.08 в 14:00».
+
+    Считается здесь, а не в форме: по контракту оболочка не пересказывает
+    данные ядра своими словами, даже такие. Строка идёт рядом с `control_date`
+    в каждой строке предпросмотра — форма показывает её как есть.
+    """
+    день = moment.date() if isinstance(moment, datetime) else moment
+    подпись = f"{WEEKDAYS_SHORT[день.weekday()]} {день.day:02d}.{день.month:02d}"
+    if isinstance(moment, datetime):
+        подпись += moment.strftime(" в %H:%M")
+    return подпись
+
+
 # --- проверка --------------------------------------------------------------
 
 def validate_template(data, existing_names=()):
@@ -480,6 +494,7 @@ def preview(template, start_date, work=None):
             "title": шаг["title"],
             "offset_days": шаг["offset_days"],
             "control_date": control_text(момент),
+            "control_text": human_moment(момент),
             "weekday": WEEKDAYS_SHORT[день.weekday()],
             "on_weekend": not worktime.is_workday(день, work),
             "show_at": worktime.show_at(момент, work).isoformat(timespec="minutes"),

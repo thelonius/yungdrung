@@ -176,6 +176,16 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/template-from-task":
             return self._json(200, engine.cmd_template_from_task(
                 _args(task=payload.get("task"), name=payload.get("name")), date.today()))
+        if route == "/api/template-create":
+            return self._json(200, engine.cmd_save_template(
+                _args(json=json.dumps(payload)), date.today()))
+        if route == "/api/template-preview":
+            шаблон = {k: v for k, v in payload.items() if k != "start"}
+            return self._json(200, engine.cmd_template_preview(
+                _args(json=json.dumps(шаблон), start=payload.get("start")), date.today()))
+        if route == "/api/recurrence-parse":
+            return self._json(200, engine.cmd_recurrence_parse(
+                _args(text=payload.get("text")), date.today()))
         if route == "/api/recurrence-preview":
             return self._json(200, engine.cmd_recurrence_preview(
                 _args(anchor=payload.get("anchor"), rule=payload.get("rule")), date.today()))

@@ -1217,6 +1217,150 @@ def test_create_отвергает_запрещённые_в_windows_симво�
     assert result["errors"][0]["field"] == "title"
 
 
+# --- шаблоны: заведение с нуля, без задачи-источника -------------------------
+#
+# Календарная арифметика и разбор полей шаблона проверены в test_templates.py.
+# Здесь — что cmd_save_template это же считающее ядро зовёт из-под движка,
+# как и cmd_create для задач: один путь записи что из формы, что из CLI.
+
+def test_save_template_заводит_шаблон_с_нуля(vault):
+    result = run(engine.cmd_save_template, json=json.dumps({
+        "name": "Еженедельная встреча",
+        "steps": [{"title": "Подготовить повестку", "offset_days": 0},
+                  {"title": "Провести", "offset_days": 1}],
+    }))
+    assert result["ok"]
+    assert result["template"] == "Еженедельная встреча"
+    assert result["steps"] == 2
+
+    склад = tpl.JsonStore(vault)
+    шаблон = склад.get("Еженедельная встреча")
+    assert шаблон is not None
+    assert [s["offset_days"] for s in шаблон["steps"]] == [0, 1]
+
+
+def test_save_template_без_шагов_возвращает_ошибку_поля(vault):
+    result = run(engine.cmd_save_template, json=json.dumps({"name": "Пусто", "steps": []}))
+    assert not result["ok"]
+    assert result["errors"][0]["field"] == "steps"
+
+
+def test_save_template_битый_json(vault):
+    result = run(engine.cmd_save_template, json="не json")
+    assert not result["ok"]
+    assert result["errors"][0]["field"] is None
+
+
+def test_template_preview_считает_даты_до_сохранения(vault):
+    """Форма показывает даты, пока человек ещё набирает сдвиги, — иначе «+10»
+    выглядит правдоподобно ровно до попадания на праздники."""
+    result = run(engine.cmd_template_preview, json=json.dumps({
+        "name": "Черновик",
+        "steps": [{"title": "Позвонить", "offset_days": 0},
+                  {"title": "Сдать", "offset_days": 3}],
+    }), start="2026-08-24")
+    assert result["ok"]
+    assert result["start"] == "2026-08-24"
+    assert [s["control_date"] for s in result["steps"]] == ["2026-08-24", "2026-08-27"]
+    # Подпись считает ядро: страница не пересказывает дату своими словами.
+    assert result["steps"][0]["control_text"] == "пн 24.08"
+
+
+def test_template_preview_не_требует_названия(vault):
+    """Шаги набирают раньше, чем придумывают имя. Ругаться на пустое поле в
+    предпросмотре незачем — на сохранении оно и так не пройдёт."""
+    result = run(engine.cmd_template_preview, json=json.dumps({
+        "name": "", "steps": [{"title": "Позвонить", "offset_days": 0}]}), start="2026-08-24")
+    assert result["ok"]
+
+    сохранение = run(engine.cmd_save_template, json=json.dumps({
+        "name": "", "steps": [{"title": "Позвонить", "offset_days": 0}]}))
+    assert not сохранение["ok"]
+    assert сохранение["errors"][0]["field"] == "name"
+
+
+def test_template_preview_жалуется_на_сдвиг_назад(vault):
+    result = run(engine.cmd_template_preview, json=json.dumps({
+        "name": "Черновик",
+        "steps": [{"title": "Первый", "offset_days": 5},
+                  {"title": "Второй", "offset_days": 2}],
+    }), start="2026-08-24")
+    assert not result["ok"]
+    assert result["errors"][0]["field"] == "steps.1.offset_days"
+
+
+# --- файлы шаблона ----------------------------------------------------------
+#
+# Вложение на шаблоне бессмысленно само по себе: смотрит человек в задачу.
+# Поэтому проверяется не «строка легла в таблицу», а что файл доезжает до
+# задачи, заведённой по шаблону, — и обычной, и очередным циклом повторения.
+
+def шаблон_с_файлом(vault, имя="Отчёт", filename="схема.png"):
+    tpl.JsonStore(vault).save({
+        "name": имя, "steps": [{"title": "Собрать", "offset_days": 0}]})
+    прикрепление = run(engine.cmd_attach, template=имя, filename=filename,
+                       data=b"\x89PNG\r\n\x1a\n" + b"0" * 32, file=None,
+                       step=None, task=None, caption=None)
+    assert прикрепление["ok"], прикрепление
+    return прикрепление
+
+
+def test_вложение_цепляется_к_шаблону(vault):
+    прикрепление = шаблон_с_файлом(vault)
+    assert прикрепление["mime"] == "image/png"
+    список = run(engine.cmd_attachments, template="Отчёт", task=None, step=None)
+    assert [a["filename"] for a in список["attachments"]] == ["схема.png"]
+
+
+def test_шаблон_адресуется_без_учёта_регистра(vault):
+    """Имена шаблонов сравниваются без регистра (`tpl.same_name`) — вложения
+    не должны заводить вторую полку рядом с той же карточкой."""
+    шаблон_с_файлом(vault)
+    список = run(engine.cmd_attachments, template="отчёт", task=None, step=None)
+    assert len(список["attachments"]) == 1
+
+
+def test_вложение_к_несуществующему_шаблону(vault):
+    r = run(engine.cmd_attach, template="Нет такого", filename="a.png", data=b"x",
+            file=None, step=None, task=None, caption=None)
+    assert not r["ok"]
+    assert r["errors"][0]["field"] == "template"
+
+
+def test_файлы_шаблона_уезжают_в_задачу(vault):
+    шаблон_с_файлом(vault)
+    r = run(engine.cmd_from_template, name="Отчёт", start=None, title="Отчёт за август")
+    assert r["ok"]
+    assert r["attachments"] == 1
+    список = run(engine.cmd_attachments, task="Отчёт за август", step=None, template=None)
+    assert [a["filename"] for a in список["attachments"]] == ["схема.png"]
+    # У шаблона файл остаётся: следующая задача получит его так же.
+    assert len(run(engine.cmd_attachments, template="Отчёт",
+                   task=None, step=None)["attachments"]) == 1
+
+
+def test_файлы_шаблона_уезжают_в_цикл_повторения(vault):
+    шаблон_с_файлом(vault)
+    склад = tpl.JsonStore(vault)
+    данные = dict(склад.get("Отчёт"))
+    данные["recurrence"] = {"anchor": "2026-11-20", "freq": "monthly"}
+    склад.save(данные)
+
+    r = run(engine.cmd_recur, today=date(2026, 11, 20), name=None, limit=None)
+    задача = r["templates"][0]["created"][0]["task"]
+    список = run(engine.cmd_attachments, task=задача, step=None, template=None)
+    assert [a["filename"] for a in список["attachments"]] == ["схема.png"]
+
+
+def test_байты_вложения_не_дублируются_на_диске(vault):
+    """Файл адресуется своим sha256, поэтому вторая ссылка на ту же картинку
+    ничего не пишет на диск — копирование в задачу это строка в таблице."""
+    шаблон_с_файлом(vault)
+    run(engine.cmd_from_template, name="Отчёт", start=None, title="Отчёт за август")
+    файлы = list((vault / "вложения").iterdir())
+    assert len(файлы) == 1
+
+
 # --- повторения: движок держит правило единственного цикла ------------------
 #
 # Сама календарная арифметика проверена в test_recurrence.py — сверена с

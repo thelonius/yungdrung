@@ -1429,16 +1429,48 @@ def cmd_templates(args, today):
     склад = tpl.JsonStore(VAULT)
     старт = parse_date_input(args.start, today) if getattr(args, "start", None) else today
     из_даты = as_date(старт)
+    файлы = get_store()
     out = []
     for шаблон in склад.all():
         out.append({
             "name": шаблон["name"],
             "tags": шаблон.get("tags") or [],
             "steps": len(шаблон.get("steps") or []),
+            "attachments": len(файлы.list_attachments("template", шаблон["name"])),
             "preview": tpl.preview(шаблон, из_даты),
             "recurrence": _recurrence_view(шаблон),
         })
     return {"templates": out, "count": len(out), "start": из_даты.isoformat()}
+
+
+def cmd_template_preview(args, today):
+    """Какие даты дадут шаги ещё не сохранённого шаблона. Раздел 5.6 ТЗ.
+
+    Форма шаблона показывает сдвиги в днях, а днями человек не думает: «+10»
+    выглядит правдоподобно ровно до того момента, когда попадает на праздники.
+    Ту же роль играет `/api/parse-date` в форме задачи — считает и проверяет
+    ядро, страница показывает ответ.
+
+    Название здесь не проверяется намеренно: даты от него не зависят, а человек
+    набирает шаги раньше, чем придумывает имя, и ругаться на пустое поле в
+    предпросмотре незачем — на сохранении оно и так не пройдёт.
+    """
+    raw = sys.stdin.read() if args.json == "-" else args.json
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
+
+    старт = as_date(parse_date_input(args.start, today)) \
+        if getattr(args, "start", None) else today
+    пробный = {**data, "name": (data.get("name") or "").strip() or "—", "recurrence": None}
+    ошибки = [e for e in tpl.validate_template(пробный)
+              if not str(e.get("field") or "").startswith("name")]
+    if ошибки:
+        return {"ok": False, "errors": ошибки}
+    return {"ok": True, "start": старт.isoformat(),
+            "start_text": tpl.human_moment(старт),
+            "steps": tpl.preview(пробный, старт)}
 
 
 def cmd_recurrence_preview(args, today):
@@ -1468,6 +1500,27 @@ def cmd_recurrence_preview(args, today):
                        for s in rec.preview(правило, якорь, count=5)]}
 
 
+def cmd_recurrence_parse(args, today):
+    """Текст «каждый вторник» → правило повторения. Требование R23.
+
+    Разбирает `recurrence.parse_text` — детерминированно, без модели: это
+    словарь на два десятка слов, а не связная речь, и по границе из CLAUDE.md
+    он на нашей стороне. Заодно правило не зависит от сети, а форма может
+    дёргать разбор на каждое нажатие клавиши.
+
+    Наружу уходит и правило, и его подпись: разобрав текст, надо показать
+    человеку, как система его поняла, — «каждую неделю по вторникам» рядом с
+    ближайшими датами. Иначе разбор молча съедает опечатку.
+    """
+    try:
+        правило = rec.parse_text(getattr(args, "text", None))
+    except rec.RuleError as e:
+        return {"ok": False, "errors": e.errors}
+    if правило.get("until") is not None:
+        правило["until"] = правило["until"].isoformat()
+    return {"ok": True, "rule": правило, "description": rec.describe(правило)}
+
+
 def cmd_set_recurrence(args, today):
     """Прикрепить или снять правило повторения с шаблона.
 
@@ -1492,6 +1545,32 @@ def cmd_set_recurrence(args, today):
             "recurrence": _recurrence_view(обновлённый)}
 
 
+def cmd_save_template(args, today):
+    """Создать шаблон с нуля или переписать существующий целиком.
+
+    Раньше единственным путём завести шаблон было «сохранить как» у уже готовой
+    задачи (`cmd_template_from_task`) — с нуля собрать было нечем, хотя
+    `tpl.Store.save` шаблон без задачи-источника принимает и так. Здесь тот же
+    вызов, что там, только данные приходят прямо от формы или из CLI, а не из
+    развёрнутых дат существующей задачи.
+
+    JSON на входе: {"name": "...", "tags": [...], "steps": [{"title": "...",
+    "offset_days": 0, "time_of_day": "14:00"}], "body": "..."}
+    """
+    raw = sys.stdin.read() if args.json == "-" else args.json
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
+
+    склад = tpl.JsonStore(VAULT)
+    try:
+        шаблон = склад.save(data)
+    except tpl.TemplateError as e:
+        return {"ok": False, "errors": getattr(e, "errors", [{"field": None, "error": str(e)}])}
+    return {"ok": True, "template": шаблон["name"], "steps": len(шаблон.get("steps") or [])}
+
+
 def _create_task_from_data(данные, today, existing=None):
     """Общий путь записи новой задачи — из формы, из шаблона, из повторения.
 
@@ -1514,6 +1593,28 @@ def _create_task_from_data(данные, today, existing=None):
     return задача, None
 
 
+def copy_template_attachments(template_name, task_name, today):
+    """Перенести файлы шаблона на заведённую из него задачу. Возвращает,
+    сколько перенесено.
+
+    Копируются строки в `attachments`, а не байты: файл на диске адресуется
+    своим sha256 (`attachments.save`), поэтому вторая ссылка на ту же картинку
+    ничего не пишет на диск и ничего не весит. Без этого шага фото на шаблоне
+    остаётся украшением карточки: человек делает задачу, а схема, ради которой
+    файл прикрепляли, лежит там, куда он в этот момент не смотрит.
+
+    Подпись и имя файла переносятся как есть, дата ставится сегодняшняя — это
+    дата появления файла у задачи, а не у шаблона.
+    """
+    склад = get_store()
+    перенесено = 0
+    for r in склад.list_attachments("template", template_name):
+        склад.add_attachment("task", task_name, r["sha256"], r["filename"],
+                             r["mime"], r["bytes"], r["caption"], today)
+        перенесено += 1
+    return перенесено
+
+
 def cmd_from_template(args, today):
     """Завести задачу из шаблона."""
     склад = tpl.JsonStore(VAULT)
@@ -1527,8 +1628,10 @@ def cmd_from_template(args, today):
     задача, errors = _create_task_from_data(данные, today)
     if errors:
         return {"ok": False, "errors": errors}
+    файлы = copy_template_attachments(шаблон["name"], задача["path"].stem, today)
     return {"ok": True, "task": задача["path"].stem, "template": шаблон["name"],
-            "steps": len(задача["meta"]["steps"]), "status": задача["meta"]["status"]}
+            "steps": len(задача["meta"]["steps"]), "attachments": файлы,
+            "status": задача["meta"]["status"]}
 
 
 # --- повторения --------------------------------------------------------
@@ -1644,6 +1747,7 @@ def cmd_recur(args, today):
                 сбой = errors
                 break
             задачи_кэш.append(задача["path"].stem)
+            copy_template_attachments(имя, задача["path"].stem, today)
             созданы.append({"date": решение["date"].isoformat(), "task": задача["path"].stem})
             запись["previous"] = {"date": решение["date"].isoformat(), "closed": False,
                                   "task": задача["path"].stem}
@@ -2451,6 +2555,19 @@ def main():
     sr.add_argument("--rule", help='JSON правила с anchor, например {"anchor":"2026-09-01","freq":"monthly","bymonthday":[5]}')
     sr.add_argument("--clear", action="store_true", help="снять повторение")
     sr.set_defaults(func=cmd_set_recurrence)
+
+    st = sub.add_parser("save-template", help="создать шаблон с нуля или переписать существующий")
+    st.add_argument("json", help='JSON шаблона или "-" для чтения из stdin, форма как у cmd_create')
+    st.set_defaults(func=cmd_save_template)
+
+    tp = sub.add_parser("template-preview", help="какие даты дадут шаги ещё не сохранённого шаблона")
+    tp.add_argument("json", help='JSON шаблона или "-" для чтения из stdin')
+    tp.add_argument("--start", help="дата старта для примера, по умолчанию сегодня")
+    tp.set_defaults(func=cmd_template_preview)
+
+    rp = sub.add_parser("parse-recurrence", help="разобрать «каждый вторник» в правило")
+    rp.add_argument("text")
+    rp.set_defaults(func=cmd_recurrence_parse)
 
     rc = sub.add_parser("recur", help="прогнать шаблоны с правилом повторения")
     rc.add_argument("--name", help="только один шаблон")

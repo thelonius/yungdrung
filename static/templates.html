@@ -16,6 +16,7 @@
     <div class="head-row">
       <h1>Шаблоны</h1>
       <div class="head-links">
+        <button type="button" class="ghost small" id="new-template-btn">Новый шаблон</button>
         <a class="ghost small" href="/">К ленте</a>
       </div>
     </div>
@@ -23,8 +24,8 @@
   </header>
 
   <ol class="tpl-list" id="list"></ol>
-  <p class="empty" id="empty" hidden>Шаблонов пока нет. Их удобно делать из готовой задачи —
-    кнопка «В шаблон» есть в окне контроля на ленте.</p>
+  <p class="empty" id="empty" hidden>Шаблонов пока нет. Заведи новый кнопкой сверху —
+    или сохрани готовую задачу как шаблон, кнопка «В шаблон» есть в окне контроля на ленте.</p>
 
 </main>
 
@@ -76,6 +77,14 @@
 
     <div class="control-form" style="display:flex; flex-direction:column; gap:16px;">
       <div class="field">
+        <label for="r-text">Словами</label>
+        <input type="text" id="r-text" autocomplete="off"
+               placeholder="каждый вторник · раз в квартал · последний рабочий день месяца">
+        <p class="note">Разберётся в поля ниже. Их можно поправить руками</p>
+        <p class="err" id="r-text-err" hidden></p>
+      </div>
+
+      <div class="field">
         <label for="r-freq">Как часто</label>
         <select id="r-freq">
           <option value="daily">каждый день</option>
@@ -124,6 +133,119 @@
     </div>
   </form>
 </dialog>
+
+<!-- Новый шаблон с нуля: название, шаги со сдвигом в днях от даты старта —
+     та же форма, что получилась бы из «Сохранить как шаблон» у готовой задачи,
+     только без задачи-источника. -->
+<dialog id="new-template" class="wide">
+  <form method="dialog" class="control-card">
+    <header class="control-head">
+      <h2 class="control-step">Новый шаблон</h2>
+    </header>
+
+    <div class="control-form" style="display:flex; flex-direction:column; gap:16px;">
+      <div class="field">
+        <label for="nt-name">Название шаблона</label>
+        <input type="text" id="nt-name" autocomplete="off" placeholder="Квартальный отчёт">
+        <p class="err" id="nt-err-name" hidden></p>
+      </div>
+
+      <div class="field">
+        <label for="nt-tags">Категории <span class="opt">необязательно</span></label>
+        <input type="text" id="nt-tags" autocomplete="off" placeholder="финансы, отчётность">
+        <p class="note">Через запятую</p>
+      </div>
+
+      <section class="steps-block">
+        <div class="steps-head">
+          <h2>Шаги</h2>
+          <p class="note">Каждый шаг отсчитывается от предыдущего, первый — от дня старта.
+            Даты справа показаны для примера: настоящие посчитаются от той даты,
+            которую задашь при заведении задачи</p>
+        </div>
+
+        <div class="nt-start-row">
+          <label for="nt-start">Пример: старт</label>
+          <input type="text" id="nt-start" autocomplete="off" placeholder="сегодня">
+          <span class="note" id="nt-start-note"></span>
+        </div>
+
+        <ol class="steps" id="nt-steps"></ol>
+        <p class="err" id="nt-err-steps" hidden></p>
+        <button type="button" class="ghost" id="nt-add-step">Добавить шаг</button>
+      </section>
+
+      <div class="field">
+        <label>Файлы <span class="opt">необязательно</span></label>
+        <p class="note">Схемы, бланки, фото. Уедут в каждую задачу, заведённую по этому шаблону</p>
+        <ul class="attach-list" id="nt-attachments"></ul>
+        <input type="file" id="nt-attach-input" hidden>
+        <button type="button" class="ghost" id="nt-attach-btn">Прикрепить файл</button>
+        <p class="err" id="nt-err-attach" hidden></p>
+      </div>
+
+      <div class="field">
+        <label for="nt-body">Заметка <span class="opt">необязательно</span></label>
+        <textarea id="nt-body" rows="3"></textarea>
+      </div>
+
+      <p class="err" id="nt-err-general" hidden></p>
+    </div>
+
+    <div class="control-actions">
+      <button type="button" class="primary" id="nt-save">Сохранить шаблон</button>
+      <button type="button" class="ghost" id="nt-back">Отмена</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Файлы уже сохранённого шаблона: у него есть имя, значит есть и владелец,
+     к которому движок цепляет вложение. В форме создания имени ещё нет —
+     там файлы копятся в памяти и уходят на сервер после сохранения. -->
+<dialog id="tpl-files">
+  <form method="dialog" class="control-card">
+    <header class="control-head">
+      <p class="control-task" id="tf-name"></p>
+      <h2 class="control-step">Файлы шаблона</h2>
+    </header>
+
+    <div class="control-form" style="display:flex; flex-direction:column; gap:14px;">
+      <p class="note">Каждый файл копируется в задачу, заведённую по этому шаблону</p>
+      <ul class="attach-list" id="tf-list"></ul>
+      <input type="file" id="tf-input" hidden>
+      <button type="button" class="ghost" id="tf-add">Прикрепить файл</button>
+      <p class="err" id="tf-err" hidden></p>
+    </div>
+
+    <div class="control-actions">
+      <button type="button" class="primary" id="tf-back">Готово</button>
+    </div>
+  </form>
+</dialog>
+
+<template id="nt-step-tpl">
+  <li class="step">
+    <div class="step-num"></div>
+    <div class="step-fields">
+      <div class="step-title-row">
+        <input type="text" class="step-title" autocomplete="off" placeholder="Что сделать">
+        <button type="button" class="drop" title="Убрать шаг" aria-label="Убрать шаг">×</button>
+      </div>
+      <p class="err step-err-title" hidden></p>
+      <div class="date-row">
+        <span class="note step-gap-label">через</span>
+        <input type="text" class="step-offset" autocomplete="off" value="0"
+               style="max-width:56px;" title="Через сколько дней после предыдущего шага">
+        <span class="note step-gap-unit">дн.</span>
+        <input type="text" class="step-time" autocomplete="off"
+               placeholder="время" title="Время контроля, необязательно"
+               style="max-width:96px;">
+        <span class="date-preview step-when"></span>
+      </div>
+      <p class="err step-err-offset" hidden></p>
+    </div>
+  </li>
+</template>
 
 <script src="/templates.js"></script>
 </body>
