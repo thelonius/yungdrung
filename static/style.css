@@ -310,6 +310,78 @@ button:focus-visible {
   color: var(--accent-ink);
 }
 
+/* --- вложения: список файлов у задачи, шага и шаблона --- */
+
+.attach-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.attach-list:empty { display: none; }
+
+.attach-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
+.attach-thumb {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1.5px solid var(--line);
+  background: var(--bg);
+}
+
+.attach-row.has-thumb { padding: 5px 8px; }
+
+.attach-row a {
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attach-row a:hover { text-decoration: underline; }
+
+.attach-size {
+  color: var(--muted);
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+.attach-remove {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  border-radius: 100px;
+}
+
+.attach-remove:hover { background: var(--danger-bg); color: var(--danger); }
+
+.attach-add {
+  align-self: flex-start;
+  cursor: pointer;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }

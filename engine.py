@@ -45,6 +45,7 @@ try:
 except ImportError:
     sys.exit("нужен pyyaml: pip install pyyaml")
 
+import attachments
 import backup
 import kb
 import recurrence as rec
@@ -1956,6 +1957,97 @@ def cmd_export_json(args, today):
     return {"ok": True, **итог}
 
 
+# --- вложения ----------------------------------------------------------
+
+def _attachment_owner(args):
+    """(source_type, source_id) из `task`/`--step` или `--template`: та же
+    адресация, что и везде в контракте — по названию, не по числовому id из
+    базы. Задача обязана существовать; шаг, если указан, — тоже, иначе привязка
+    ссылалась бы на то, чего нет.
+
+    Шаблон адресуется именем из хранилища, а не тем, что прислали: имена
+    сравниваются без регистра (`tpl.same_name`), и «квартальный отчёт» не
+    должен завести вложениям вторую полку рядом с «Квартальный отчёт».
+    """
+    имя_шаблона = getattr(args, "template", None)
+    if имя_шаблона not in (None, ""):
+        шаблон = tpl.JsonStore(VAULT).get(имя_шаблона)
+        if not шаблон:
+            sys.exit(f"нет шаблона «{имя_шаблона}»")
+        return "template", шаблон["name"]
+    if getattr(args, "task", None) in (None, ""):
+        sys.exit("нужно название задачи или --template")
+    task = find_task(args.task)
+    шаг = getattr(args, "step", None)
+    if шаг not in (None, ""):
+        try:
+            шаг_id = int(шаг)
+        except (TypeError, ValueError):
+            шаг_id = None
+        if шаг_id not in {s["id"] for s in steps_of(task)}:
+            sys.exit(f"нет шага {шаг} в «{task['path'].stem}»")
+        return "step", f'{task["path"].stem}:{шаг_id}'
+    return "task", task["path"].stem
+
+
+def cmd_attach(args, today):
+    """Прикрепить файл к задаче или к шагу (`--step`). Один путь для CLI и
+    формы: данные приходят либо уже готовыми байтами (форма — `args.data`),
+    либо путём к файлу на диске (CLI — `args.file`) — тот же приём, что у
+    `cmd_create` с JSON-строкой или `-` для чтения из stdin.
+    """
+    try:
+        source_type, source_id = _attachment_owner(args)
+    except SystemExit as e:
+        поле = "template" if getattr(args, "template", None) else "task"
+        return {"ok": False, "errors": [{"field": поле, "error": str(e)}]}
+
+    filename = (getattr(args, "filename", None) or "").strip()
+    if not filename and getattr(args, "file", None):
+        filename = Path(args.file).name
+    if not filename:
+        return {"ok": False, "errors": [{"field": "filename", "error": "Нужно имя файла"}]}
+
+    if getattr(args, "data", None) is not None:
+        data = args.data
+    else:
+        try:
+            data = Path(args.file).read_bytes()
+        except OSError as e:
+            return {"ok": False, "errors": [{"field": "file", "error": str(e)}]}
+
+    try:
+        sha256, size = attachments.save(VAULT, data, filename)
+    except attachments.AttachmentError as e:
+        return {"ok": False, "errors": [e.as_json()]}
+
+    mime = attachments.guess_mime(filename)
+    caption = (getattr(args, "caption", None) or "").strip() or None
+    attachment_id = get_store().add_attachment(
+        source_type, source_id, sha256, filename, mime, size, caption, today)
+    return {"ok": True, "id": attachment_id, "sha256": sha256, "filename": filename,
+            "mime": mime, "bytes": size}
+
+
+def cmd_attachments(args, today):
+    """Список вложений задачи целиком или одного шага (`--step`)."""
+    source_type, source_id = _attachment_owner(args)
+    rows = get_store().list_attachments(source_type, source_id)
+    return {"attachments": [
+        {"id": r["id"], "filename": r["filename"], "mime": r["mime"],
+         "bytes": r["bytes"], "caption": r["caption"], "added": r["added"]}
+        for r in rows]}
+
+
+def cmd_attachment_delete(args, today):
+    """Удалить вложение. Не задачу и не шаг — на связь между ними это никак
+    не влияет, только на список вложений."""
+    if get_store().get_attachment(args.id) is None:
+        sys.exit(f"нет вложения {args.id}")
+    get_store().delete_attachment(args.id)
+    return {"ok": True, "id": args.id}
+
+
 def rename_tag_everywhere(old_name, new_name, today=None):
     """Заменить тег во всех задачах вольта. Дополняет `settings.rename_tag`
     и `settings.merge_tags`: те трогают только справочник (цвет, закрепление),
@@ -2032,6 +2124,24 @@ def main():
     dl = sub.add_parser("delete", help="удалить задачу насовсем")
     dl.add_argument("task")
     dl.set_defaults(func=cmd_delete)
+
+    at = sub.add_parser("attach", help="прикрепить файл к задаче, шагу или шаблону")
+    at.add_argument("task", nargs="?", help="название задачи; либо --template")
+    at.add_argument("file", help="путь к файлу на диске")
+    at.add_argument("--step", help="id шага, если не вся задача")
+    at.add_argument("--template", help="название шаблона вместо задачи")
+    at.add_argument("--caption", help="короткая подпись")
+    at.set_defaults(func=cmd_attach)
+
+    al = sub.add_parser("attachments", help="список вложений задачи, шага или шаблона")
+    al.add_argument("task", nargs="?", help="название задачи; либо --template")
+    al.add_argument("--step", help="id шага, если не вся задача")
+    al.add_argument("--template", help="название шаблона вместо задачи")
+    al.set_defaults(func=cmd_attachments)
+
+    ad = sub.add_parser("attachment-delete", help="удалить вложение по id")
+    ad.add_argument("id", type=int)
+    ad.set_defaults(func=cmd_attachment_delete)
 
     ro = sub.add_parser("reopen", help="отменить закрытие шага (сделан → снова открыт)")
     ro.add_argument("task")

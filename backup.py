@@ -47,6 +47,8 @@ import zipfile
 from datetime import date, datetime, timedelta
 from pathlib import Path, PurePosixPath
 
+import attachments
+
 # Имя копии: «вольт-2026-08-18-143005.zip». Метка времени в имени, а не только во
 # времени файла: время файла теряется при копировании папки на флешку и при
 # распаковке архива, а разбирать завал копий заказчику придётся именно глазами.
@@ -70,7 +72,10 @@ EVERY_HOURS_DEFAULT = 24
 # весить больше самих данных, а __pycache__ восстанавливать незачем. Настройки
 # Obsidian (.obsidian) наоборот берём — заказчик их настраивал руками, и после
 # восстановления вольт должен открыться таким же, а не голым.
-SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".ipynb_checkpoints"}
+# вложения — своё зеркало (mirror_attachments), не копия на каждую ротацию:
+# картинки не жмутся, а zip-архив с ними раздувался бы в N раз на N копий.
+SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".ipynb_checkpoints",
+            attachments.DIR_NAME}
 
 # Файлы, которые движок создаёт на время записи (`engine.write_file`). Живут
 # доли секунды и к моменту распаковки не значат ничего.
@@ -662,6 +667,32 @@ def due(dest, every_hours=EVERY_HOURS_DEFAULT, now=None, prefix=PREFIX):
     return сейчас - свежая >= timedelta(hours=every_hours)
 
 
+def mirror_attachments(vault, dest):
+    """Докопировать в `dest/вложения` файлы, которых там ещё нет.
+
+    Не копия на каждую ротацию, а одно зеркало рядом с архивами: блобы
+    адресованы содержимым и не меняются, поэтому «докопировать» значит
+    «файла с таким именем там ещё нет» — сравнивать содержимое не нужно,
+    совпадение имени (sha256 плюс расширение) уже его гарантирует. Ничего не
+    удаляет: вложение, отвязанное от задачи, безопасный мусор, не порча
+    (см. `store.Store.delete_attachment`), и подчищать его не дело бэкапа.
+    """
+    src = attachments.dir_path(vault)
+    if not src.is_dir():
+        return {"copied": [], "total": 0}
+    dst = Path(dest) / attachments.DIR_NAME
+    dst.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for f in sorted(src.iterdir()):
+        if not f.is_file():
+            continue
+        target = dst / f.name
+        if not target.exists():
+            shutil.copy2(f, target)
+            copied.append(f.name)
+    return {"copied": copied, "total": sum(1 for _ in dst.iterdir())}
+
+
 def backup(vault, dest, keep=KEEP_DEFAULT, every_hours=None, now=None,
            force=False, prefix=PREFIX):
     """Копия по расписанию: снять, если пора, и подчистить старые.
@@ -671,12 +702,18 @@ def backup(vault, dest, keep=KEEP_DEFAULT, every_hours=None, now=None,
     выключенного ноутбука срок догоняется при первом же запуске.
 
     Без `every_hours` копия делается всегда: это кнопка «сделать сейчас».
+
+    Зеркало вложений докапывается при каждом вызове, независимо от расписания
+    zip-снимка: оно не ротируется и не привязано к этому же ритму, докопировать
+    недостающее дёшево, а картинки не должны ждать следующего планового снимка.
     """
+    зеркало = mirror_attachments(vault, dest)
     if every_hours and not force and not due(dest, every_hours, now, prefix):
         return {"file": None, "reason": "рано: копия за этот период уже есть",
-                "rotated": []}
+                "rotated": [], "attachments_mirrored": зеркало["copied"]}
     итог = create(vault, dest, now=now, prefix=prefix)
     итог["rotated"] = rotate(dest, keep, prefix=prefix, protect=[итог["name"]])
+    итог["attachments_mirrored"] = зеркало["copied"]
     return итог
 
 

@@ -207,3 +207,36 @@
 @media (max-width: 640px) {
   .card-fields { grid-template-columns: 1fr; }
 }
+
+
+/* --- группы подшагов --- */
+
+.checkline.is-substep { margin-left: 30px; }
+
+.checkline.is-substep .checkline-row { border-left: 2px solid var(--line); }
+
+.checkline.is-group .checkline-title { font-weight: 650; }
+
+.checkline.is-group .checkline-date {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.edit-group-actions { display: flex; gap: 8px; }
+
+/* --- вложения --- */
+
+.attach-block {
+  background: var(--card);
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Общие стили списка вложений переехали в style.css: их делят карточка задачи
+   и страница шаблонов. Здесь остаётся только то, что про карточку. */
+
+.edit-attach-field .attach-list { margin-top: 2px; }

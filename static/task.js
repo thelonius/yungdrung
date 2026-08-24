@@ -38,6 +38,105 @@ function всплывашка(текст) {
   setTimeout(() => el.remove(), 3500);
 }
 
+// --- вложения ----------------------------------------------------------------
+//
+// Файл целиком уходит на сервер base64-строкой в теле того же JSON-запроса,
+// что и остальные POST формы — без multipart и без `cgi` (модуль убран из
+// стандартной библиотеки в новых версиях Python). Хранит и раздаёт байты
+// движок (`attachments.py`), страница только собирает файл и рисует список.
+
+function размерФайла(bytes) {
+  if (bytes < 1024) return `${bytes} Б`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} КБ`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
+}
+
+function файлВBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    // readAsDataURL отдаёт «data:тип;base64,XXXX» — серверу нужна только
+    // часть после запятой, префикс он не разбирает и не ждёт.
+    reader.onload = () => resolve(String(reader.result).split(',', 2)[1] || '');
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function строкаВложения(a, onDelete) {
+  const li = document.createElement('li');
+  li.className = 'attach-row';
+
+  const ссылка = document.createElement('a');
+  ссылка.href = `/вложение/${a.id}`;
+  ссылка.target = '_blank';
+  ссылка.rel = 'noopener';
+  ссылка.textContent = a.filename;
+  if (a.caption) ссылка.title = a.caption;
+
+  // Картинку видно сразу, а не по клику: вложение чаще всего схема, и ходить
+  // за ней в соседнюю вкладку значит не смотреть на неё вовсе. Тип берём тот,
+  // что вернуло ядро; всё, что не картинка, остаётся строкой со ссылкой.
+  if ((a.mime || '').startsWith('image/')) {
+    const превью = document.createElement('img');
+    превью.className = 'attach-thumb';
+    превью.src = `/вложение/${a.id}`;
+    превью.alt = a.caption || a.filename;
+    превью.loading = 'lazy';
+    // Битый или потерянный на диске файл не должен оставлять сломанную
+    // иконку: строка со ссылкой сама по себе рабочая.
+    превью.addEventListener('error', () => превью.remove());
+    li.classList.add('has-thumb');
+    li.append(превью);
+  }
+
+  const размер = document.createElement('span');
+  размер.className = 'attach-size';
+  размер.textContent = размерФайла(a.bytes);
+
+  const убрать = document.createElement('button');
+  убрать.type = 'button';
+  убрать.className = 'attach-remove';
+  убрать.title = 'Удалить вложение';
+  убрать.textContent = '×';
+  убрать.addEventListener('click', async () => {
+    const r = await post('/api/attachments-delete', { id: a.id });
+    if (r.ok) onDelete();
+    else всплывашка((r.errors || [{}])[0].error || 'не получилось');
+  });
+
+  li.append(ссылка, размер, убрать);
+  return li;
+}
+
+async function загрузитьВложения(listEl, owner) {
+  const qs = new URLSearchParams({ task: owner.task });
+  if (owner.step != null) qs.set('step', owner.step);
+  const d = await get('/api/attachments?' + qs.toString());
+  listEl.replaceChildren(...(d.attachments || [])
+    .map((a) => строкаВложения(a, () => загрузитьВложения(listEl, owner))));
+}
+
+async function прикрепитьФайл(file, owner, listEl, errEl) {
+  if (errEl) errEl.hidden = true;
+  let data;
+  try {
+    data = await файлВBase64(file);
+  } catch {
+    всплывашка('Не удалось прочитать файл');
+    return;
+  }
+  const payload = { task: owner.task, filename: file.name, data };
+  if (owner.step != null) payload.step = owner.step;
+  const r = await post('/api/attachments-add', payload);
+  if (!r.ok) {
+    const текст = (r.errors || [{}])[0].error || 'не получилось';
+    if (errEl) { errEl.textContent = текст; errEl.hidden = false; }
+    else всплывашка(текст);
+    return;
+  }
+  await загрузитьВложения(listEl, owner);
+}
+
 function короткаяДата(iso) {
   if (!iso) return '';
   const d = new Date(iso);
@@ -91,33 +190,93 @@ function отрисовать(d) {
   шаги = d.steps.map((s) => ({ ...s }));
   перерисоватьЧеклист();
   отрисоватьИсторию(d.steps);
+  загрузитьВложения($('#task-attachments'), { task: имя });
 }
 
 function перерисоватьЧеклист() {
   checklist.replaceChildren(...шаги.map((s, i) => строкаШага(s, i)));
 }
 
+// Плоский массив шагов хранится в порядке обхода дерева: дети группы идут
+// подряд сразу за ней. Все перестройки ниже обязаны сохранять этот порядок —
+// на нём держится и отрисовка, и соответствие путей ошибок движка строкам.
+
+function этоГруппа(s) { return !!s.mode; }
+
+function длинаБлока(индекс) {
+  const s = шаги[индекс];
+  let len = 1;
+  if (этоГруппа(s)) {
+    let j = индекс + 1;
+    while (j < шаги.length && шаги[j].parent === s.id) { j++; len++; }
+  }
+  return len;
+}
+
+// Данные для движка — вложенная форма, та же, что у cmd_create/cmd_update:
+// у группы steps и mode, у листа даты. Даты группы не отправляются вообще.
+function вложенныеШаги() {
+  const дети = new Map();
+  for (const s of шаги) {
+    const p = s.parent ?? null;
+    if (!дети.has(p)) дети.set(p, []);
+    дети.get(p).push(s);
+  }
+  const узел = (s) => этоГруппа(s)
+    ? { id: s.id, title: s.title, mode: s.mode, note: s.note,
+        steps: (дети.get(s.id) || []).map(узел) }
+    : { id: s.id, title: s.title, start_date: s.start_date,
+        control_date: s.control_date, note: s.note };
+  return (дети.get(null) || []).map(узел);
+}
+
+// Путь ошибки движка («steps.1.steps.0.control_date») → индекс в плоском
+// массиве. Дети идут подряд за группой, так что арифметика прямая.
+function индексПоПути(field, суффикс) {
+  const m = new RegExp(`^steps\\.(\\d+)(?:\\.steps\\.(\\d+))?\\.(?:${суффикс})$`).exec(field || '');
+  if (!m) return null;
+  const верхние = [...шаги.keys()].filter((i) => (шаги[i].parent ?? null) === null);
+  let i = верхние[+m[1]];
+  if (i === undefined) return null;
+  if (m[2] !== undefined) i = i + 1 + (+m[2]);
+  return шаги[i] ? i : null;
+}
+
 function строкаШага(s, индекс) {
   const li = tpl.content.firstElementChild.cloneNode(true);
-  const закрыт = ['done', 'skipped', 'failed'].includes(s.status);
+  const группа = этоГруппа(s);
+  // Закрытие группы вычисляет ядро (поле closed из cmd_show): у неё нет
+  // своего статуса, и страница не должна выводить его из детей сама.
+  const закрыт = группа ? !!s.closed : ['done', 'skipped', 'failed'].includes(s.status);
   li.classList.toggle('is-closed', закрыт);
   li.classList.toggle('is-overdue', s.state === 'overdue');
+  li.classList.toggle('is-group', группа);
+  li.classList.toggle('is-substep', (s.parent ?? null) !== null);
   li.dataset.index = индекс;
 
   const row = $('.checkline-row', li);
   row.draggable = true;
 
   const check = $('.step-check', li);
-  check.checked = s.status === 'done';
-  check.disabled = s.status === 'failed' || s.status === 'skipped';
-  check.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (s.status === 'done') { check.checked = true; return переоткрыть(s); }
-    действие('done', s);
-  });
+  if (группа) {
+    // У группы нет чекбокса: отметить можно только её подшаги, закрытие
+    // приходит вычисленным. Кликабельный чекбокс здесь был бы вторым
+    // писателем одного поля.
+    check.hidden = true;
+  } else {
+    check.checked = s.status === 'done';
+    check.disabled = s.status === 'failed' || s.status === 'skipped';
+    check.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (s.status === 'done') { check.checked = true; return переоткрыть(s); }
+      действие('done', s);
+    });
+  }
 
   $('.checkline-title', li).textContent = s.title;
-  $('.checkline-date', li).textContent = s.control_date ? короткаяДата(s.control_date) : '—';
+  $('.checkline-date', li).textContent = группа
+    ? (s.mode === 'seq' ? 'подшаги по очереди' : 'подшаги в любом порядке')
+    : (s.control_date ? короткаяДата(s.control_date) : '—');
 
   const счётчик = $('.checkline-postponed', li);
   const переносов = (s.log || []).filter((e) => e.event === 'not_done' || e.event === 'defer').length;
@@ -149,10 +308,71 @@ function переключитьРедактор(li, s, закрыт) {
 }
 
 function заполнитьРедактор(li, s, закрыт) {
+  const группа = этоГруппа(s);
   $('.edit-title', li).value = s.title;
   $('.edit-start', li).value = s.start_date || '';
   $('.edit-control', li).value = s.control_date || '';
   $('.edit-note', li).value = s.note || '';
+
+  // У группы вместо дат — режим и добавление подшагов; разбить на подшаги
+  // можно только верхний шаг: одна глубина вложенности.
+  $('.edit-dates', li).hidden = группа;
+  $('.edit-mode-field', li).hidden = !группа;
+  $('.edit-mode', li).value = s.mode || 'par';
+  $('.add-substep', li).hidden = !группа;
+  $('.make-group', li).hidden = группа || (s.parent ?? null) !== null;
+
+  $('.edit-mode', li).addEventListener('change', () => {
+    s.mode = $('.edit-mode', li).value;
+    перерисоватьЧеклист();
+    проверитьПорядок();
+  });
+
+  $('.add-substep', li).addEventListener('click', () => {
+    const индекс = Number(li.dataset.index);
+    const конец = индекс + длинаБлока(индекс);
+    шаги.splice(конец, 0, { id: null, title: '', status: 'pending',
+      start_date: null, control_date: null, note: null,
+      parent: s.id, mode: null, log: [] });
+    перерисоватьЧеклист();
+    const строка = checklist.children[конец];
+    $('.checkline-editor', строка).hidden = false;
+    $('.edit-title', строка).focus();
+  });
+
+  $('.make-group', li).addEventListener('click', () => {
+    // Новый шаг без id разбивать нельзя: подшагу нужен parent, а id раздаёт
+    // движок при сохранении. Сначала сохранить, потом разбивать.
+    if (s.id == null) { всплывашка('Сначала сохрани задачу, потом разбивай шаг'); return; }
+    const индекс = Number(li.dataset.index);
+    s.mode = 'par';
+    s.start_date = null;
+    s.control_date = null;
+    шаги.splice(индекс + 1, 0, { id: null, title: '', status: 'pending',
+      start_date: null, control_date: null, note: null,
+      parent: s.id, mode: null, log: [] });
+    перерисоватьЧеклист();
+    const строка = checklist.children[индекс + 1];
+    $('.checkline-editor', строка).hidden = false;
+    $('.edit-title', строка).focus();
+  });
+
+  // Вложения адресуются id шага — до первого сохранения его ещё нет
+  // (`s.id == null` у только что добавленного шага), прикреплять некуда.
+  const attachField = $('.edit-attach-field', li);
+  if (s.id == null) {
+    attachField.hidden = true;
+  } else {
+    attachField.hidden = false;
+    const attachList = $('.edit-attachments', li);
+    загрузитьВложения(attachList, { task: имя, step: s.id });
+    $('.edit-attach-input', li).addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      e.target.value = '';
+      if (!file) return;
+      await прикрепитьФайл(file, { task: имя, step: s.id }, attachList, null);
+    });
+  }
 
   const ro = $('.edit-readonly', li);
   if (закрыт) {

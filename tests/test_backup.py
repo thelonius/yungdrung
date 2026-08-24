@@ -185,6 +185,48 @@ def test_копия_содержит_все_файлы_вольта(vault, ко�
     assert итог["files"] == 3
 
 
+def test_вложения_не_попадают_в_архив(vault, копии):
+    """Картинки не жмутся, и ротация N копий не должна умножать их вес N раз —
+    решение из ПЛАН.md («Вложения»): байты живут своим зеркалом, не в zip."""
+    (vault / "вложения").mkdir()
+    (vault / "вложения" / "abc123.png").write_bytes(b"image-bytes")
+    итог = backup.create(vault, копии, now=datetime(2026, 8, 18, 14, 30, 5))
+    assert "вложения/abc123.png" not in имена_в_архиве(итог["file"])
+    assert итог["files"] == 3  # те же три файла, что и без папки вложений
+
+
+def test_зеркало_вложений_докапывает_недостающее(vault, копии):
+    (vault / "вложения").mkdir()
+    (vault / "вложения" / "a.png").write_bytes(b"one")
+    итог = backup.mirror_attachments(vault, копии)
+    assert итог["copied"] == ["a.png"]
+    assert (копии / "вложения" / "a.png").read_bytes() == b"one"
+
+    # Файл уже есть в зеркале — второй прогон его не трогает и не считает
+    # «скопированным», ротации на неизменные блобы тут нет вообще.
+    (копии / "вложения" / "a.png").write_bytes(b"replaced")
+    итог2 = backup.mirror_attachments(vault, копии)
+    assert итог2["copied"] == []
+    assert (копии / "вложения" / "a.png").read_bytes() == b"replaced"
+
+
+def test_зеркало_без_папки_вложений_не_падает(vault, копии):
+    assert backup.mirror_attachments(vault, копии) == {"copied": [], "total": 0}
+
+
+def test_backup_докапывает_зеркало_даже_когда_рано_для_копии(vault, копии):
+    """Расписание гейтит только новый zip-снимок, не зеркало: картинки не
+    должны ждать следующего планового снимка."""
+    (vault / "вложения").mkdir()
+    (vault / "вложения" / "a.png").write_bytes(b"scheme")
+    положить_копию(копии, "вольт-2026-08-18-090000.zip")
+    итог = backup.backup(vault, копии, keep=3, every_hours=24,
+                         now=datetime(2026, 8, 18, 10, 0))
+    assert итог["file"] is None  # копия за период уже есть
+    assert итог["attachments_mirrored"] == ["a.png"]
+    assert (копии / "вложения" / "a.png").is_file()
+
+
 def test_содержимое_файла_в_копии_совпадает_с_вольтом(vault, копии):
     итог = backup.create(vault, копии)
     with zipfile.ZipFile(итог["file"]) as z:

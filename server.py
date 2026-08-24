@@ -111,9 +111,44 @@ class Handler(BaseHTTPRequestHandler):
             назначение = _param(self.path, "dest")
             return self._json(200, engine.cmd_backup_list(
                 _args(dest=назначение), date.today()))
+        if route == "/api/attachments":
+            задача = _param(self.path, "task") or ""
+            шаг = _param(self.path, "step")
+            шаблон = _param(self.path, "template")
+            try:
+                return self._json(200, engine.cmd_attachments(
+                    _args(task=задача, step=шаг, template=шаблон), date.today()))
+            except SystemExit as e:
+                return self._json(404, {"error": str(e)})
+        if route.startswith("/вложение/"):
+            return self._attachment_bytes(route[len("/вложение/"):])
         if route == "/api/settings":
             return self._json(200, self._settings_load())
         self._json(404, {"error": "нет такого адреса"})
+
+    def _attachment_bytes(self, id_text):
+        """Байты вложения — не JSON, поэтому мимо `_json`: тип и разрешение
+        показывать инлайн против скачивания решает `attachments.py`."""
+        try:
+            attachment_id = int(id_text)
+        except ValueError:
+            return self._json(404, {"error": "нет вложения"})
+        row = engine.get_store().get_attachment(attachment_id)
+        if row is None:
+            return self._json(404, {"error": "нет вложения"})
+        путь = attachments.locate(engine.VAULT, row["sha256"])
+        if путь is None:
+            return self._json(404, {"error": "файл вложения потерян на диске"})
+        ctype, disposition = attachments.content_type_and_disposition(
+            row["mime"], row["filename"])
+        data = путь.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition", disposition)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(data)
 
     def do_POST(self):
         route = unquote(self.path.split("?")[0])
@@ -207,7 +242,28 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/tags-merge":
             return self._json(200, self._tag_rewrite(
                 cfg.merge_tags, payload.get("source"), payload.get("target")))
+        if route == "/api/attachments-add":
+            return self._json(200, self._attachment_add(payload))
+        if route == "/api/attachments-delete":
+            return self._json(200, self._guarded(
+                engine.cmd_attachment_delete, _args(id=payload.get("id"))))
         self._json(404, {"error": "нет такого адреса"})
+
+    def _attachment_add(self, payload):
+        """Файл приходит base64 в теле JSON — тот же протокол, что и остальные
+        POST-запросы формы, без multipart и без cgi (снят из стандартной
+        библиотеки в новых версиях Python). Декодирует страница до отправки, но
+        размер всё равно проверяет `attachments.save` — заголовку формы верить
+        нельзя, а декодированные байты может подменить и не только форма."""
+        try:
+            data = base64.b64decode(payload.get("data") or "", validate=True)
+        except (ValueError, TypeError) as e:
+            return {"ok": False, "errors": [{"field": "data", "error": f"битый файл: {e}"}]}
+        return engine.cmd_attach(_args(
+            task=payload.get("task"), step=payload.get("step"),
+            template=payload.get("template"),
+            filename=payload.get("filename"), caption=payload.get("caption"),
+            data=data), date.today())
 
     def _settings_path(self):
         # Тот же приём, что в engine._work: путь считаем от engine.VAULT, а не

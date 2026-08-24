@@ -58,6 +58,19 @@
                 placeholder="Телефоны, номера счетов, ссылки на [[Василий Говнов]]"></textarea>
     </div>
 
+    <section class="attach-block">
+      <div class="steps-head">
+        <h2>Вложения</h2>
+        <p class="note">Картинки схем, сканы, любые файлы · скриншот можно вставить Ctrl+V</p>
+      </div>
+      <ul class="attach-list" id="task-attachments"></ul>
+      <label class="ghost small attach-add">
+        + Файл
+        <input type="file" id="task-attach-input" hidden>
+      </label>
+      <p class="err" id="err-attach" hidden></p>
+    </section>
+
     <section class="steps-block">
       <div class="steps-head">
         <h2>Шаги</h2>
@@ -154,15 +167,34 @@
         </div>
         <div class="field">
           <label>Дата контроля</label>
-          <input type="text" class="edit-control" autocomplete="off" placeholder="завтра в 9-30, 18.08 14:00">
+          <input type="text" class="edit-control" autocomplete="off" placeholder="завтра в полдесятого, 18.08 14:00">
           <span class="date-preview edit-control-preview"></span>
         </div>
+      </div>
+      <div class="field edit-mode-field" hidden>
+        <label>Подшаги</label>
+        <select class="edit-mode">
+          <option value="par">в любом порядке</option>
+          <option value="seq">по очереди</option>
+        </select>
       </div>
       <div class="field">
         <label>Заметка</label>
         <textarea class="edit-note" rows="2"></textarea>
       </div>
+      <div class="field edit-attach-field">
+        <label>Вложения</label>
+        <ul class="attach-list edit-attachments"></ul>
+        <label class="ghost small attach-add">
+          + Файл
+          <input type="file" class="edit-attach-input" hidden>
+        </label>
+      </div>
       <p class="note edit-readonly" hidden></p>
+      <div class="edit-group-actions">
+        <button type="button" class="ghost small add-substep" hidden>+ Подшаг</button>
+        <button type="button" class="ghost small make-group" hidden>Разбить на подшаги</button>
+      </div>
     </div>
   </li>
 </template>

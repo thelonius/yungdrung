@@ -121,6 +121,23 @@ CREATE TABLE IF NOT EXISTS kb_exclusions (
     kb_entry_id  INTEGER REFERENCES kb_notes(id) ON DELETE CASCADE,
     text         TEXT NOT NULL
 );
+
+-- Метаданные файлов-вложений (attachments.py) — задача или шаг, по образцу
+-- kb_links. Байты живут на диске под sha256, здесь только описание. Новая
+-- таблица не требует ALTER на старой базе: CREATE IF NOT EXISTS её заводит
+-- сама при первом подключении после обновления кода.
+CREATE TABLE IF NOT EXISTS attachments (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_type  TEXT NOT NULL,
+    source_id    TEXT NOT NULL,
+    sha256       TEXT NOT NULL,
+    filename     TEXT NOT NULL,
+    mime         TEXT NOT NULL,
+    bytes        INTEGER NOT NULL,
+    caption      TEXT,
+    added        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attachments_source ON attachments(source_type, source_id);
 """
 
 # Поля задачи, которые движок сам вычисляет при каждом save() и которые
@@ -332,6 +349,39 @@ class Store:
     def delete_task(self, task_id):
         with self._connect() as conn:
             conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+
+    # --- вложения --------------------------------------------------------
+
+    def add_attachment(self, source_type, source_id, sha256, filename, mime,
+                       size, caption, added):
+        with self._connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO attachments (source_type, source_id, sha256, filename, "
+                "mime, bytes, caption, added) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (source_type, source_id, sha256, filename, mime, size, caption,
+                 _iso(added)))
+            return cur.lastrowid
+
+    def list_attachments(self, source_type, source_id):
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM attachments WHERE source_type=? AND source_id=? "
+                "ORDER BY id", (source_type, source_id)).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_attachment(self, attachment_id):
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM attachments WHERE id=?", (attachment_id,)).fetchone()
+            return dict(row) if row else None
+
+    def delete_attachment(self, attachment_id):
+        # Файл на диске не трогаем: он адресован содержимым, тот же sha256
+        # может принадлежать ещё одной строке (та же картинка в другой
+        # задаче), да и мусор от него безопасен — не порча, просто лишний
+        # файл, который однажды подберёт отдельная команда сборки.
+        with self._connect() as conn:
+            conn.execute("DELETE FROM attachments WHERE id=?", (attachment_id,))
 
     def rename_tag_everywhere(self, old_name, new_name):
         """Переименование ИЛИ слияние — вызывающий (engine.rename_tag_everywhere)
