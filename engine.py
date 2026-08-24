@@ -1591,6 +1591,11 @@ def _create_task_from_data(данные, today, existing=None):
         return None, errors
 
     meta = build_task(данные, today)
+    # Происхождение проставляется до записи и только здесь: `build_task` про
+    # шаблоны не знает и знать не должен, а `save` пишет то, что в meta.
+    if данные.get("template_name"):
+        meta["template_name"] = данные["template_name"]
+        meta["cycle_key"] = данные.get("cycle_key")
     задача = {"path": None, "meta": meta, "body": (данные.get("body") or "").strip() + "\n"}
     try:
         save(задача, today)
@@ -1744,6 +1749,11 @@ def cmd_recur(args, today):
                 continue
             title = recurring_title(имя, решение["date"])
             данные = tpl.expand(шаблон, решение["date"], title=title)
+            # Откуда задача взялась — в колонки, а не в разбор названия потом.
+            # `решение["key"]` это `recurrence.cycle_key`, тот же ключ, которым
+            # журнал повторений отличает уже записанный цикл от нового.
+            данные["template_name"] = имя
+            данные["cycle_key"] = решение["key"]
             задача, errors = _create_task_from_data(данные, today, existing=задачи_кэш)
             if errors:
                 # Название занято чем-то посторонним — не тем же циклом: имя

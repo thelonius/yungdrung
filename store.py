@@ -30,7 +30,7 @@ from pathlib import Path
 # файл по шагам. База заказчика живёт у него и не синхронизирована с нашей —
 # обновление кода через git pull обязано молча и безопасно доводить его файл
 # до текущей версии при первом же открытии.
-SCHEMA = 2
+SCHEMA = 3
 
 DEFAULT_TAG_COLOR = "#999999"
 
@@ -50,6 +50,14 @@ CREATE TABLE IF NOT EXISTS tasks (
     cancelled         INTEGER NOT NULL DEFAULT 0,
     cancelled_reason  TEXT,
     body              TEXT NOT NULL DEFAULT '',
+    -- Откуда задача взялась: имя шаблона и ключ цикла (recurrence.cycle_key).
+    -- Заведённая руками несёт NULL в обоих. Нужны архиву, чтобы свернуть
+    -- двенадцать циклов «Налогов» в одну строку: разбирать это из названия
+    -- («Налоги — 05.09.2026») ненадёжно — задачу переименовывают, имя шаблона
+    -- само может содержать тире, а вручную заведённая «Отчёт — 05.09.2026»
+    -- попала бы в группу ни за что.
+    template_name     TEXT,
+    cycle_key         TEXT,
     extra             TEXT
 );
 
@@ -154,6 +162,9 @@ _KNOWN_TASK_FIELDS = {
     "schema", "type", "title", "created", "start_date", "cancelled",
     "cancelled_reason", "tags", "steps", "status", "current_step",
     "control_date", "progress", "stalled",
+    # v3: у происхождения свои колонки, и в `extra` ему делать нечего — иначе
+    # одно и то же значение лежало бы в двух местах и однажды разошлось.
+    "template_name", "cycle_key",
 }
 
 
@@ -182,6 +193,12 @@ def migrate_schema(conn):
     v2: parent_id и mode у шагов — группы подшагов (последовательные и
     параллельные). Старые шаги получают NULL, то есть остаются плоской
     последовательной цепочкой — поведение до миграции.
+
+    v3: template_name и cycle_key у задач — из какого шаблона и какого цикла
+    повторения задача заведена. Старые задачи получают NULL и остаются
+    одиночными, как сейчас: архив покажет их отдельными строками, а не свернёт
+    в группу. Задним числом проставить их неоткуда — происхождение до этой
+    версии нигде не записывалось, только угадывалось из названия.
     """
     conn.executescript(SCHEMA_SQL)
     if conn.execute("PRAGMA user_version").fetchone()[0] < SCHEMA:
@@ -189,7 +206,17 @@ def migrate_schema(conn):
         if "parent_id" not in имеющиеся:
             conn.execute("ALTER TABLE steps ADD COLUMN parent_id INTEGER")
             conn.execute("ALTER TABLE steps ADD COLUMN mode TEXT")
+        задачи = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
+        if "template_name" not in задачи:
+            conn.execute("ALTER TABLE tasks ADD COLUMN template_name TEXT")
+            conn.execute("ALTER TABLE tasks ADD COLUMN cycle_key TEXT")
         conn.execute(f"PRAGMA user_version = {SCHEMA}")
+    # Индекс по колонкам v3 — только здесь, не в SCHEMA_SQL. Там он выполнялся
+    # бы раньше ALTER TABLE, то есть на базе заказчика, заведённой до этой
+    # версии, упал бы на «no such column» при первом же открытии после
+    # git pull. Ровно это и поймал тест про доращивание старой базы.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_cycle "
+                 "ON tasks(template_name, cycle_key)")
 
 
 def _iso(value):
@@ -249,6 +276,12 @@ class Store:
         if row["cancelled"]:
             meta["cancelled"] = True
             meta["cancelled_reason"] = row["cancelled_reason"]
+        # Происхождение отдаётся, только когда оно есть: у заведённой руками
+        # задачи этих полей в meta не появляется вовсе, и код вокруг видит ту
+        # же форму, что до v3.
+        if row["template_name"]:
+            meta["template_name"] = row["template_name"]
+            meta["cycle_key"] = row["cycle_key"]
         if row["extra"]:
             meta.update(json.loads(row["extra"]))
         return {"path": TaskRef(row["id"], row["title"]), "meta": meta,
@@ -328,16 +361,22 @@ class Store:
                 if ref is None or ref.id is None:
                     cur = conn.execute(
                         "INSERT INTO tasks (title, schema, created, start_date, "
-                        "cancelled, cancelled_reason, body, extra) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        "cancelled, cancelled_reason, body, template_name, "
+                        "cycle_key, extra) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (title, meta.get("schema", SCHEMA), _iso(meta["created"]),
                          _iso(meta["start_date"]), int(bool(meta.get("cancelled"))),
                          meta.get("cancelled_reason"), task["body"],
+                         meta.get("template_name"), meta.get("cycle_key"),
                          json.dumps(extra, default=str) if extra else None))
                     task_id = cur.lastrowid
                 else:
                     task_id = ref.id
                     conn.execute(
+                        # template_name и cycle_key намеренно не в списке:
+                        # происхождение задаётся при заведении и правкой
+                        # карточки не меняется. Задача не может «стать» циклом
+                        # чужого шаблона оттого, что ей поменяли заголовок.
                         "UPDATE tasks SET title=?, schema=?, created=?, start_date=?, "
                         "cancelled=?, cancelled_reason=?, body=?, extra=? WHERE id=?",
                         (title, meta.get("schema", SCHEMA), _iso(meta["created"]),

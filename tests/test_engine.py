@@ -2116,3 +2116,67 @@ def test_битые_настройки_бэкапа_не_роняют_копию
     настройках-интерфейсе, а не в момент снятия копии."""
     cfg.settings_path(vault).write_text("{ это не json", encoding="utf-8")
     assert engine._backup_settings() == cfg.defaults()["backup"]
+
+
+# --- происхождение задачи: чем архив свернёт циклы (схема v3) -----------------
+#
+# Решение по Q24 — сворачивать двенадцать циклов «Налогов» в одну строку с
+# возможностью развернуть. Группировать разбором названия нельзя: задачу
+# переименовывают, имя шаблона само может содержать тире, а заведённая руками
+# «Отчёт — 05.09.2026» попала бы в группу ни за что. Отсюда две колонки.
+
+def test_цикл_повторения_помнит_шаблон_и_ключ(vault):
+    склад = tpl.JsonStore(vault)
+    склад.save({"name": "Налоги",
+                "steps": [{"title": "Подать декларацию", "offset_days": 0}],
+                "recurrence": {"anchor": "2026-06-05", "freq": "monthly",
+                               "bymonthday": [5]}})
+    run(engine.cmd_recur, today=date(2026, 6, 5), name=None, limit=None)
+
+    задача = engine.load_tasks()[0]
+    assert задача["meta"]["template_name"] == "Налоги"
+    # Тот же ключ, которым журнал повторений отличает цикл от цикла.
+    assert задача["meta"]["cycle_key"] == "2026-06-05"
+
+
+def test_у_заведённой_руками_задачи_происхождения_нет(vault):
+    """Поля не появляются вовсе, а не лежат пустыми: код вокруг видит ту же
+    форму meta, что до v3, и одиночная задача не попадёт ни в какую группу."""
+    run(engine.cmd_create, json=json.dumps({
+        "title": "Своими руками", "steps": [{"title": "Шаг"}]}))
+    meta = engine.load_tasks()[0]["meta"]
+    assert "template_name" not in meta and "cycle_key" not in meta
+
+
+def test_правка_карточки_не_меняет_происхождения(vault):
+    """Задача не может «стать» циклом чужого шаблона оттого, что ей поменяли
+    заголовок: UPDATE эти колонки не трогает."""
+    склад = tpl.JsonStore(vault)
+    склад.save({"name": "Налоги", "steps": [{"title": "Подать", "offset_days": 0}],
+                "recurrence": {"anchor": "2026-06-05", "freq": "monthly",
+                               "bymonthday": [5]}})
+    run(engine.cmd_recur, today=date(2026, 6, 5), name=None, limit=None)
+    было = engine.load_tasks()[0]
+
+    r = run(engine.cmd_update, task=было["path"].stem, json=json.dumps({
+        "title": "Налоги за июнь", "start_date": "2026-06-05",
+        "steps": [{"id": s["id"], "title": s["title"],
+                   "control_date": str(s["control_date"])}
+                  for s in было["meta"]["steps"]]}))
+    assert r["ok"], r
+    стало = engine.load_tasks()[0]["meta"]
+    assert стало["title"] == "Налоги за июнь"
+    assert стало["template_name"] == "Налоги" and стало["cycle_key"] == "2026-06-05"
+
+
+def test_происхождение_не_дублируется_в_extra(vault):
+    """У него свои колонки; лёжа ещё и в JSON-поле, оно однажды разошлось бы."""
+    склад = tpl.JsonStore(vault)
+    склад.save({"name": "Налоги", "steps": [{"title": "Подать", "offset_days": 0}],
+                "recurrence": {"anchor": "2026-06-05", "freq": "monthly",
+                               "bymonthday": [5]}})
+    run(engine.cmd_recur, today=date(2026, 6, 5), name=None, limit=None)
+    conn = sqlite3.connect(str(vault / "вольт.db"))
+    extra = conn.execute("SELECT extra FROM tasks").fetchone()[0]
+    conn.close()
+    assert extra is None or "template_name" not in extra
