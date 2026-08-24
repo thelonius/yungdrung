@@ -1,12 +1,13 @@
 'use strict';
 
-// Лента «Что сегодня» и окно контроля. Раздел 6.1 и 6.4 ТЗ.
+// Лента «Что сегодня», окно контроля и разбор завала. Раздел 6.1, 6.4, R20 ТЗ.
 //
 // Страница не вычисляет ничего: просрочку, состояние и время показа считает ядро,
 // здесь только показ и отправка ответа. Это правило из КОНТРАКТ.md — иначе лента
 // и завал однажды разойдутся, посчитав одно и то же по-разному.
 
 const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const dlg = $('#control');
 
 let текущий = null;     // шаг, про который открыто окно
@@ -27,9 +28,9 @@ async function post(url, body) {
   return r.json();
 }
 
-// --- отрисовка -------------------------------------------------------------
+// --- отрисовка ленты --------------------------------------------------------
 
-function строка(item, вЗавале) {
+function строка(item) {
   const li = document.createElement('li');
   li.className = 'row' + (item.stalled ? ' is-stalled' : '');
 
@@ -45,16 +46,15 @@ function строка(item, вЗавале) {
   sub.className = 'row-sub';
 
   const task = document.createElement('span');
-  task.textContent = item.task;
+  // Подшаг параллельной группы несёт её название контекстом: «Сделка · Подписи».
+  task.textContent = item.group ? `${item.task} · ${item.group}` : item.task;
   sub.append(task);
 
   if (item.show_at) {
     const t = document.createElement('span');
     t.className = 'row-time';
-    const d = new Date(item.show_at);
-    t.textContent = вЗавале
-      ? d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })
-      : d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    t.textContent = new Date(item.show_at)
+      .toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
     sub.append(t);
   }
 
@@ -121,7 +121,7 @@ async function обновить() {
     plate.hidden = true;
   }
 
-  $('#feed').replaceChildren(...d.feed.map((i) => строка(i, false)));
+  $('#feed').replaceChildren(...d.feed.map((i) => строка(i)));
 
   const empty = $('#empty');
   if (d.feed.length === 0) {
@@ -134,27 +134,292 @@ async function обновить() {
   }
 }
 
-async function показатьЗавал() {
+// --- разбор завала: общее состояние -----------------------------------------
+//
+// Список приходит с сервера уже отсортированным (самое давнее сверху, буксующее
+// вперёд буксующего — cmd_backlog). Обе вкладки читают один и тот же массив и
+// ничего в нём не переупорядочивают.
+
+let завалСписок = [];              // текущий срез /api/backlog
+let вкладкаЗавала = 'one';         // 'one' | 'list'
+let индексОдного = 0;              // позиция в последовательном проходе
+let последовательно = false;       // true, пока c-progress ведёт счёт «N из M»
+let отвечено = false;              // защёлка: закрытие окна — ответ или Esc
+let выбранныеЗавала = new Set();   // ключи выбранных строк в «Списком»
+let режимПачки = null;             // 'defer' | 'fail' — какая форма открыта в «Списком»
+
+function ключЭлемента(item) {
+  return `${item.task}${item.step}`;
+}
+
+async function загрузитьЗавал() {
   const d = await get('/api/backlog');
-  $('#backlog-list').replaceChildren(...d.backlog.map((i) => строка(i, true)));
+  завалСписок = d.backlog;
+  индексОдного = 0;
+  выбранныеЗавала.clear();
+}
+
+async function показатьЗавал() {
+  await загрузитьЗавал();
+  последовательно = false;
   $('#backlog-view').hidden = false;
   $('#feed').hidden = true;
   $('#empty').hidden = true;
+  переключитьВкладку(вкладкаЗавала, true);
 }
 
 function скрытьЗавал() {
+  последовательно = false;
   $('#backlog-view').hidden = true;
   $('#feed').hidden = false;
   обновить();
 }
 
-// --- окно контроля ---------------------------------------------------------
+function переключитьВкладку(таб, силой) {
+  if (!силой && таб === вкладкаЗавала) return;
+  вкладкаЗавала = таб;
+  for (const b of $$('#backlog-tabs .tab')) {
+    const on = b.dataset.tab === таб;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  }
+  $('#pane-one').hidden = таб !== 'one';
+  $('#pane-list').hidden = таб !== 'list';
+  if (таб === 'one') {
+    начатьПоОдному();
+  } else {
+    последовательно = false;
+    рендерСписок();
+  }
+}
 
-function окно(item) {
+// --- «По одному» — основной режим, R20 -------------------------------------
+
+function рендерПрогресс() {
+  const прогресс = $('#backlog-progress');
+  const пусто = $('#backlog-empty');
+  const кнопка = $('#backlog-resume');
+
+  if (завалСписок.length === 0) {
+    прогресс.textContent = '';
+    пусто.hidden = false;
+    кнопка.hidden = true;
+    return;
+  }
+  пусто.hidden = true;
+
+  if (индексОдного >= завалСписок.length) {
+    прогресс.textContent = 'Разобрано всё.';
+    кнопка.hidden = true;
+    return;
+  }
+  прогресс.textContent = `${индексОдного + 1} из ${завалСписок.length}`;
+  кнопка.hidden = false;
+}
+
+function начатьПоОдному() {
+  рендерПрогресс();
+  if (завалСписок.length === 0) return;
+  if (индексОдного >= завалСписок.length) return завершитьЗавал();
+  открытьПоследовательно();
+}
+
+function открытьПоследовательно() {
+  последовательно = true;
+  окно(завалСписок[индексОдного], true);
+  рендерПрогресс();
+}
+
+function завершитьЗавал() {
+  скрытьЗавал();
+}
+
+// --- «Списком» — таблица и массовые действия, R20 ---------------------------
+
+function синхронизироватьSelectAll() {
+  const all = $('#backlog-select-all');
+  const n = завалСписок.length;
+  const выбрано = выбранныеЗавала.size;
+  all.checked = n > 0 && выбрано === n;
+  all.indeterminate = выбрано > 0 && выбрано < n;
+}
+
+function обновитьПанельВыбора() {
+  const n = выбранныеЗавала.size;
+  $('#bulk-bar').hidden = n === 0;
+  $('#bulk-count').textContent = `выбрано: ${n}`;
+  синхронизироватьSelectAll();
+  if (n === 0) формуПачки(false);
+}
+
+function рядЗавала(item) {
+  const tr = document.createElement('tr');
+  if (item.stalled) tr.className = 'is-stalled';
+  const ключ = ключЭлемента(item);
+
+  const tdCheck = document.createElement('td');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = выбранныеЗавала.has(ключ);
+  cb.addEventListener('change', () => {
+    if (cb.checked) выбранныеЗавала.add(ключ);
+    else выбранныеЗавала.delete(ключ);
+    обновитьПанельВыбора();
+  });
+  tdCheck.append(cb);
+
+  const tdStep = document.createElement('td');
+  tdStep.textContent = item.title;
+
+  const tdTask = document.createElement('td');
+  tdTask.textContent = item.group ? `${item.task} · ${item.group}` : item.task;
+
+  const tdWhen = document.createElement('td');
+  tdWhen.className = 'row-time';
+  tdWhen.textContent = item.show_at
+    ? new Date(item.show_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })
+    : '';
+
+  const tdPostponed = document.createElement('td');
+  tdPostponed.textContent = item.postponed > 0 ? String(item.postponed) : '—';
+  if (item.stalled) tdPostponed.className = 'postponed';
+
+  tr.append(tdCheck, tdStep, tdTask, tdWhen, tdPostponed);
+  return tr;
+}
+
+function рендерСписок() {
+  выбранныеЗавала.clear();
+  $('#backlog-tbody').replaceChildren(...завалСписок.map(рядЗавала));
+  обновитьПанельВыбора();
+}
+
+$('#backlog-select-all').addEventListener('change', (e) => {
+  выбранныеЗавала.clear();
+  if (e.target.checked) {
+    for (const item of завалСписок) выбранныеЗавала.add(ключЭлемента(item));
+  }
+  for (const cb of $$('#backlog-tbody input[type=checkbox]')) cb.checked = e.target.checked;
+  обновитьПанельВыбора();
+});
+
+function формуПачки(показать) {
+  $('#bulk-form').hidden = !показать;
+  $('#bulk-err').hidden = true;
+  $('#bulk-reason').classList.remove('invalid');
+  if (показать) {
+    $('#bulk-date').value = '';
+    $('#bulk-date-preview').textContent = '';
+    $$('#bulk-presets button').forEach((b) => b.classList.remove('on'));
+    $('#bulk-date-field').hidden = режимПачки === 'fail';
+    $('#bulk-reason').focus();
+  }
+}
+
+$('#bulk-done').addEventListener('click', () => действиеПачкой('done'));
+$('#bulk-defer').addEventListener('click', () => { режимПачки = 'defer'; формуПачки(true); });
+$('#bulk-fail').addEventListener('click', () => { режимПачки = 'fail'; формуПачки(true); });
+$('#bulk-cancel').addEventListener('click', () => формуПачки(false));
+
+$('#bulk-date').addEventListener('input', превьюПачки);
+
+for (const b of $$('#bulk-presets button')) {
+  b.addEventListener('click', () => {
+    $$('#bulk-presets button').forEach((x) => x.classList.remove('on'));
+    b.classList.add('on');
+    $('#bulk-date').value = b.dataset.when;
+    превьюПачки();
+  });
+}
+
+let таймерПачки;
+async function превьюПачки() {
+  clearTimeout(таймерПачки);
+  таймерПачки = setTimeout(async () => {
+    const текст = $('#bulk-date').value.trim();
+    const out = $('#bulk-date-preview');
+    if (!текст) return (out.textContent = '');
+    const r = await post('/api/parse-date', { text: текст });
+    out.textContent = r.ok ? (r.label || '') : 'не понял дату';
+  }, 220);
+}
+
+$('#bulk-save').addEventListener('click', () => {
+  const причина = $('#bulk-reason').value;
+  if (!причина) {
+    $('#bulk-reason').classList.add('invalid');
+    $('#bulk-err').textContent = 'Причина обязательна';
+    $('#bulk-err').hidden = false;
+    return;
+  }
+  const extra = { reason: причина };
+  if (режимПачки === 'defer') extra.to = $('#bulk-date').value.trim();
+  действиеПачкой(режимПачки, extra);
+});
+
+function итогПачки(op, r) {
+  const слово = {
+    done: 'отмечено сделанным',
+    defer: 'перенесено',
+    fail: 'отмечено «не будет сделано»',
+  }[op] || 'готово';
+  return r.fail_count > 0
+    ? `${r.ok_count} из ${r.count}: ${слово}; ${r.fail_count} — с ошибкой`
+    : `${r.ok_count} из ${r.count}: ${слово}`;
+}
+
+async function действиеПачкой(op, extra = {}) {
+  const items = [...выбранныеЗавала].map((ключ) => {
+    const [task, step] = ключ.split('');
+    return { task, step };
+  });
+  if (items.length === 0) return;
+
+  const r = await post('/api/backlog-bulk', { op, items, ...extra });
+  // Успешный разбор пачки не несёт поля ok — оно есть только у отказа всей
+  // пачки целиком (неизвестная операция, не разобраны причина/дата).
+  if (r.errors) {
+    const текст = r.errors.map((e) => e.error).join('; ');
+    if ($('#bulk-form').hidden) return всплывашка(текст);
+    $('#bulk-err').textContent = текст;
+    $('#bulk-err').hidden = false;
+    return;
+  }
+
+  формуПачки(false);
+  всплывашка(итогПачки(op, r));
+  // Пачка меняет и то, что попадает в завал, и то, что видно в шапке ленты
+  // (просрочено/сегодня/ждут) — без этого счётчики держат старые числа, пока
+  // не закроешь разбор или не перезагрузишь страницу.
+  await Promise.all([загрузитьЗавал(), обновить()]);
+  переключитьВкладку('list', true);
+}
+
+// --- события вкладок и выхода из разбора завала ------------------------------
+
+$('#plate').addEventListener('click', показатьЗавал);
+$('#close-backlog').addEventListener('click', скрытьЗавал);
+$('#backlog-resume').addEventListener('click', начатьПоОдному);
+
+for (const b of $$('#backlog-tabs .tab')) {
+  b.addEventListener('click', () => переключитьВкладку(b.dataset.tab));
+}
+
+// --- окно контроля -----------------------------------------------------------
+
+function окно(item, посл = false) {
   текущий = item;
   режим = null;
   $('#c-task').textContent = item.task;
   $('#c-step').textContent = item.title;
+
+  const progress = $('#c-progress');
+  if (посл) {
+    progress.hidden = false;
+    progress.textContent = `${индексОдного + 1} из ${завалСписок.length}`;
+  } else {
+    progress.hidden = true;
+  }
 
   const note = $('#c-note');
   note.hidden = !item.note;
@@ -171,7 +436,7 @@ function окно(item) {
     (item.stalled ? ' <span class="warn">— буксует, нужен другой ход</span>' : '');
 
   форму(false);
-  dlg.showModal();
+  if (!dlg.open) dlg.showModal();
 }
 
 function форму(показать) {
@@ -199,9 +464,37 @@ async function действие(op, item, extra = {}) {
     $('#c-err').hidden = false;
     return false;
   }
-  dlg.close();
   всплывашка(итог(op, r));
-  $('#backlog-view').hidden ? обновить() : показатьЗавал();
+
+  if (последовательно) {
+    // R20: любой из четырёх ответов продвигает очередь на следующий элемент.
+    // Модал НЕ закрываем здесь: close() у <dialog> доставляет событие 'close'
+    // асинхронно, и если тут же переоткрыть окно на следующем шаге, старое
+    // событие долетит уже после и обнулит «текущий» под новым элементом.
+    // Вместо закрытия/переоткрытия просто подменяем содержимое того же
+    // открытого диалога.
+    индексОдного += 1;
+    // Не ждём здесь: счётчики шапки (просрочено/сегодня/ждут) — фон, следующий
+    // шаг очереди не должен ждать лишний круг до сервера.
+    обновить();
+    if (индексОдного >= завалСписок.length) {
+      последовательно = false;
+      отвечено = true;
+      dlg.close();
+      завершитьЗавал();
+    } else {
+      открытьПоследовательно();
+    }
+    return true;
+  }
+
+  отвечено = true;
+  dlg.close();
+  if (!$('#backlog-view').hidden) {
+    await показатьЗавал();
+  } else {
+    обновить();
+  }
   return true;
 }
 
@@ -225,7 +518,7 @@ function всплывашка(текст) {
   setTimeout(() => el.remove(), 3500);
 }
 
-// --- дата в форме ----------------------------------------------------------
+// --- дата в форме одиночного окна --------------------------------------------
 
 let таймер;
 async function превью() {
@@ -239,10 +532,7 @@ async function превью() {
   }, 220);
 }
 
-// --- события ---------------------------------------------------------------
-
-$('#plate').addEventListener('click', показатьЗавал);
-$('#close-backlog').addEventListener('click', скрытьЗавал);
+// --- события одиночного окна --------------------------------------------------
 
 for (const b of document.querySelectorAll('[data-op]')) {
   b.addEventListener('click', () => {
@@ -276,8 +566,18 @@ $('#c-save').addEventListener('click', () => {
   действие(режим, текущий, { reason: причина, to: $('#c-date').value.trim() });
 });
 
-// Esc закрывает окно — и это «напомнить позже», а не ответ. Шаг остаётся в ленте.
-dlg.addEventListener('close', () => { текущий = null; режим = null; });
+// Esc/крестик закрывают окно — и это «напомнить позже», а не ответ. В обычном
+// режиме шаг просто остаётся в ленте; в разборе завала («по одному») счётчик
+// не продвигается — очередь ждёт на месте, пока не нажмут «Продолжить разбор».
+dlg.addEventListener('close', () => {
+  текущий = null; режим = null;
+  const былОтвет = отвечено;
+  отвечено = false;
+  if (последовательно && !былОтвет) {
+    последовательно = false;
+    рендерПрогресс();
+  }
+});
 
 // «В шаблон» — не одно из четырёх действий про ответ на шаг (раздел 6.4), а
 // отдельная операция над задачей целиком. Кнопка рядом, но окно не закрывает:
@@ -295,8 +595,9 @@ $('#c-to-template').addEventListener('click', async () => {
 (async function старт() {
   const r = await get('/api/reasons');
   причины = r.reasons || [];
-  const sel = $('#c-reason');
-  sel.replaceChildren(new Option('— выбери причину —', ''),
-    ...причины.map((p) => new Option(p, p)));
+  for (const sel of [$('#c-reason'), $('#bulk-reason')]) {
+    sel.replaceChildren(new Option('— выбери причину —', ''),
+      ...причины.map((p) => new Option(p, p)));
+  }
   await обновить();
 })();

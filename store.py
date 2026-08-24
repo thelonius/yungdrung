@@ -25,7 +25,12 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-SCHEMA = 1
+# Версия схемы БД, она же PRAGMA user_version. Поднимается на единицу при
+# каждом несовместимом изменении структуры; migrate_schema доращивает старый
+# файл по шагам. База заказчика живёт у него и не синхронизирована с нашей —
+# обновление кода через git pull обязано молча и безопасно доводить его файл
+# до текущей версии при первом же открытии.
+SCHEMA = 2
 
 DEFAULT_TAG_COLOR = "#999999"
 
@@ -58,6 +63,8 @@ CREATE TABLE IF NOT EXISTS steps (
     control_date      TEXT,
     completed_date    TEXT,
     note              TEXT,
+    parent_id         INTEGER,
+    mode              TEXT,
     PRIMARY KEY (task_id, step_id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_steps_position ON steps(task_id, position);
@@ -164,7 +171,25 @@ class DuplicateTitle(Exception):
 
 
 def migrate_schema(conn):
+    """Создать недостающее и дорастить старый файл до текущей SCHEMA.
+
+    CREATE IF NOT EXISTS покрывает только новые таблицы; колонки в уже
+    существующей таблице он не добавит. Поэтому рядом — ALTER TABLE по
+    версиям, под защитой PRAGMA user_version: на актуальном файле проверка
+    стоит одно чтение прагмы. Данные миграция не переписывает никогда —
+    только добавляет пустые колонки.
+
+    v2: parent_id и mode у шагов — группы подшагов (последовательные и
+    параллельные). Старые шаги получают NULL, то есть остаются плоской
+    последовательной цепочкой — поведение до миграции.
+    """
     conn.executescript(SCHEMA_SQL)
+    if conn.execute("PRAGMA user_version").fetchone()[0] < SCHEMA:
+        имеющиеся = {r[1] for r in conn.execute("PRAGMA table_info(steps)")}
+        if "parent_id" not in имеющиеся:
+            conn.execute("ALTER TABLE steps ADD COLUMN parent_id INTEGER")
+            conn.execute("ALTER TABLE steps ADD COLUMN mode TEXT")
+        conn.execute(f"PRAGMA user_version = {SCHEMA}")
 
 
 def _iso(value):
@@ -242,6 +267,8 @@ class Store:
             "control_date": _parse_date_or_datetime(s["control_date"]),
             "completed_date": _parse_date_or_datetime(s["completed_date"]),
             "note": s["note"],
+            "parent": s["parent_id"],
+            "mode": s["mode"],
             "log": [self._assemble_log_entry(e) for e in log],
         }
 
@@ -324,12 +351,12 @@ class Store:
             for position, step in enumerate(meta.get("steps") or []):
                 conn.execute(
                     "INSERT INTO steps (task_id, step_id, position, title, status, "
-                    "start_date, control_date, completed_date, note) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "start_date, control_date, completed_date, note, parent_id, mode) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (task_id, step["id"], position, step["title"],
                      step.get("status", "pending"), _iso(step.get("start_date")),
                      _iso(step.get("control_date")), _iso(step.get("completed_date")),
-                     step.get("note")))
+                     step.get("note"), step.get("parent"), step.get("mode")))
                 for entry in step.get("log") or []:
                     conn.execute(
                         "INSERT INTO step_log (task_id, step_id, date, event, reason, "

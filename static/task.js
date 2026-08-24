@@ -286,7 +286,9 @@ function строкаШага(s, индекс) {
   $('.checkline-note-icon', li).hidden = !s.note;
 
   const more = $('.checkline-more', li);
-  if (s.status === 'done') {
+  if (группа) {
+    more.hidden = true;
+  } else if (s.status === 'done') {
     more.textContent = '↺';
     more.title = 'Переоткрыть';
     more.addEventListener('click', (e) => { e.stopPropagation(); переоткрыть(s); });
@@ -430,19 +432,20 @@ function предпросмотрДаты(input, out, доп) {
 // Вызывается уже из debounce в предпросмотрДаты() — свой таймер здесь не
 // нужен, он только добавил бы задержку поверх уже отложенного вызова.
 async function проверитьПорядок() {
+  const без_названий = (узлы) => узлы.map((u) => ({ ...u, title: u.title || '·',
+    ...(u.steps ? { steps: без_названий(u.steps) } : {}) }));
   const payload = {
     task: имя,
     start_date: $('#start-date').value.trim(),
-    steps: шаги.map((s) => ({ id: s.id, title: s.title || '·', start_date: s.start_date,
-                              control_date: s.control_date })),
+    steps: без_названий(вложенныеШаги()),
   };
   const r = await post('/api/steps-check', payload);
   checklist.querySelectorAll('.edit-control').forEach((el) => el.classList.remove('invalid'));
   checklist.querySelectorAll('.edit-control-preview').forEach((el) => el.classList.remove('past'));
   for (const e of r.errors || []) {
-    const m = /^steps\.(\d+)\.control_date$/.exec(e.field || '');
-    if (!m) continue;
-    const li = checklist.children[+m[1]];
+    const i = индексПоПути(e.field, 'control_date');
+    if (i === null) continue;
+    const li = checklist.children[i];
     if (!li) continue;
     $('.edit-control', li).classList.add('invalid');
     const preview = $('.edit-control-preview', li);
@@ -475,8 +478,23 @@ function настроитьПеретаскивание(li) {
     li.classList.remove('is-drop-target');
     const цель = Number(li.dataset.index);
     if (перетаскиваемый === null || цель === перетаскиваемый) return;
-    const [взятый] = шаги.splice(перетаскиваемый, 1);
-    шаги.splice(цель, 0, взятый);
+    // Перенос только среди соседей одного уровня: подшаг не выдёргивается из
+    // группы перетаскиванием, группа переезжает целиком вместе с детьми.
+    if ((шаги[перетаскиваемый].parent ?? null) !== (шаги[цель].parent ?? null)) {
+      перетаскиваемый = null;
+      return;
+    }
+    const длина = длинаБлока(перетаскиваемый);
+    const начало = перетаскиваемый;
+    const взятые = шаги.splice(начало, длина);
+    let место;
+    if (цель > начало) {
+      const цельПосле = цель - длина;
+      место = цельПосле + длинаБлока(цельПосле);
+    } else {
+      место = цель;
+    }
+    шаги.splice(место, 0, ...взятые);
     перетаскиваемый = null;
     перерисоватьЧеклист();
     проверитьПорядок();  // порядок сменился без единой правки поля — проверить сразу
@@ -521,11 +539,39 @@ $('#history-toggle').addEventListener('click', () => {
 
 $('#add-step').addEventListener('click', () => {
   шаги.push({ id: null, title: '', status: 'pending', start_date: null,
-             control_date: null, note: null, log: [] });
+             control_date: null, note: null, parent: null, mode: null, log: [] });
   перерисоватьЧеклист();
   const последняя = checklist.lastElementChild;
   $('.checkline-editor', последняя).hidden = false;
   $('.edit-title', последняя).focus();
+});
+
+$('#task-attach-input').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  await прикрепитьФайл(file, { task: имя }, $('#task-attachments'), $('#err-attach'));
+});
+
+// Скриншот схемы попадает в задачу вставкой, без похода через «сохранить файл
+// на диск и выбрать его в диалоге». Всегда к задаче целиком, даже если открыт
+// редактор шага: правило должно быть одно и предсказуемое, иначе картинка
+// уедет не туда в зависимости от того, где стоял курсор. Текстовая вставка
+// сюда не попадает — в буфере нет файлов, выходим сразу.
+document.addEventListener('paste', async (e) => {
+  const files = [...(e.clipboardData?.files || [])];
+  if (!files.length) return;
+  e.preventDefault();
+  for (const file of files) {
+    // У картинки из буфера имени нет — браузер отдаёт «image.png». Ставим
+    // своё, иначе список превращается в десять одинаковых строк.
+    const своё = file.name && file.name !== 'image.png'
+      ? file
+      : new File([file], `вставка-${new Date().toISOString().slice(0, 19)
+          .replace(/[:T]/g, '-')}.png`, { type: file.type });
+    await прикрепитьФайл(своё, { task: имя }, $('#task-attachments'), $('#err-attach'));
+  }
+  всплывашка(files.length === 1 ? 'Картинка прикреплена' : `Прикреплено файлов: ${files.length}`);
 });
 
 function очиститьОшибки() {
@@ -544,13 +590,13 @@ function показатьОшибки(errors, разрешитьForce) {
       first_or(() => $('#start-date'));
       continue;
     }
-    const m = /^steps\.(\d+)\.(title|start_date|control_date)$/.exec(field || '');
-    if (m) {
-      const li = checklist.children[+m[1]];
+    const i = индексПоПути(field, 'title|start_date|control_date');
+    if (i !== null) {
+      const li = checklist.children[i];
       if (li) {
         $('.checkline-editor', li).hidden = false;
-        const поле = { title: '.edit-title', start_date: '.edit-start',
-          control_date: '.edit-control' }[m[2]];
+        const поле = field.endsWith('.title') ? '.edit-title'
+          : field.endsWith('.start_date') ? '.edit-start' : '.edit-control';
         $(поле, li).classList.add('invalid');
         первая = первая || $(поле, li);
       }
@@ -591,8 +637,7 @@ async function сохранить(force = false) {
     start_date: $('#start-date').value.trim() || null,
     tags: $('#tags').value.split(',').map((s) => s.trim()).filter(Boolean),
     body: $('#body').value,
-    steps: шаги.map((s) => ({ id: s.id, title: s.title, start_date: s.start_date,
-                              control_date: s.control_date, note: s.note })),
+    steps: вложенныеШаги(),
   };
 
   const [{ warnings }, r] = await Promise.all([

@@ -868,12 +868,20 @@ def export(vault, now=None):
     же он и хранится; вынести его наружу значило бы связывать записи по
     идентификаторам, которые вне вольта ничего не значат.
 
+    Задачи и заметки — из разных хранилищ, и это видно только внутри функции, не
+    в форме ответа. Задачи движок давно читает из `вольт.db` (решение в
+    CLAUDE.md, `_export_tasks`), заметки базы знаний markdown ещё не покинули —
+    их по-прежнему собирает обход вольта (`collect`) и разбор `База/*.md` тем же
+    парсером YAML, что и раньше.
+
     Чего в выгрузке нет намеренно: вложений и любых нетекстовых файлов вольта.
     Их место — в zip-копии (`create`), а не в JSON, где они раздули бы файл
     base64-мусором. Нет и служебного состояния доставки (`.доставка.json`,
     `notify`): оно описывает, какое уведомление уже показали, и после переноса
     в новую версию не значит ничего. Файлы, которые не разобрались, перечислены
-    в `broken` — молча потерянная задача хуже видимой ошибки.
+    в `broken` — молча потерянная задача хуже видимой ошибки. Для задач в
+    `broken` попадать больше нечему: сломанных строк SQLite не оставляет так,
+    как правленный руками YAML оставлял полуразобранные файлы.
     """
     # Импорт внутри функции: разбор frontmatter требует pyyaml, а копии и
     # восстановление должны работать и без него.
@@ -881,16 +889,10 @@ def export(vault, now=None):
 
     vault = Path(vault)
     if not vault.is_dir():
-        # Отдельная ветка для базы: после переезда путь вольта станет файлом, и
-        # сообщение «нет папки вольта» отправило бы человека искать пропавшую
-        # папку вместо того, чтобы сказать правду — читать базу движок пока не
-        # умеет, а копии (`create`) с ней уже работают.
-        if storage_kind(vault) == "sqlite":
-            raise BackupError("vault", f"экспорт из базы {vault.name} ещё не написан: "
-                                       "движок читает markdown")
         raise BackupError("vault", f"нет папки вольта: {vault}")
 
-    tasks, notes, broken = [], [], []
+    tasks = _export_tasks(vault)
+    notes, broken = [], []
     for путь, имя in collect(vault):
         if путь.suffix.lower() != ".md":
             continue
@@ -909,15 +911,13 @@ def export(vault, now=None):
             broken.append({"file": имя, "error": " ".join(str(e).split())[:200]})
             continue
 
-        тип = meta.get("type")
-        if тип not in ("task", "note"):
+        if meta.get("type") != "note":
+            # `type: task` тут — осиротевший markdown-файл с переезда на SQLite
+            # (задачи читает `_export_tasks`, не этот обход). Не задача и не
+            # поломка: файл цел, просто больше не источник правды. Приберёт его
+            # отдельный процесс, не экспорт — см. заметку в задаче на починку.
             continue
-        # Пересчитываемые поля выкидываем только у задач: у заметки базы знаний
-        # движок ничего не считает, и `status: черновик`, дописанный руками,
-        # там данные заказчика, а не наша сводка.
-        свои = {"title", "tags", "steps", "schema", "type"}
-        if тип == "task":
-            свои = свои | DERIVED | {"created"}
+
         # Порядок ключей задаём явно: файл экспорта открывают глазами, и читать
         # его удобнее сверху вниз — что за запись, чем названа, что внутри.
         #
@@ -926,25 +926,11 @@ def export(vault, now=None):
         # уехало бы числом в поле, где везде текст.
         запись = {"file": имя, "name": путь.stem,
                   "title": str(meta.get("title") or путь.stem)}
-        if тип == "task":
-            запись["created"] = jsonable(meta.get("created"))
         запись["tags"] = tags_of(meta)
-        запись["body"] = (strip_steps_block(body, engine.STEPS_START, engine.STEPS_END)
-                          if тип == "task" else body.strip())
+        запись["body"] = body.strip()
+        свои = {"title", "tags", "steps", "schema", "type"}
         запись["extra"] = jsonable({k: v for k, v in meta.items() if k not in свои})
-        if тип == "task":
-            шаги = meta.get("steps") or []
-            # Вольт правится руками, и `steps: перенести` вместо списка там
-            # достижимо (ровно поэтому хранилище и переезжает в базу — решение в
-            # CLAUDE.md). Без проверки строка разошлась бы по буквам, и на той
-            # стороне у задачи оказалось бы девять шагов из одной опечатки.
-            if not isinstance(шаги, list) or not all(isinstance(s, dict) for s in шаги):
-                broken.append({"file": имя, "error": "поле steps — не список шагов"})
-                continue
-            запись["steps"] = [jsonable(s) for s in шаги]
-            tasks.append(запись)
-        else:
-            notes.append(запись)
+        notes.append(запись)
 
     return {
         "format": EXPORT_FORMAT,
@@ -957,6 +943,50 @@ def export(vault, now=None):
         "templates": templates_of(vault, broken),
         "broken": broken,
     }
+
+
+def _export_tasks(vault):
+    """Задачи для выгрузки — из `вольт.db`, не сканированием `Задачи/*.md`.
+
+    Хранилище задач переехало на SQLite (решение в CLAUDE.md); markdown-файлы в
+    `Задачи/` — осиротевшие следы переезда, и читать задачи оттуда значит
+    показывать закрытую заказчиком через веб-форму задачу как несуществующую:
+    движок её там давно не ищет (`engine.load_tasks()` читает только базу).
+
+    Путь до базы строим тем же приёмом, что `engine.db_path()`
+    (`vault / "вольт.db"`), а не через глобальную `engine.VAULT`: `export()`
+    уже принимает свой путь параметром, и результат не должен зависеть от
+    состояния другого модуля — иначе выгрузка вольта, переданного явным путём,
+    молча читала бы задачи не из него, а из того, что `engine.VAULT` укажет в
+    этот момент.
+
+    Файла `вольт.db` может не быть вовсе — вольт свежий или вообще без задач.
+    `store.Store` завела бы его сама при первом обращении, а экспорту заводить
+    то, чего не было, нельзя: это чтение, а не запись.
+    """
+    import engine  # STEPS_START/STEPS_END — маркеры блока шагов в теле
+    import store
+
+    db = Path(vault) / "вольт.db"
+    if not db.is_file():
+        return []
+
+    свои = {"title", "tags", "steps", "schema", "type"} | DERIVED | {"created"}
+    tasks = []
+    for t in store.Store(db).load_tasks():
+        meta = t["meta"]
+        title = str(meta.get("title") or t["path"].stem)
+        tasks.append({
+            "file": f"Задачи/{title}.md",
+            "name": title,
+            "title": title,
+            "created": jsonable(meta.get("created")),
+            "tags": tags_of(meta),
+            "body": strip_steps_block(t["body"], engine.STEPS_START, engine.STEPS_END),
+            "extra": jsonable({k: v for k, v in meta.items() if k not in свои}),
+            "steps": [jsonable(s) for s in meta.get("steps") or []],
+        })
+    return tasks
 
 
 def write_export(vault, out, now=None):

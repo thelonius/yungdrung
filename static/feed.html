@@ -31,21 +31,84 @@
 
   <p class="empty" id="empty" hidden></p>
 
+  <!-- Разбор завала, R20 ТЗ: две вкладки над одним и тем же списком просроченного. -->
   <section class="backlog" id="backlog-view" hidden>
     <div class="backlog-head">
       <h2>Разбор завала</h2>
       <button type="button" class="ghost small" id="close-backlog">Назад к ленте</button>
     </div>
-    <ol class="feed" id="backlog-list"></ol>
+
+    <div class="tabs" id="backlog-tabs" role="tablist">
+      <button type="button" class="tab on" data-tab="one" role="tab" aria-selected="true">По одному</button>
+      <button type="button" class="tab" data-tab="list" role="tab" aria-selected="false">Списком</button>
+    </div>
+
+    <!-- «По одному» — основной режим (R20): окно контроля само идёт по завалу,
+         тут только счётчик и кнопка вернуться в него после Esc. -->
+    <div class="tab-pane" id="pane-one">
+      <p class="backlog-progress" id="backlog-progress"></p>
+      <button type="button" class="secondary" id="backlog-resume" hidden>Продолжить разбор</button>
+      <p class="empty" id="backlog-empty" hidden>Завал пуст.</p>
+    </div>
+
+    <div class="tab-pane" id="pane-list" hidden>
+      <div class="bulk-bar" id="bulk-bar" hidden>
+        <span class="bulk-count" id="bulk-count"></span>
+        <div class="bulk-actions">
+          <button type="button" class="secondary" id="bulk-done">Сделано</button>
+          <button type="button" class="secondary" id="bulk-defer">Перенести</button>
+          <button type="button" class="quiet" id="bulk-fail">Не будет сделано</button>
+        </div>
+      </div>
+
+      <div class="control-form" id="bulk-form" hidden>
+        <div class="field">
+          <label for="bulk-reason">Причина — одна на всю пачку</label>
+          <select id="bulk-reason"></select>
+        </div>
+        <div class="field" id="bulk-date-field">
+          <label for="bulk-date">Новая дата контроля</label>
+          <div class="presets" id="bulk-presets">
+            <button type="button" data-when="+1 09:00">завтра утром</button>
+            <button type="button" data-when="+3">через 3 дня</button>
+            <button type="button" data-when="+7">через неделю</button>
+          </div>
+          <input type="text" id="bulk-date" autocomplete="off" placeholder="или свой вариант: завтра в 9, 18.08, пн">
+          <span class="date-preview" id="bulk-date-preview"></span>
+        </div>
+        <p class="err" id="bulk-err" hidden></p>
+        <div class="control-actions">
+          <button type="button" class="primary" id="bulk-save">Применить к пачке</button>
+          <button type="button" class="ghost" id="bulk-cancel">Отмена</button>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="backlog-table">
+          <thead>
+            <tr>
+              <th class="col-check"><input type="checkbox" id="backlog-select-all" title="выбрать все"></th>
+              <th>Шаг</th>
+              <th>Задача</th>
+              <th>Контроль</th>
+              <th>Переносов</th>
+            </tr>
+          </thead>
+          <tbody id="backlog-tbody"></tbody>
+        </table>
+      </div>
+    </div>
   </section>
 
 </main>
 
 <!-- Окно контроля, раздел 6.4. Крестик и Esc означают «напомнить позже», а не
-     ответ: отмахнуться от шага случайно нельзя. -->
+     ответ: отмахнуться от шага случайно нельзя. В разборе завала (R20) то же
+     окно идёт по очереди — c-progress показывает «N из M». -->
 <dialog id="control">
   <form method="dialog" class="control-card">
     <header class="control-head">
+      <p class="control-progress" id="c-progress" hidden></p>
       <p class="control-task" id="c-task"></p>
       <h2 class="control-step" id="c-step"></h2>
       <p class="control-note" id="c-note" hidden></p>

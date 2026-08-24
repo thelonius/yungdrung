@@ -12,6 +12,7 @@
 файлы в вольт и не имеет никакой аутентификации.
 """
 import argparse
+import base64
 import json
 import sys
 import threading
@@ -23,6 +24,7 @@ from types import SimpleNamespace
 from urllib.parse import parse_qs, unquote, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import attachments  # noqa: E402
 import engine  # noqa: E402
 import settings as cfg  # noqa: E402
 
@@ -165,6 +167,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, self._create(payload))
         if route == "/api/action":
             return self._json(200, self._action(payload))
+        if route == "/api/backlog-bulk":
+            return self._json(200, self._backlog_bulk(payload))
         if route == "/api/from-template":
             return self._json(200, engine.cmd_from_template(
                 _args(name=payload.get("name"), start=payload.get("start"),
@@ -361,6 +365,24 @@ class Handler(BaseHTTPRequestHandler):
         "skip": (engine.cmd_skip, False),
     }
 
+    @staticmethod
+    def _parse_to(payload, today):
+        """Поле `to` (ISO, «завтра», «+3» и т.д.) — общий разбор для одиночного
+        действия и массового переноса. Дату понимает движок (`parse_date_input`),
+        оболочка не парсит её сама — тут только вызов и превращение исключения
+        в структурную ошибку. Пустое поле — не ошибка, просто «дата не задана»,
+        решать, обязательна ли она для конкретной операции, дальше вызывающему.
+
+        Возвращает `(date|None, ошибка|None)`.
+        """
+        сырая = (payload.get("to") or "").strip()
+        if not сырая:
+            return None, None
+        try:
+            return engine.as_date(engine.parse_date_input(сырая, today)), None
+        except (ValueError, TypeError):
+            return None, {"field": "to", "error": "Дату не понял. Можно: 18.08 · 15 марта · завтра · +3 · пн · полдесятого"}
+
     def _action(self, payload):
         op = payload.get("op")
         if op not in self.ДЕЙСТВИЯ:
@@ -375,14 +397,10 @@ class Handler(BaseHTTPRequestHandler):
             ошибки.append({"field": "reason", "error": "причина обязательна"})
 
         today = date.today()
-        дата = None
-        сырая = (payload.get("to") or "").strip()
-        if сырая:
-            try:
-                дата = engine.as_date(engine.parse_date_input(сырая, today))
-            except (ValueError, TypeError):
-                ошибки.append({"field": "to", "error": "Дату не понял. Можно: 18.08 · завтра · +3 · пн"})
-        elif op == "defer":
+        дата, ошибка_даты = self._parse_to(payload, today)
+        if ошибка_даты:
+            ошибки.append(ошибка_даты)
+        elif дата is None and op == "defer":
             ошибки.append({"field": "to", "error": "нужна новая дата"})
         if ошибки:
             return {"ok": False, "errors": ошибки}
@@ -397,6 +415,28 @@ class Handler(BaseHTTPRequestHandler):
             # нормально, для морды — нет: страница должна показать причину, а не
             # получить оборванное соединение.
             return {"ok": False, "errors": [{"field": None, "error": str(e)}]}
+
+    def _backlog_bulk(self, payload):
+        """Массовые действия из разбора завала — R20 ТЗ, вкладка «Списком».
+
+        Дату разбирает `_parse_to` — тот же код, что и у `_action`. Остальную
+        валидацию (обязательность причины и даты по операции, разбор списка
+        элементов) делает `cmd_backlog_bulk`, чтобы CLI и форма были согласованы
+        так же, как одиночные операции.
+        """
+        today = date.today()
+        items = payload.get("items")
+        if not isinstance(items, list) or not items:
+            return {"ok": False, "errors": [{"field": "items", "error": "пустой список"}]}
+
+        дата, ошибка_даты = self._parse_to(payload, today)
+        if ошибка_даты:
+            return {"ok": False, "errors": [ошибка_даты]}
+
+        args = _args(op=payload.get("op"), items=items,
+                     reason=(payload.get("reason") or "").strip() or None,
+                     to=дата.isoformat() if дата else None)
+        return engine.cmd_backlog_bulk(args, today)
 
     def _task_update(self, payload):
         имя = payload.get("task")
@@ -433,14 +473,15 @@ class Handler(BaseHTTPRequestHandler):
         if задача:
             старые = {s["id"]: s for s in engine.steps_of(задача)}
             старт = старт or engine.as_date(задача["meta"].get("start_date")) or today
-            resolved = engine.resolve_steps_for_edit(payload.get("steps") or [], старые,
-                                                      старт, today)
+            resolved = engine.resolve_steps(payload.get("steps") or [], старт, today,
+                                            старые=старые)
         else:
             resolved = engine.resolve_steps(payload.get("steps") or [], старт or today, today)
 
         # Только про порядок дат — пустой заголовок посреди набора текста
         # не ошибка, а нормальное промежуточное состояние.
-        errors = [e for r in resolved for e in r["errors"] if e["field"].endswith("control_date")]
+        errors = [e for r in engine.walk_resolved(resolved) for e in r["errors"]
+                  if e["field"].endswith("control_date")]
         return {"errors": errors}
 
     def _create(self, payload):

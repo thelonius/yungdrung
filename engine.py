@@ -29,6 +29,7 @@ import tempfile
 import time
 from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 # Консоль Windows по умолчанию не в UTF-8 (обычно cp866), а мы печатаем русский
 # текст и типографику: «кавычки», тире, многоточие. Без этого «нет задачи по
@@ -254,12 +255,67 @@ def is_closed(step):
     return step.get("status", OPEN) in (DONE, SKIPPED, FAILED)
 
 
+def is_group(step):
+    """Группа подшагов. У группы есть режим — "par" (порядок не важен) или
+    "seq" (подшаги по очереди), — а дат, статуса и журнала нет: закрытие
+    вычисляется из детей. Обычный шаг режима не имеет."""
+    return bool(step.get("mode"))
+
+
+def _children_map(steps):
+    """id родителя → его дети в порядке хранения. Верхний уровень — под ключом
+    None. Плоский список из БД идёт в глубину-первом порядке, поэтому дети
+    каждого родителя здесь оказываются в своём относительном порядке."""
+    m = {}
+    for s in steps:
+        m.setdefault(s.get("parent"), []).append(s)
+    return m
+
+
+def _closure(steps):
+    """(закрыт?, карта детей) для дерева шагов. Лист закрыт по статусу, группа —
+    когда закрыты все дети. Группа без детей считается закрытой: валидация
+    такие не пропускает, а на битых данных «закрыта» безопаснее вечно
+    открытой — не всплывает в ленте."""
+    m = _children_map(steps)
+
+    def закрыт(s):
+        if is_group(s):
+            return all(закрыт(c) for c in m.get(s["id"], []))
+        return is_closed(s)
+
+    return закрыт, m
+
+
+def leaves_of(task):
+    return [s for s in steps_of(task) if not is_group(s)]
+
+
+def current_steps(task):
+    """Активные листья — то, по чему сейчас идёт работа. В последовательной
+    цепочке это листья первого незакрытого элемента; параллельная группа
+    отдаёт активные листья всех своих незакрытых детей разом."""
+    steps = steps_of(task)
+    закрыт, m = _closure(steps)
+
+    def раскрыть(s):
+        if not is_group(s):
+            return [s]
+        дети = [c for c in m.get(s["id"], []) if not закрыт(c)]
+        if s["mode"] == "par":
+            return [лист for c in дети for лист in раскрыть(c)]
+        return раскрыть(дети[0]) if дети else []
+
+    for s in m.get(None, []):
+        if not закрыт(s):
+            return раскрыть(s)
+    return []
+
+
 def current_step(task):
-    """Первый незакрытый шаг. Шаги идут последовательно, параллельных нет."""
-    for step in steps_of(task):
-        if not is_closed(step):
-            return step
-    return None
+    """Первый активный лист — для сводки и мест, где нужен один шаг."""
+    активные = current_steps(task)
+    return активные[0] if активные else None
 
 
 def task_status(task, today):
@@ -271,22 +327,38 @@ def task_status(task, today):
     steps = steps_of(task)
     if not steps:
         return "empty"
-    if all(is_closed(s) for s in steps):
+    активные = current_steps(task)
+    if not активные:
         return "done"
-    step = current_step(task)
-    due = as_date(step.get("control_date"))
-    if due is None:
-        return "no_date"
-    if due < today:
-        return "overdue"
-    if due == today:
-        return "due"
+    # Активных листьев может быть несколько (параллельная группа) — задача
+    # получает худшее из их состояний: просрочка перекрывает «сегодня», та —
+    # отсутствие даты, та — ожидание. Один лист даёт прежнее поведение.
+    состояния = set()
+    for step in активные:
+        due = as_date(step.get("control_date"))
+        if due is None:
+            состояния.add("no_date")
+        elif due < today:
+            состояния.add("overdue")
+        elif due == today:
+            состояния.add("due")
+        else:
+            состояния.add("waiting")
+    for худшее in ("overdue", "due", "no_date"):
+        if худшее in состояния:
+            return худшее
     return "waiting"
 
 
 def stall_count(step):
-    """Сколько раз шаг не сделали. Отличает «ещё не дошли руки» от «буксует»."""
-    return sum(1 for e in step.get("log") or [] if e.get("event") == "not_done")
+    """Сколько раз шаг не сделали. Отличает «ещё не дошли руки» от «буксует».
+
+    Массовый перенос (`mass_defer`) считается наравне с «не сделан» — R20 ТЗ
+    прямо требует, чтобы он увеличивал счётчик. Обычный одиночный `defer` сюда
+    не идёт: там дату для конкретного шага выбирают осознанно, это не то же
+    самое, что «опять не собрались» (см. test_defer_does_not_count_as_stalling).
+    """
+    return sum(1 for e in step.get("log") or [] if e.get("event") in ("not_done", "mass_defer"))
 
 
 def step_view(task, step, today):
@@ -314,8 +386,12 @@ def log_event(step, event, today, **fields):
 
 
 def get_step(task, step_id):
+    """Найти шаг для отметки. Группа отметки не принимает — done/defer и
+    остальные работают по её подшагам, а закрытие группы вычисляется."""
     for step in steps_of(task):
         if str(step.get("id")) == str(step_id):
+            if is_group(step):
+                sys.exit(f"шаг {step_id} — группа, отмечаются её подшаги")
             return step
     sys.exit(f"нет шага {step_id} в «{task['path'].stem}»")
 
@@ -397,15 +473,20 @@ def task_summary(task, today):
     любому будущему коду, которому нужен «файл как он раньше выглядел бы»,
     нужен ровно этот пересчёт, а не второе его написание.
     """
-    steps = steps_of(task)
-    step = current_step(task)
-    closed = sum(1 for s in steps if is_closed(s))
+    листья = leaves_of(task)
+    активные = current_steps(task)
+    step = активные[0] if активные else None
+    closed = sum(1 for s in листья if is_closed(s))
+    # Прогресс считается по листьям: группа — скобка вокруг подшагов, а не
+    # отдельная единица работы. Контроль сводки — ближайший из активных.
+    контроли = sorted((as_date(s["control_date"]) for s in активные
+                       if s.get("control_date")))
     return {
         "status": STATUS_RU[task_status(task, today)],
         "current_step": step.get("title") if step else None,
-        "control_date": as_date(step.get("control_date")) if step else None,
-        "stalled": stall_count(step) if step else 0,
-        "progress": f"{closed}/{len(steps)}" if steps else None,
+        "control_date": контроли[0] if контроли else None,
+        "stalled": max((stall_count(s) for s in активные), default=0),
+        "progress": f"{closed}/{len(листья)}" if листья else None,
     }
 
 
@@ -426,7 +507,7 @@ def save(task, today):
 
 # --- команды ---------------------------------------------------------------
 
-def feed_item(task, step, now, work):
+def feed_item(task, step, now, work, group=None):
     """Строка ленты. Всё вычислено здесь: морда только показывает.
 
     Раздел 6.1 ТЗ перечисляет, что видно в строке: название шага, название задачи,
@@ -438,6 +519,7 @@ def feed_item(task, step, now, work):
         "task": task["path"].stem,
         "step": step.get("id"),
         "title": step.get("title"),
+        "group": group,
         "note": step.get("note"),
         "control_at": str(control) if control else None,
         "show_at": показ.isoformat() if показ else None,
@@ -467,17 +549,21 @@ def collect_open(now, work):
         # снимает напоминания: `remind.py` ходит за списком сюда же.
         if task["meta"].get("cancelled"):
             continue
-        step = current_step(task)
-        if step is None:
-            continue
-        item = feed_item(task, step, now, work)
-        if item["state"] == "overdue":
-            завал.append(item)
-        elif worktime.in_horizon(step.get("control_date"), now, work):
-            лента.append(item)
-        else:
-            ждут.append(item)
-    ключ = lambda i: (i["show_at"] or "9999", i["task"])
+        по_id = {s["id"]: s for s in steps_of(task)}
+        # Параллельная группа даёт несколько активных листьев — и несколько
+        # строк ленты: у каждого свой срок, прятать их друг за друга нечестно.
+        # Название группы едет в строку контекстом.
+        for step in current_steps(task):
+            родитель = по_id.get(step.get("parent"))
+            item = feed_item(task, step, now, work,
+                             group=родитель.get("title") if родитель else None)
+            if item["state"] == "overdue":
+                завал.append(item)
+            elif worktime.in_horizon(step.get("control_date"), now, work):
+                лента.append(item)
+            else:
+                ждут.append(item)
+    ключ = lambda i: (i["show_at"] or "9999", i["task"], i["step"] or 0)
     return sorted(лента, key=ключ), sorted(завал, key=ключ), sorted(ждут, key=ключ)
 
 
@@ -550,12 +636,12 @@ def cmd_next(args, today):
         status = task_status(task, today)
         if status not in ("overdue", "due", "no_date"):
             continue
-        step = current_step(task)
-        view = step_view(task, step, today)
-        view["status"] = status
-        due.append(view)
-        if view["stalled"] >= 3:
-            stalled.append(view)
+        for step in current_steps(task):
+            view = step_view(task, step, today)
+            view["status"] = status
+            due.append(view)
+            if view["stalled"] >= 3:
+                stalled.append(view)
     due.sort(key=lambda v: (-v["overdue_days"], v["task"]))
     return {"today": today.isoformat(), "due": due, "stalled": stalled,
             "broken": list(BROKEN)}
@@ -569,6 +655,38 @@ def cmd_next(args, today):
 
 ОТНОСИТЕЛЬНЫЕ = {"сегодня": 0, "завтра": 1, "послезавтра": 2}
 
+# Месяцы словом сравниваются по основе, а не полной таблицей падежей: «марта»,
+# «марте», «март» — один и тот же месяц, и хвост можно просто отбросить. Приём
+# взят из разбора дат в adaptive-astro-scheduler, где он уже отработал.
+#
+# «Май» вынесен отдельно, и это не педантизм: его основа «ма» короче любой
+# другой и своим хвостом съедает «марта» — ровно тот баг, который в исходном
+# коде и живёт. Три формы перечислить дешевле, чем сторожить исключение.
+МЕСЯЦЫ_ОСНОВЫ = [
+    ("январ", 1), ("феврал", 2), ("март", 3), ("апрел", 4), ("июн", 6),
+    ("июл", 7), ("август", 8), ("сентябр", 9), ("октябр", 10),
+    ("ноябр", 11), ("декабр", 12),
+]
+МЕСЯЦЫ_МАЙ = {"май": 5, "мая": 5, "мае": 5}
+
+
+def _месяц(слово):
+    """Название месяца в любом падеже → номер, иначе None.
+
+    Хвост после основы ограничен двумя буквами: без этого «мартышка» прошла бы
+    за март. Совсем строгой проверки падежа тут не нужно — дальше по разбору
+    стоит номер дня, и мусор всё равно не соберётся в дату.
+    """
+    if слово in МЕСЯЦЫ_МАЙ:
+        return МЕСЯЦЫ_МАЙ[слово]
+    for основа, номер in МЕСЯЦЫ_ОСНОВЫ:
+        if not слово.startswith(основа):
+            continue
+        хвост = слово[len(основа):]
+        if хвост == "" or (len(хвост) <= 2 and хвост.isalpha()):
+            return номер
+    return None
+
 # Предлоги-связки. У шага одна точка времени, а не диапазон, поэтому «в 9»,
 # «до 9» и «к 9» называют один и тот же час: разница есть для человека, для
 # движка её нет. Выкидываем их и разбираем то, что осталось — иначе «завтра в
@@ -580,6 +698,101 @@ def cmd_next(args, today):
 
 # Названия часов — просто другая запись времени, разворачиваем до разбора.
 ИМЕНА_ЧАСОВ = {"полдень": "12:00", "полночь": "00:00"}
+
+# Разговорное время. «Полдесятого» — половина ДЕСЯТОГО часа, то есть 9:30:
+# порядковое число называет час, который идёт, а не который прошёл. Ровно та же
+# логика у «без пятнадцати десять» (9:45) и «четверть десятого» (9:15) — везде
+# считается от следующего часа назад.
+#
+# Половина суток не угадывается: «полдесятого» — это 9:30, а не 21:30, ровно
+# как «в 9» даёт 9:00, а не 21:00. Кому нужен вечер, тот пишет «полдесятого
+# вечера», и слово доворачивает час обычным путём (`_время_суток`). Угадывать
+# по рабочему дню — значит иногда ставить контроль на двенадцать часов мимо,
+# причём молча.
+ЧАСЫ_ПОРЯДКОВЫЕ = {
+    "первого": 1, "второго": 2, "третьего": 3, "четвертого": 4, "пятого": 5,
+    "шестого": 6, "седьмого": 7, "восьмого": 8, "девятого": 9, "десятого": 10,
+    "одиннадцатого": 11, "двенадцатого": 12,
+}
+ЧАСЫ_КОЛИЧЕСТВЕННЫЕ = {
+    "час": 1, "часа": 1, "два": 2, "три": 3, "четыре": 4, "пять": 5,
+    "шесть": 6, "семь": 7, "восемь": 8, "девять": 9, "десять": 10,
+    "одиннадцать": 11, "двенадцать": 12,
+}
+# Минуты в родительном — то, что стоит после «без». «Четверти» тут же: для
+# разбора это просто пятнадцать, написанное словом.
+МИНУТЫ_РОДИТЕЛЬНЫЕ = {
+    "пяти": 5, "десяти": 10, "четверти": 15, "пятнадцати": 15,
+    "двадцати": 20, "двадцати пяти": 25,
+}
+ПОЛОВИНА_СЛОВОМ = {"пол", "половина", "половине", "половины"}
+
+
+def _пол_часа(слова, i):
+    """«полдесятого», «пол десятого», «пол-десятого», «половине десятого»."""
+    слово = слова[i]
+    if слово.startswith("пол"):
+        # «полдень» и «полночь» до сюда не доходят — их развернул ИМЕНА_ЧАСОВ.
+        час = ЧАСЫ_ПОРЯДКОВЫЕ.get(слово[3:].lstrip("-"))
+        if час:
+            return f"{час - 1:02d}:30", 1
+    if слово in ПОЛОВИНА_СЛОВОМ and i + 1 < len(слова):
+        час = ЧАСЫ_ПОРЯДКОВЫЕ.get(слова[i + 1])
+        if час:
+            return f"{час - 1:02d}:30", 2
+    return None
+
+
+def _четверть_часа(слова, i):
+    """«четверть десятого» → 9:15. «Без четверти» разбирает `_без_минут`."""
+    if слова[i] in ("четверть", "четверти") and i + 1 < len(слова):
+        час = ЧАСЫ_ПОРЯДКОВЫЕ.get(слова[i + 1])
+        if час:
+            return f"{час - 1:02d}:15", 2
+    return None
+
+
+def _без_минут(слова, i):
+    """«без пятнадцати десять» → 9:45, «без двадцати пяти шесть» → 5:35.
+
+    Минуты могут занимать два слова («двадцати пяти»), поэтому длинный вариант
+    пробуем первым: на «без двадцати пяти шесть» короткий прочитал бы «двадцати»
+    и остался бы с «пяти» вместо часа.
+    """
+    if слова[i] != "без":
+        return None
+    for длина in (2, 1):
+        конец = i + 1 + длина
+        if конец >= len(слова):
+            continue
+        минуты = МИНУТЫ_РОДИТЕЛЬНЫЕ.get(" ".join(слова[i + 1:конец]))
+        час = ЧАСЫ_КОЛИЧЕСТВЕННЫЕ.get(слова[конец])
+        if минуты and час:
+            return f"{час - 1:02d}:{60 - минуты:02d}", длина + 2
+    return None
+
+
+def _разговорное_время(слова):
+    """Разговорное время в списке слов → «ЧЧ:ММ» одним токеном.
+
+    Тот же приём, что у ИМЕНА_ЧАСОВ выше: переписываем в цифровую запись до
+    основного разбора, и дальше «завтра в полдесятого» идёт по той же дороге,
+    что «завтра в 9:30», — ни одна ветка ниже про разговорную форму не знает.
+    Формы многословные («без пятнадцати десять»), поэтому проход по списку, а
+    не подстановка по словарю.
+    """
+    итог, i = [], 0
+    while i < len(слова):
+        совпало = (_пол_часа(слова, i) or _четверть_часа(слова, i)
+                   or _без_минут(слова, i))
+        if совпало:
+            токен, съедено = совпало
+            итог.append(токен)
+            i += съедено
+        else:
+            итог.append(слова[i])
+            i += 1
+    return итог
 
 
 def _не_время(token):
@@ -637,13 +850,20 @@ def parse_date_input(text, today):
     только показывает, во что он превратился.
 
     Понимает: 2026-08-18 · 18.08.2026 · 18.08 · сегодня · завтра · послезавтра ·
-    +3 и «через 3 дня» · пн, вторник (ближайший такой день после сегодня).
+    +3 и «через 3 дня» · пн, вторник (ближайший такой день после сегодня) ·
+    «15 марта» и «15 марта 2027» (месяц в любом падеже).
 
     Со временем: «завтра 14:00», «завтра в 9-30», «18.08 в 9», «+3 18:00»,
     «в 7 вечера», «завтра в полдень». Предлоги «в/во/на/до/после/к» выкидываются,
     время суток словом доворачивает час до суточного. Просто «14:00» — сегодня
     в это время. Без времени возвращается date, и шаг считается назначенным на
     весь день: рабочие часы для него считаются от начала дня.
+
+    Разговорные формы времени: «полдесятого» и «половина десятого» (9:30),
+    «четверть десятого» (9:15), «без пятнадцати десять» и «без четверти десять»
+    (9:45), «без двадцати пяти шесть» (5:35). Разворачиваются в «ЧЧ:ММ» до
+    основного разбора (`_разговорное_время`), поэтому складываются со всем
+    остальным: «завтра в полдесятого вечера» — это 21:30 следующего дня.
     """
     if text is None:
         return None
@@ -654,6 +874,7 @@ def parse_date_input(text, today):
     слова = [ИМЕНА_ЧАСОВ.get(w, w) for w in s.split() if w not in СВЯЗКИ]
     if not слова:
         raise ValueError(f"не дата: {text!r}")
+    слова = _разговорное_время(слова)
     s = " ".join(слова)
 
     # «через 3 дня» — то же самое, что «+3», просто длиннее написано. Хвост
@@ -704,6 +925,18 @@ def parse_date_input(text, today):
         вперёд = (день - today.weekday()) % 7 or 7  # «пн» в понедельник — следующий
         return today + timedelta(days=вперёд)
 
+    # «15 марта», «15 марта 2027». Голый месяц без числа («в мае») намеренно не
+    # проходит: у шага одна дата контроля, а «май» — это тридцать один вариант,
+    # и выбирать за человека первое число значит тихо соврать.
+    m = re.fullmatch(r"(\d{1,2})\s+([а-я]+)(?:\s+(\d{4}))?", s)
+    if m and _месяц(m.group(2)):
+        д, месяц, год = int(m.group(1)), _месяц(m.group(2)), m.group(3)
+        if год:
+            return date(int(год), месяц, д)
+        дата = date(today.year, месяц, д)
+        # «15 марта» в августе — это следующий март, та же логика, что у «18.08»
+        return дата if дата >= today else date(today.year + 1, месяц, д)
+
     m = re.fullmatch(r"(\d{1,2})[.\-/](\d{1,2})(?:[.\-/](\d{2}|\d{4}))?", s)
     if m:
         д, мес, год = int(m.group(1)), int(m.group(2)), m.group(3)
@@ -748,7 +981,7 @@ def _parse_optional_date(raw, today, поле, errors):
         return parse_date_input(raw, today)
     except (ValueError, TypeError):
         errors.append({"field": поле,
-                       "error": "Дату не понял. Можно: 18.08 · завтра · +3 · пн"})
+                       "error": "Дату не понял. Можно: 18.08 · 15 марта · завтра · +3 · пн · полдесятого"})
         return None
 
 
@@ -758,43 +991,100 @@ def default_step_start(предыдущий_контроль, старт_зад�
     return предыдущий_контроль or старт_задачи
 
 
-def resolve_steps(steps_data, старт_задачи, today):
-    """Разобрать шаги и подставить дефолт даты начала по цепочке — один проход,
-    которым пользуются и проверка, и запись.
+MODES = ("par", "seq")
+
+
+def resolve_steps(steps_data, старт_задачи, today, старые=None, prefix="steps",
+                  предыдущий=None, mode="seq"):
+    """Разобрать шаги и подставить дефолт даты начала — один проход, которым
+    пользуются и проверка, и запись, и создание, и правка.
 
     Раньше дефолт вычислялся заново в `build_task`, отдельно от `validate_new_task`:
-    проверка смотрела только на то, что пришло в запросе, а дефолт мог обогнать
-    control_date уже после проверки. На перестановке шагов это воспроизвелось
-    вживую — правка проходила проверку и записывала на диск шаг, где дата начала
-    позже даты контроля. Здесь дефолт и проверка смотрят на одни и те же значения.
+    проверка смотрела только на то, что пришло в запросе, и дефолт мог обогнать
+    control_date уже после проверки. Здесь дефолт и проверка смотрят на одни
+    и те же значения.
 
-    Возвращает список словарей: title, start, control (уже разобранные даты или
-    None), note, id (как пришёл, может быть None), errors (ошибки по этому шагу).
+    Шаг с непустым списком `steps` — группа: у неё режим ("par" по умолчанию,
+    "seq" для подцепочки), дат нет, дети разбираются рекурсивно. Дефолт даты
+    начала листа — по последовательной цепочке: контроль предыдущего элемента,
+    у группы это максимум контролей её поддерева. Внутри параллельной группы
+    цепочки нет: каждый ребёнок стартует от точки входа группы.
+
+    `старые` — режим правки: для листа с известным `id` без явной даты начала
+    берётся сохранённое, а не дефолт по новому порядку. Без этого чистая
+    перестановка шагов в карточке упиралась бы в «контроль раньше начала».
+
+    Возвращает дерево словарей: title, start, control, note, id, mode,
+    children, errors, явный_старт, поле, предыдущий (для мягких предупреждений).
     """
     resolved = []
-    предыдущий_контроль = None
     for i, step in enumerate(steps_data or []):
-        поле = f"steps.{i}"
+        поле = f"{prefix}.{i}"
         errors = []
         if not (step.get("title") or "").strip():
             errors.append({"field": f"{поле}.title", "error": "Название шага обязательно"})
-        control = _parse_optional_date(step.get("control_date"), today,
-                                       f"{поле}.control_date", errors)
-        явный_старт = _parse_optional_date(step.get("start_date"), today,
-                                           f"{поле}.start_date", errors)
-        start = явный_старт or default_step_start(предыдущий_контроль, старт_задачи)
-        # Жёсткая проверка из раздела 6.3.3 ТЗ: контроль раньше, чем шаг можно
-        # начать, бессмысленен как дата — блокирует сохранение, не предупреждение.
-        # Сравниваем уже с итоговым start (явным или дефолтным), а не только
-        # с явно введённым — иначе дефолт мог бы тихо пронести то же нарушение.
-        if start and control and as_date(control) < as_date(start):
-            errors.append({"field": f"{поле}.control_date",
-                           "error": "Контроль раньше даты начала шага"})
-        resolved.append({"title": step.get("title"), "start": start, "control": control,
-                         "note": step.get("note"), "id": step.get("id"), "errors": errors,
-                         "явный_старт": bool(явный_старт)})
-        предыдущий_контроль = control or предыдущий_контроль
+        дети_данные = step.get("steps") or []
+        node = {"title": step.get("title"), "note": step.get("note"),
+                "id": step.get("id"), "errors": errors, "children": [],
+                "mode": None, "start": None, "control": None,
+                "явный_старт": False, "поле": поле, "предыдущий": предыдущий}
+        if дети_данные or step.get("mode"):
+            режим = step.get("mode") or "par"
+            if режим not in MODES:
+                errors.append({"field": f"{поле}.mode",
+                               "error": "Режим группы — par или seq"})
+                режим = "par"
+            node["mode"] = режим
+            if not дети_данные:
+                errors.append({"field": f"{поле}.steps",
+                               "error": "В группе нужен хотя бы один подшаг"})
+            for k in ("control_date", "start_date"):
+                if step.get(k):
+                    errors.append({"field": f"{поле}.{k}",
+                                   "error": "Даты ставятся подшагам, не группе"})
+            node["children"] = resolve_steps(
+                дети_данные, старт_задачи, today, старые,
+                prefix=f"{поле}.steps", предыдущий=предыдущий, mode=режим)
+            финиш = _финиш_узла(node)
+        else:
+            control = _parse_optional_date(step.get("control_date"), today,
+                                           f"{поле}.control_date", errors)
+            явный_старт = _parse_optional_date(step.get("start_date"), today,
+                                               f"{поле}.start_date", errors)
+            сохранённый = None
+            if старые is not None and step.get("id") in старые:
+                сохранённый = as_date(старые[step["id"]].get("start_date"))
+            start = явный_старт or сохранённый or default_step_start(предыдущий,
+                                                                     старт_задачи)
+            # Жёсткая проверка из раздела 6.3.3 ТЗ: контроль раньше, чем шаг можно
+            # начать, бессмысленен как дата — блокирует сохранение. Сравниваем с
+            # итоговым start (явным или дефолтным), а не только с введённым.
+            if start and control and as_date(control) < as_date(start):
+                errors.append({"field": f"{поле}.control_date",
+                               "error": "Контроль раньше даты начала шага"})
+            node.update(start=start, control=control,
+                        явный_старт=bool(явный_старт))
+            финиш = control
+        resolved.append(node)
+        if mode != "par" and финиш:
+            предыдущий = финиш
     return resolved
+
+
+def _финиш_узла(node):
+    """Когда элемент цепочки «кончается» для дефолта следующего: у листа это
+    его контроль, у группы — самый поздний контроль поддерева. None, если дат
+    в поддереве нет вовсе."""
+    даты = [node["control"]] if node["control"] else []
+    даты += [f for f in (_финиш_узла(c) for c in node["children"]) if f]
+    return max(даты, key=as_date) if даты else None
+
+
+def walk_resolved(nodes):
+    """Дерево resolve_steps плоским потоком, глубина-первым порядком."""
+    for n in nodes:
+        yield n
+        yield from walk_resolved(n["children"])
 
 
 def validate_new_task(data, existing_names, today):
@@ -831,7 +1121,7 @@ def validate_new_task(data, existing_names, today):
     steps = data.get("steps") or []
     if not steps:
         errors.append({"field": "steps", "error": "Нужен хотя бы один шаг"})
-    for r in resolve_steps(steps, старт_задачи, today):
+    for r in walk_resolved(resolve_steps(steps, старт_задачи, today)):
         errors += r["errors"]
     return errors
 
@@ -850,18 +1140,16 @@ def soft_warnings(data, today):
     """
     warnings = []
     старт_задачи = _parse_optional_date(data.get("start_date"), today, None, []) or today
-    предыдущий_контроль = None
-    for i, r in enumerate(resolve_steps(data.get("steps") or [], старт_задачи, today)):
-        поле = f"steps.{i}"
-        if r["явный_старт"]:
-            if as_date(r["start"]) < as_date(старт_задачи):
-                warnings.append({"field": f"{поле}.start_date",
-                                 "warning": "Шаг начинается раньше даты начала задачи"})
-            if предыдущий_контроль and as_date(r["start"]) < as_date(предыдущий_контроль):
-                warnings.append({"field": f"{поле}.start_date",
-                                 "warning": "Шаг начинается раньше, чем закончится "
-                                           "предыдущий"})
-        предыдущий_контроль = r["control"] or предыдущий_контроль
+    for r in walk_resolved(resolve_steps(data.get("steps") or [], старт_задачи, today)):
+        if not r["явный_старт"]:
+            continue
+        if as_date(r["start"]) < as_date(старт_задачи):
+            warnings.append({"field": f'{r["поле"]}.start_date',
+                             "warning": "Шаг начинается раньше даты начала задачи"})
+        if r["предыдущий"] and as_date(r["start"]) < as_date(r["предыдущий"]):
+            warnings.append({"field": f'{r["поле"]}.start_date',
+                             "warning": "Шаг начинается раньше, чем закончится "
+                                       "предыдущий"})
     return warnings
 
 
@@ -873,17 +1161,27 @@ def build_task(data, today):
     """
     старт_задачи = _parse_optional_date(data.get("start_date"), today, None, []) or today
     steps = []
-    for i, r in enumerate(resolve_steps(data.get("steps") or [], старт_задачи, today), start=1):
-        steps.append({
-            "id": i,
-            "title": r["title"].strip(),
-            "status": OPEN,
-            "start_date": r["start"],
-            "control_date": r["control"],
-            "completed_date": None,
-            "note": (r["note"] or "").strip() or None,
-            "log": [],
-        })
+
+    def добавить(nodes, parent):
+        for r in nodes:
+            sid = len(steps) + 1
+            steps.append({
+                "id": sid,
+                "title": r["title"].strip(),
+                # У группы статус смысла не несёт (закрытие вычисляется из
+                # детей), но форма записи шага одна на всех — колонка NOT NULL.
+                "status": OPEN,
+                "start_date": r["start"],
+                "control_date": r["control"],
+                "completed_date": None,
+                "note": (r["note"] or "").strip() or None,
+                "parent": parent,
+                "mode": r["mode"],
+                "log": [],
+            })
+            добавить(r["children"], sid)
+
+    добавить(resolve_steps(data.get("steps") or [], старт_задачи, today), None)
     tags = [t.strip() for t in (data.get("tags") or []) if t and t.strip()]
     meta = {
         "schema": SCHEMA,
@@ -938,42 +1236,6 @@ def cmd_create(args, today):
 # зоны четырёх команд перехода, а не карточки. Карточка меняет только то, что
 # заказчик видит как метаданные: заголовок, даты, заметку, порядок, состав.
 
-def resolve_steps_for_edit(steps_data, старые, старт_задачи, today):
-    """Как `resolve_steps`, но для правки существующей задачи.
-
-    Разница в одном: если дата начала шага не пришла явно, для уже существующего
-    шага (есть совпадающий `id`) берётся то, что уже сохранено, а не дефолт по
-    новому порядку. Без этого перетаскивание шага в списке карточки — без единой
-    правки дат — само по себе могло бы упереться в «контроль раньше начала»,
-    потому что дефолт нового первого шага считается от даты начала задачи, а не
-    от того, что стояло у него до перестановки. Дефолт по цепочке остаётся
-    только для шагов, которых в задаче ещё не было.
-    """
-    resolved = []
-    предыдущий_контроль = None
-    for i, step in enumerate(steps_data or []):
-        поле = f"steps.{i}"
-        errors = []
-        if not (step.get("title") or "").strip():
-            errors.append({"field": f"{поле}.title", "error": "Название шага обязательно"})
-        control = _parse_optional_date(step.get("control_date"), today,
-                                       f"{поле}.control_date", errors)
-        явный_старт = _parse_optional_date(step.get("start_date"), today,
-                                           f"{поле}.start_date", errors)
-        id_ = step.get("id")
-        сохранённый = as_date(старые[id_].get("start_date")) if id_ in старые else None
-        start = явный_старт or сохранённый or default_step_start(предыдущий_контроль,
-                                                                  старт_задачи)
-        if start and control and as_date(control) < as_date(start):
-            errors.append({"field": f"{поле}.control_date",
-                           "error": "Контроль раньше даты начала шага"})
-        resolved.append({"title": step.get("title"), "start": start, "control": control,
-                         "note": step.get("note"), "id": id_, "errors": errors,
-                         "явный_старт": bool(явный_старт)})
-        предыдущий_контроль = control or предыдущий_контроль
-    return resolved
-
-
 def validate_task_edit(task, data, existing_names, today):
     """Проверка правки — со своими правилами дат (см. `resolve_steps_for_edit`),
     а не `validate_new_task`: та не знает про сохранённые даты существующих
@@ -1006,7 +1268,7 @@ def validate_task_edit(task, data, existing_names, today):
     steps = data.get("steps") or []
     if not steps:
         errors.append({"field": "steps", "error": "Нужен хотя бы один шаг"})
-    for r in resolve_steps_for_edit(steps, старые, старт_задачи, today):
+    for r in walk_resolved(resolve_steps(steps, старт_задачи, today, старые=старые)):
         errors += r["errors"]
     return errors
 
@@ -1023,23 +1285,36 @@ def apply_task_edit(task, data, today):
 
     следующий_id = max([s["id"] for s in старые.values()], default=0) + 1
     новые, увиденные = [], set()
-    for r in resolve_steps_for_edit(data.get("steps") or [], старые, старт_задачи, today):
-        если_старый = r["id"] is not None and r["id"] in старые
-        if если_старый:
-            шаг = dict(старые[r["id"]])  # статус/completed_date/log копируются как есть
-            увиденные.add(r["id"])
-        else:
-            # Тот же порядок полей, что у build_task, — иначе новый шаг в файле
-            # выглядит написанным другой рукой, хотя человеку разницы нет.
-            шаг = {"id": следующий_id, "title": None, "status": OPEN,
-                   "start_date": None, "control_date": None,
-                   "completed_date": None, "note": None, "log": []}
-            следующий_id += 1
-        шаг["title"] = r["title"].strip()
-        шаг["start_date"] = r["start"]
-        шаг["control_date"] = r["control"]
-        шаг["note"] = (r["note"] or "").strip() or None
-        новые.append(шаг)
+
+    def добавить(nodes, parent):
+        nonlocal следующий_id
+        for r in nodes:
+            если_старый = r["id"] is not None and r["id"] in старые
+            if если_старый:
+                шаг = dict(старые[r["id"]])  # статус/completed_date/log копируются как есть
+                увиденные.add(r["id"])
+            else:
+                # Тот же порядок полей, что у build_task, — иначе новый шаг в файле
+                # выглядит написанным другой рукой, хотя человеку разницы нет.
+                шаг = {"id": следующий_id, "title": None, "status": OPEN,
+                       "start_date": None, "control_date": None,
+                       "completed_date": None, "note": None, "parent": None,
+                       "mode": None, "log": []}
+                следующий_id += 1
+            шаг["title"] = r["title"].strip()
+            шаг["start_date"] = r["start"]
+            шаг["control_date"] = r["control"]
+            шаг["note"] = (r["note"] or "").strip() or None
+            # Родитель и режим переписываются и у старых шагов: карточка могла
+            # перетащить шаг в группу или обратно, это правка структуры, а не
+            # статуса. Статус и журнал при этом не трогаются.
+            шаг["parent"] = parent
+            шаг["mode"] = r["mode"]
+            новые.append(шаг)
+            добавить(r["children"], шаг["id"])
+
+    добавить(resolve_steps(data.get("steps") or [], старт_задачи, today, старые=старые),
+             None)
 
     пропали = [sid for sid in старые if sid not in увиденные]
 
@@ -1431,14 +1706,14 @@ def cmd_refresh(args, today):
 def cmd_list(args, today):
     out = []
     for task in load_tasks():
-        steps = steps_of(task)
+        листья = leaves_of(task)
         step = current_step(task)
         out.append({
             "task": task["path"].stem,
             "status": task_status(task, today),
             "category": task["meta"].get("tags") or [],
-            "steps_done": sum(1 for s in steps if s.get("status") in (DONE, SKIPPED)),
-            "steps_total": len(steps),
+            "steps_done": sum(1 for s in листья if s.get("status") in (DONE, SKIPPED)),
+            "steps_total": len(листья),
             "current": step.get("title") if step else None,
         })
     return {"today": today.isoformat(), "tasks": out, "broken": list(BROKEN)}
@@ -1464,6 +1739,7 @@ def cmd_show(args, today):
     work = _work(args)
     заметка, _ = _strip_steps_block(task["body"])
     meta = {**task["meta"], **task_summary(task, today)}
+    закрыт, _дети = _closure(steps_of(task))
     return {
         "task": task["path"].stem,
         "status": task_status(task, today),   # английский, для сравнений в JS
@@ -1473,7 +1749,11 @@ def cmd_show(args, today):
             {**{k: (str(v) if isinstance(v, (date, datetime)) else v)
                 for k, v in s.items() if k != "log"},
              "log": s.get("log") or [],
-             "state": (worktime.due_state(s.get("control_date"), now, work)
+             # closed отдаётся явно: у группы нет статуса, её закрытие
+             # вычисляется из детей, и карточка не должна считать это сама
+             "closed": закрыт(s),
+             "state": (None if is_group(s) else
+                       worktime.due_state(s.get("control_date"), now, work)
                        if not is_closed(s) else None)}
             for s in steps_of(task)
         ],
@@ -1489,17 +1769,19 @@ def cmd_done(args, today):
     step["completed_date"] = today
     log_event(step, "done", today, reason=args.reason)
 
-    # следующий шаг без даты никогда не всплывёт в сборке — ставим сегодня,
-    # заказчик увидит его и при необходимости перенесёт
-    nxt = current_step(task)
-    assigned = None
-    if nxt and not nxt.get("control_date"):
-        nxt["control_date"] = today
-        assigned = nxt.get("id")
+    # шаг без даты никогда не всплывёт в сборке — ставим сегодня, заказчик
+    # увидит его и при необходимости перенесёт. Открыться могла параллельная
+    # группа, то есть листьев несколько — дату получает каждый из них.
+    активные = current_steps(task)
+    assigned = [s["id"] for s in активные if not s.get("control_date")]
+    for s in активные:
+        if not s.get("control_date"):
+            s["control_date"] = today
     save(task, today)
     return {"ok": True, "task": task["path"].stem, "step": args.step, "status": DONE,
-            "next_step": nxt.get("title") if nxt else None,
-            "date_assigned_to_step": assigned,
+            "next_step": активные[0].get("title") if активные else None,
+            "date_assigned_to_step": assigned[0] if assigned else None,
+            "dates_assigned": assigned,
             "task_status": task_status(task, today)}
 
 
@@ -1520,16 +1802,24 @@ def cmd_notdone(args, today):
             "hint": "шаг буксует, нужен другой ход" if count >= 3 else None}
 
 
+def _defer_step(task, step, today, to, reason, event="defer"):
+    """Общая механика переноса: пишет событие в журнал шага, двигает дату,
+    сохраняет задачу. Используется одиночным `defer` и массовым переносом из
+    разбора завала (R20 ТЗ) — второй передаёт `event="mass_defer"`, чтобы
+    запись в журнале была отличима от обычного переноса."""
+    log_event(step, event, today, reason=reason,
+              was=as_date(step.get("control_date")), to=to)
+    step["control_date"] = to
+    save(task, today)
+
+
 def cmd_defer(args, today):
     task = find_task(args.task)
     step = get_step(task, args.step)
     if step.get("status") != OPEN:
         sys.exit(f"шаг {args.step} уже {step.get('status')}")
     to = date.fromisoformat(args.to)
-    log_event(step, "defer", today, reason=args.reason,
-              was=as_date(step.get("control_date")), to=to)
-    step["control_date"] = to
-    save(task, today)
+    _defer_step(task, step, today, to, args.reason)
     return {"ok": True, "task": task["path"].stem, "step": args.step,
             "next_check": to.isoformat()}
 
@@ -1548,12 +1838,13 @@ def cmd_fail(args, today):
         sys.exit(f"шаг {args.step} уже {step.get('status')}")
     step["status"] = FAILED
     log_event(step, "failed", today, reason=args.reason)
-    nxt = current_step(task)
-    if nxt and not nxt.get("control_date"):
-        nxt["control_date"] = today
+    активные = current_steps(task)
+    for s in активные:
+        if not s.get("control_date"):
+            s["control_date"] = today
     save(task, today)
     return {"ok": True, "task": task["path"].stem, "step": args.step, "status": FAILED,
-            "next_step": nxt.get("id") if nxt else None,
+            "next_step": активные[0].get("id") if активные else None,
             "task_status": task_status(task, today)}
 
 
@@ -1568,12 +1859,80 @@ def cmd_skip(args, today):
         sys.exit(f"шаг {args.step} уже {step.get('status')}")
     step["status"] = SKIPPED
     log_event(step, "skipped", today, reason=args.reason)
-    nxt = current_step(task)
-    if nxt and not nxt.get("control_date"):
-        nxt["control_date"] = today
+    for s in current_steps(task):
+        if not s.get("control_date"):
+            s["control_date"] = today
     save(task, today)
     return {"ok": True, "task": task["path"].stem, "step": args.step, "status": SKIPPED,
             "task_status": task_status(task, today)}
+
+
+def cmd_backlog_bulk(args, today):
+    """Массовые действия из разбора завала — вкладка «Списком», R20 ТЗ.
+
+    Три операции над списком `{task, step}`: перенос всей пачки на одну дату
+    с одной причиной, массовое «сделано», массовое «не будет сделано». Каждый
+    элемент проходит ту же механику, что и одиночные `defer`/`done`/`fail` —
+    здесь ничего не дублируется, элементы `done`/`fail` зовут сами эти команды,
+    перенос зовёт общий с `cmd_defer` `_defer_step`.
+
+    Один плохой элемент не роняет пачку: вольт правится руками и другой
+    процесс мог закрыть тот же шаг за это время, поэтому каждый элемент — свой
+    try/except, а не общий. По каждому отдаётся успех или структурная ошибка
+    {field, error} — то же правило, что и у одиночных операций (КОНТРАКТ.md).
+    Повтор пачки после обрыва связи не портит уже закрытые шаги: они просто
+    попадут в ответе как ошибка «уже done/failed», а не продублируют запись —
+    та же идемпотентность, что у одиночных команд.
+
+    Причина обязательна для переноса и «не будет сделано», как и у одиночных
+    `defer`/`fail`; для «сделано» — нет, как и у одиночного `done`. Дата для
+    переноса приходит уже разобранной (ISO) — человеческий ввод вроде «+3»
+    разбирает `parse_date_input`, а не эта команда, и не оболочка.
+    """
+    op = args.op
+    items = args.items or []
+    reason = (args.reason or "").strip() or None
+    to = date.fromisoformat(args.to) if getattr(args, "to", None) else None
+
+    if op not in ("defer", "done", "fail"):
+        return {"ok": False, "errors": [{"field": "op", "error": f"неизвестное действие: {op}"}]}
+    if op in ("defer", "fail") and not reason:
+        return {"ok": False, "errors": [{"field": "reason", "error": "причина обязательна"}]}
+    if op == "defer" and to is None:
+        return {"ok": False, "errors": [{"field": "to", "error": "нужна новая дата"}]}
+
+    results = []
+    for позиция in items:
+        позиция = позиция or {}
+        имя_задачи = позиция.get("task")
+        id_шага = позиция.get("step")
+        строка_шага = str(id_шага) if id_шага not in (None, "") else None
+        try:
+            if not имя_задачи or id_шага in (None, ""):
+                raise ValueError("не указан шаг")
+            if op == "defer":
+                task = find_task(имя_задачи)
+                step = get_step(task, id_шага)
+                if step.get("status") != OPEN:
+                    raise ValueError(f"шаг {id_шага} уже {step.get('status')}")
+                _defer_step(task, step, today, to, reason, event="mass_defer")
+                результат = {"ok": True, "task": task["path"].stem, "step": строка_шага,
+                            "next_check": to.isoformat(), "stalled": stall_count(step)}
+            elif op == "done":
+                результат = cmd_done(
+                    SimpleNamespace(task=имя_задачи, step=строка_шага, reason=reason), today)
+            else:  # fail
+                результат = cmd_fail(
+                    SimpleNamespace(task=имя_задачи, step=строка_шага, reason=reason), today)
+            results.append(результат)
+        except (SystemExit, ValueError) as e:
+            results.append({"ok": False, "task": имя_задачи, "step": строка_шага,
+                            "errors": [{"field": None, "error": str(e)}]})
+
+    return {"op": op, "count": len(results),
+            "ok_count": sum(1 for r in results if r["ok"]),
+            "fail_count": sum(1 for r in results if not r["ok"]),
+            "items": results}
 
 
 # --- база знаний -------------------------------------------------------
@@ -1759,8 +2118,8 @@ TASK_COLUMNS = [
     ("Категории", 22), ("Заметка", 60),
 ]
 STEP_COLUMNS = [
-    ("Задача", 34), ("Шаг", 6), ("Название", 40), ("Статус", 10),
-    ("Контроль", 12), ("Выполнен", 12), ("Не сделан, раз", 15),
+    ("Задача", 34), ("Шаг", 6), ("Название", 40), ("Вид", 10), ("В группе", 30),
+    ("Статус", 10), ("Контроль", 12), ("Выполнен", 12), ("Не сделан, раз", 15),
     ("Последняя причина", 40),
 ]
 EVENT_COLUMNS = [
@@ -1844,7 +2203,9 @@ def cmd_export(args, today):
         status = task_status(task, today)
         step = current_step(task)
         all_steps = steps_of(task)
-        closed = sum(1 for s in all_steps if s.get("status") in (DONE, SKIPPED))
+        по_id = {s["id"]: s for s in all_steps}
+        листья = [s for s in all_steps if not is_group(s)]
+        closed = sum(1 for s in листья if s.get("status") in (DONE, SKIPPED))
         tags = meta.get("tags") or []
         if isinstance(tags, str):
             tags = [tags]
@@ -1852,16 +2213,21 @@ def cmd_export(args, today):
             name, meta.get("title"), as_date(meta.get("created")), STATUS_RU[status],
             step.get("title") if step else None,
             as_date(step.get("control_date")) if step else None,
-            f"{closed}/{len(all_steps)}" if all_steps else None,
+            f"{closed}/{len(листья)}" if листья else None,
             stall_count(step) if step else 0,
             ", ".join(str(t) for t in tags), task["body"].strip(),
         ])
 
         for s in all_steps:
             step_title = s.get("title")
+            родитель = по_id.get(s.get("parent"))
             steps.append([
                 name, s.get("id"), step_title,
-                STEP_STATUS_RU.get(s.get("status", OPEN), s.get("status")),
+                ("группа ∥" if s.get("mode") == "par" else
+                 "группа →" if s.get("mode") == "seq" else None),
+                родитель.get("title") if родитель else None,
+                (None if is_group(s) else
+                 STEP_STATUS_RU.get(s.get("status", OPEN), s.get("status"))),
                 as_date(s.get("control_date")), as_date(s.get("completed_date")),
                 stall_count(s),
                 next((e.get("reason") for e in reversed(s.get("log") or [])

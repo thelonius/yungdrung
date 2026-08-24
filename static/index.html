@@ -66,15 +66,26 @@
     <div class="step-fields">
       <div class="step-title-row">
         <input type="text" class="step-title" autocomplete="off" placeholder="Что сделать">
+        <button type="button" class="ghost make-group"
+                title="Разбить шаг на подшаги">Подшаги</button>
         <button type="button" class="drop" title="Убрать шаг" aria-label="Убрать шаг">×</button>
       </div>
       <p class="err step-err-title" hidden></p>
       <div class="date-row">
         <input type="text" class="step-date" autocomplete="off"
-               placeholder="дата: завтра в 9-30, +3, пн, 18.08">
+               placeholder="дата: завтра в полдесятого, +3, пн, 18.08">
         <span class="date-preview"></span>
       </div>
       <p class="err step-err-date" hidden></p>
+      <div class="substeps-block" hidden>
+        <select class="substeps-mode" title="Порядок подшагов">
+          <option value="par">подшаги в любом порядке</option>
+          <option value="seq">подшаги по очереди</option>
+        </select>
+        <ol class="substeps"></ol>
+        <button type="button" class="ghost add-substep">Добавить подшаг</button>
+      </div>
+      <p class="err step-err-group" hidden></p>
     </div>
   </li>
 </template>

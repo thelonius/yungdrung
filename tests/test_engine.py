@@ -75,9 +75,10 @@ def vault(tmp_path, monkeypatch):
 
 
 def step(number, title, *, status="pending", control_date=None,
-        completed_date=None, log=None):
+        completed_date=None, log=None, parent=None, mode=None):
     return {"id": number, "title": title, "status": status,
             "control_date": control_date, "completed_date": completed_date,
+            "parent": parent, "mode": mode,
             "log": log if log is not None else []}
 
 
@@ -107,11 +108,12 @@ def task(vault, name, steps, *, body="Тело заметки, его пишет
     for i, s in enumerate(steps):
         conn.execute(
             "INSERT INTO steps (task_id, step_id, position, title, status, "
-            "start_date, control_date, completed_date, note) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "start_date, control_date, completed_date, note, parent_id, mode) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (task_id, s["id"], i, s["title"], s.get("status", "pending"),
              store._iso(s.get("start_date")), store._iso(s.get("control_date")),
-             store._iso(s.get("completed_date")), s.get("note")))
+             store._iso(s.get("completed_date")), s.get("note"),
+             s.get("parent"), s.get("mode")))
         for e in s.get("log") or []:
             conn.execute(
                 "INSERT INTO step_log (task_id, step_id, date, event, reason, "
@@ -449,6 +451,122 @@ def test_defer_can_go_backwards(vault):
     meta, _ = read(path)
     assert meta["steps"][0]["control_date"] == date(2026, 8, 10)
     assert meta["status"] == "просрочена"
+
+
+# --- 7b. Массовые действия в разборе завала (R20) ---------------------------
+
+def test_bulk_defer_increases_counter_and_writes_distinct_log_entry(vault):
+    """R20 ТЗ: массовый перенос — не то же самое, что одиночный. Счётчик у
+    каждого элемента растёт, и в журнале остаётся запись, отличимая от
+    обычного `defer` (regression-страховка на неё — test_defer_does_not_count_as_stalling)."""
+    a = task(vault, "Грант", [step(1, "Собрать", control_date=date(2026, 8, 10))])
+    b = task(vault, "Договор", [step(1, "Подписать", control_date=date(2026, 8, 12))])
+
+    result = run(engine.cmd_backlog_bulk, op="defer",
+                items=[{"task": "Грант", "step": "1"}, {"task": "Договор", "step": "1"}],
+                reason="разбор завала, отложил всё разом", to="2026-08-25")
+
+    assert result["ok_count"] == 2 and result["fail_count"] == 0
+    for item in result["items"]:
+        assert item["ok"] is True
+        assert item["next_check"] == "2026-08-25"
+        assert item["stalled"] == 1
+
+    for ref in (a, b):
+        meta, _ = read(ref)
+        step1 = meta["steps"][0]
+        assert step1["control_date"] == date(2026, 8, 25)
+        entry = step1["log"][-1]
+        assert entry["event"] == "mass_defer"          # не "defer" — отличимо
+        assert entry["reason"] == "разбор завала, отложил всё разом"
+        assert entry["to"] == date(2026, 8, 25)
+        assert engine.stall_count(step1) == 1
+
+
+def test_bulk_done_closes_steps_across_tasks_and_opens_next(vault):
+    """Массовое «сделано» работает по разным задачам разом и открывает
+    следующий шаг там, где он есть — та же механика, что у одиночного done."""
+    a = task(vault, "Грант", [
+        step(1, "Собрать", control_date=date(2026, 8, 10)),
+        step(2, "Отправить"),
+    ])
+    b = task(vault, "Договор", [step(1, "Подписать", control_date=date(2026, 8, 12))])
+
+    result = run(engine.cmd_backlog_bulk, op="done",
+                items=[{"task": "Грант", "step": 1}, {"task": "Договор", "step": 1}])
+
+    assert result["ok_count"] == 2 and result["fail_count"] == 0
+
+    meta_a, _ = read(a)
+    assert meta_a["steps"][0]["status"] == "done"
+    assert meta_a["steps"][1]["control_date"] == TODAY     # следующий шаг открылся
+    assert meta_a["status"] == "сегодня"
+
+    meta_b, _ = read(b)
+    assert meta_b["steps"][0]["status"] == "done"
+    assert meta_b["status"] == "закрыта"                   # был последним шагом
+
+
+def test_bulk_fail_marks_step_failed_and_opens_next(vault):
+    a = task(vault, "Грант", [
+        step(1, "Собрать", control_date=date(2026, 8, 10)),
+        step(2, "Отправить"),
+    ])
+    result = run(engine.cmd_backlog_bulk, op="fail",
+                items=[{"task": "Грант", "step": "1"}], reason="не срослось")
+
+    assert result["ok_count"] == 1
+    meta, _ = read(a)
+    assert meta["steps"][0]["status"] == "failed"
+    assert meta["steps"][0]["log"][-1] == {"date": TODAY, "event": "failed",
+                                           "reason": "не срослось"}
+    assert meta["steps"][1]["control_date"] == TODAY
+
+
+def test_bulk_batch_with_one_closed_step_does_not_abort_others(vault):
+    """Один плохой элемент (шаг уже закрыт кем-то другим за это время) не
+    роняет пачку — остальные элементы обрабатываются, ошибка структурная."""
+    a = task(vault, "Грант", [step(1, "Собрать", status="done",
+                                   completed_date=date(2026, 8, 1))])
+    b = task(vault, "Договор", [step(1, "Подписать", control_date=date(2026, 8, 12))])
+
+    result = run(engine.cmd_backlog_bulk, op="done",
+                items=[{"task": "Грант", "step": "1"}, {"task": "Договор", "step": "1"}])
+
+    assert result["ok_count"] == 1 and result["fail_count"] == 1
+    bad, good = result["items"]
+    assert bad["ok"] is False
+    assert bad["errors"][0] == {"field": None, "error": "шаг 1 уже done"}
+    assert good["ok"] is True and good["task"] == "Договор"
+
+    meta_b, _ = read(b)
+    assert meta_b["steps"][0]["status"] == "done"           # второй всё же прошёл
+
+
+def test_bulk_item_missing_fields_becomes_structural_error(vault):
+    task(vault, "Грант", [step(1, "Собрать", control_date=date(2026, 8, 10))])
+    result = run(engine.cmd_backlog_bulk, op="done",
+                items=[{"task": "", "step": ""}, {"task": "Грант", "step": "1"}])
+
+    assert result["ok_count"] == 1 and result["fail_count"] == 1
+    assert result["items"][0]["ok"] is False
+    assert result["items"][0]["errors"][0]["field"] is None
+
+
+def test_bulk_defer_requires_reason_and_date(vault):
+    """Причина обязательна для переноса, как и у одиночного defer; дата — тоже,
+    только у массового переноса это проверяется до похода по элементам."""
+    task(vault, "Грант", [step(1, "Собрать", control_date=date(2026, 8, 10))])
+
+    без_причины = run(engine.cmd_backlog_bulk, op="defer",
+                      items=[{"task": "Грант", "step": "1"}], to="2026-08-20")
+    assert без_причины["ok"] is False
+    assert без_причины["errors"][0]["field"] == "reason"
+
+    без_даты = run(engine.cmd_backlog_bulk, op="defer",
+                   items=[{"task": "Грант", "step": "1"}], reason="причина")
+    assert без_даты["ok"] is False
+    assert без_даты["errors"][0]["field"] == "to"
 
 
 # --- 8. Статус задачи считается из шагов ------------------------------------
@@ -914,6 +1032,117 @@ def test_время_суток_словом(текст, ожидаем):
     assert engine.parse_date_input(текст, date(2026, 8, 17)) == ожидаем
 
 
+# --- месяцы словом ----------------------------------------------------------
+#
+# 17.08.2026 — понедельник. Прошедшая в этом году дата переезжает на следующий,
+# та же логика, что у «18.08».
+
+@pytest.mark.parametrize("текст, ожидаем", [
+    ("15 марта", date(2027, 3, 15)),          # март 2026 уже прошёл
+    ("20 августа", date(2026, 8, 20)),
+    ("1 сентября", date(2026, 9, 1)),
+    ("31 декабря", date(2026, 12, 31)),
+    ("15 марта 2027", date(2027, 3, 15)),
+    ("5 июля 2026", date(2026, 7, 5)),        # явный год не переезжает
+    ("15 марта в 9:30", datetime(2027, 3, 15, 9, 30)),
+    ("15 марта в полдесятого", datetime(2027, 3, 15, 9, 30)),
+])
+def test_месяц_словом(текст, ожидаем):
+    assert engine.parse_date_input(текст, date(2026, 8, 17)) == ожидаем
+
+
+@pytest.mark.parametrize("текст", ["1 мая", "1 мае", "1 май"])
+def test_май_не_путается_с_мартом(текст):
+    """Основа «ма» короче любой другой и хвостом съедает «марта» — в исходном
+    коде, откуда взят приём, это живой баг. У нас май перечислен формами."""
+    assert engine.parse_date_input(текст, date(2026, 8, 17)) == date(2027, 5, 1)
+
+
+@pytest.mark.parametrize("мусор", [
+    "в мае",          # месяц без числа — это не дата, а тридцать один вариант
+    "мартышка",
+    "15 мартышка",    # хвост длиннее двух букв — не падеж
+    "15 маминого",    # начинается на «ма», но это не май
+    "31 февраля",     # такого дня нет
+])
+def test_месяц_словом_мусор_отвергается(мусор):
+    with pytest.raises((ValueError, TypeError)):
+        engine.parse_date_input(мусор, date(2026, 8, 17))
+
+
+# --- разговорное время: «полдесятого» и родня -------------------------------
+#
+# 17.08.2026 — понедельник. Живой отзыв: «завтра в полдесятого» не понималось,
+# хотя так пишут чаще, чем «9:30».
+
+@pytest.mark.parametrize("текст, ожидаем", [
+    ("завтра в полдесятого", datetime(2026, 8, 18, 9, 30)),
+    ("полдесятого", datetime(2026, 8, 17, 9, 30)),
+    ("пол десятого", datetime(2026, 8, 17, 9, 30)),
+    ("пол-десятого", datetime(2026, 8, 17, 9, 30)),
+    ("в половине десятого", datetime(2026, 8, 17, 9, 30)),
+    ("половина шестого", datetime(2026, 8, 17, 5, 30)),
+    ("полвторого", datetime(2026, 8, 17, 1, 30)),
+    ("полдвенадцатого", datetime(2026, 8, 17, 11, 30)),
+    ("четверть десятого", datetime(2026, 8, 17, 9, 15)),
+    ("без четверти десять", datetime(2026, 8, 17, 9, 45)),
+    ("без пятнадцати десять", datetime(2026, 8, 17, 9, 45)),
+    ("без двадцати пять", datetime(2026, 8, 17, 4, 40)),
+    ("без двадцати пяти шесть", datetime(2026, 8, 17, 5, 35)),
+    ("пн в полдесятого", datetime(2026, 8, 24, 9, 30)),
+    ("18.08 в полшестого", datetime(2026, 8, 18, 5, 30)),
+])
+def test_разговорное_время(текст, ожидаем):
+    """«Полдесятого» — половина ДЕСЯТОГО часа, 9:30, а не 10:30: порядковое
+    число называет час, который идёт. Считается от следующего часа назад, и у
+    «без пятнадцати» с «четвертью» правило то же."""
+    assert engine.parse_date_input(текст, date(2026, 8, 17)) == ожидаем
+
+
+@pytest.mark.parametrize("текст, ожидаем", [
+    ("полдесятого вечера", datetime(2026, 8, 17, 21, 30)),
+    ("завтра в полдесятого вечера", datetime(2026, 8, 18, 21, 30)),
+    ("полвторого дня", datetime(2026, 8, 17, 13, 30)),
+    ("без четверти восемь утра", datetime(2026, 8, 17, 7, 45)),
+])
+def test_разговорное_время_с_частью_суток(текст, ожидаем):
+    """Разворот в «ЧЧ:ММ» идёт до разбора, поэтому «вечера» доворачивает час
+    обычным путём — отдельной ветки под разговорную форму нет."""
+    assert engine.parse_date_input(текст, date(2026, 8, 17)) == ожидаем
+
+
+def test_разговорное_время_не_угадывает_половину_суток():
+    """Половина суток не додумывается: «полпервого» — 00:30, ровно как «в 1»
+    даёт 01:00. Угадывать по рабочему дню значит иногда молча промахнуться на
+    двенадцать часов; кому нужен день, тот пишет «полпервого дня»."""
+    assert engine.parse_date_input("полпервого", date(2026, 8, 17)) == \
+        datetime(2026, 8, 17, 0, 30)
+    assert engine.parse_date_input("полпервого дня", date(2026, 8, 17)) == \
+        datetime(2026, 8, 17, 12, 30)
+
+
+@pytest.mark.parametrize("мусор", [
+    "полтринадцатого",     # такого часа не бывает
+    "пол",                 # половина чего
+    "без пятнадцати",      # без пятнадцати чего
+    "четверть",
+    "без десятого",        # «без» просит количественное, не порядковое
+])
+def test_разговорное_время_мусор_отвергается(мусор):
+    """Недописанная разговорная форма — это отказ, а не повод угадать час."""
+    with pytest.raises((ValueError, TypeError)):
+        engine.parse_date_input(мусор, date(2026, 8, 17))
+
+
+def test_полдень_и_полночь_не_сломались():
+    """Оба начинаются на «пол» и разбираются раньше, отдельной таблицей —
+    проверяем, что новая ветка их не перехватила."""
+    assert engine.parse_date_input("полдень", date(2026, 8, 17)) == \
+        datetime(2026, 8, 17, 12, 0)
+    assert engine.parse_date_input("завтра в полночь", date(2026, 8, 17)) == \
+        datetime(2026, 8, 18, 0, 0)
+
+
 def test_время_через_дефис_без_даты():
     """«9-30» датой быть не может — тридцатого месяца нет, — значит это время.
     Разбор пробует время только когда датой строка не читается: «18.08» так и
@@ -1376,8 +1605,6 @@ def test_restore_возвращает_вольт_к_состоянию_копи�
     assert meta["steps"][0].get("completed_date") is None
 
 
-@pytest.mark.skip(reason="backup.write_export ещё читает только markdown; "
-                         "SQLite-читалка — отдельный этап переезда (см. план)")
 def test_export_json_создаёт_валидный_json(vault):
     """R11: файл должен парситься обратно и нести хотя бы заведённую задачу."""
     task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
@@ -1502,3 +1729,197 @@ def test_rename_tag_everywhere_не_трогает_задачи_без_тега(
     assert задето == 0
     meta, _ = read(vault / "Задачи" / "Без тега.md")
     assert meta["tags"] == ["другое"]
+
+
+# --- группы подшагов (параллельные и вложенные) ----------------------------
+#
+# Шаг с mode — группа: закрытие вычисляется из детей, даты и отметки только у
+# листьев. Хранение плоское: parent ссылается на id родителя. Старые задачи
+# (parent везде NULL) обязаны вести себя побитово как до появления групп —
+# это проверяют все тесты выше, здесь только новое поведение.
+
+def подписи(vault, **kw):
+    """Задача: собрать три подписи в любом порядке, потом подать пакет."""
+    return task(vault, "Сделка", [
+        step(1, "Подписи", mode="par"),
+        step(2, "Подпись Говнова", parent=1, control_date=TODAY),
+        step(3, "Подпись банка", parent=1, control_date=date(2026, 8, 18)),
+        step(4, "Подать пакет", control_date=date(2026, 8, 25)),
+    ], **kw)
+
+
+def test_параллельная_группа_активна_вся(vault):
+    подписи(vault)
+    задача = engine.find_task("Сделка")
+    assert [s["id"] for s in engine.current_steps(задача)] == [2, 3]
+
+
+def test_лента_даёт_строку_на_каждый_активный_лист(vault):
+    пятница = date(2026, 8, 14)
+    task(vault, "Сделка", [
+        step(1, "Подписи", mode="par"),
+        step(2, "Подпись Говнова", parent=1, control_date=пятница),
+        step(3, "Подпись банка", parent=1, control_date=пятница),
+        step(4, "Подать пакет", control_date=date(2026, 8, 25)),
+    ])
+    лента = run(engine.cmd_feed, today=пятница, now="2026-08-14T12:00")["feed"]
+    строки = [i for i in лента if i["task"] == "Сделка"]
+    assert [i["step"] for i in строки] == [2, 3]
+    assert all(i["group"] == "Подписи" for i in строки)
+
+
+def test_группа_закрыта_когда_закрыты_подшаги(vault):
+    path = подписи(vault)
+    run(engine.cmd_done, task="Сделка", step="2")
+    run(engine.cmd_done, task="Сделка", step="3")
+    задача = engine.find_task("Сделка")
+    assert [s["id"] for s in engine.current_steps(задача)] == [4]
+    meta, _ = read(path)
+    assert meta["current_step"] == "Подать пакет"
+    assert meta["progress"] == "2/3"        # группа — не единица работы
+
+
+def test_статус_задачи_худшее_из_активных(vault):
+    task(vault, "Сделка", [
+        step(1, "Группа", mode="par"),
+        step(2, "Просроченный", parent=1, control_date=date(2026, 8, 10)),
+        step(3, "Ждущий", parent=1, control_date=date(2026, 8, 30)),
+    ])
+    задача = engine.find_task("Сделка")
+    assert engine.task_status(задача, TODAY) == "overdue"
+
+
+def test_сводка_берёт_ближайший_контроль_активных(vault):
+    path = подписи(vault)
+    meta, _ = read(path)
+    assert meta["control_date"] == TODAY     # min(15.08, 18.08)
+
+
+def test_группу_нельзя_отметить(vault):
+    подписи(vault)
+    with pytest.raises(SystemExit) as e:
+        run(engine.cmd_done, task="Сделка", step="1")
+    assert "группа" in str(e.value)
+
+
+def test_done_раздаёт_даты_всем_открывшимся_листьям(vault):
+    path = task(vault, "Сделка", [
+        step(1, "Подготовить пакет", control_date=TODAY),
+        step(2, "Подписи", mode="par"),
+        step(3, "Подпись Говнова", parent=2),
+        step(4, "Подпись банка", parent=2),
+    ])
+    result = run(engine.cmd_done, task="Сделка", step="1")
+    assert result["dates_assigned"] == [3, 4]
+    assert result["date_assigned_to_step"] == 3
+    meta, _ = read(path)
+    assert meta["steps"][2]["control_date"] == TODAY
+    assert meta["steps"][3]["control_date"] == TODAY
+
+
+def test_создание_с_вложенными_шагами(vault):
+    result = run(engine.cmd_create, json=json.dumps({
+        "title": "Сделка",
+        "steps": [
+            {"title": "Подписи", "mode": "par", "steps": [
+                {"title": "Говнов", "control_date": "2026-08-20"},
+                {"title": "Банк", "control_date": "2026-08-22"},
+            ]},
+            {"title": "Подать пакет", "control_date": "2026-08-30"},
+        ]}))
+    assert result["ok"], result
+    задача = engine.find_task("Сделка")
+    шаги = engine.steps_of(задача)
+    assert [(s["id"], s.get("parent"), s.get("mode")) for s in шаги] == [
+        (1, None, "par"), (2, 1, None), (3, 1, None), (4, None, None)]
+    # дефолт старта после группы — самый поздний контроль её поддерева
+    assert engine.as_date(шаги[3]["start_date"]) == date(2026, 8, 22)
+    # внутри параллельной группы цепочки нет: оба стартуют от точки входа
+    assert engine.as_date(шаги[1]["start_date"]) == engine.as_date(шаги[2]["start_date"])
+
+
+def test_валидация_группы(vault):
+    result = run(engine.cmd_create, json=json.dumps({
+        "title": "Кривая",
+        "steps": [
+            {"title": "Пустая группа", "mode": "par", "steps": []},
+            {"title": "Группа с датой", "control_date": "2026-08-20", "steps": [
+                {"title": "Лист"}]},
+            {"title": "Кривой режим", "mode": "вместе", "steps": [
+                {"title": "Лист"}]},
+        ]}))
+    assert not result["ok"]
+    поля = {e["field"] for e in result["errors"]}
+    assert "steps.0.steps" in поля
+    assert "steps.1.control_date" in поля
+    assert "steps.2.mode" in поля
+
+
+def test_вложенные_ошибки_с_полным_путём(vault):
+    result = run(engine.cmd_create, json=json.dumps({
+        "title": "Сделка",
+        "steps": [{"title": "Группа", "steps": [{"title": ""}]}]}))
+    assert not result["ok"]
+    assert any(e["field"] == "steps.0.steps.0.title" for e in result["errors"])
+
+
+def test_правка_собирает_шаги_в_группу(vault):
+    """Карточка перетащила два существующих шага под новую группу: id, статусы
+    и журнал переживают перестройку, группа получает свой новый id."""
+    path = task(vault, "Сделка", [
+        step(1, "Говнов", status="done", control_date=date(2026, 8, 10),
+             completed_date=date(2026, 8, 10),
+             log=[{"date": date(2026, 8, 10), "event": "done"}]),
+        step(2, "Банк", control_date=TODAY),
+    ])
+    result = run(engine.cmd_update, task="Сделка", json=json.dumps({
+        "title": "Сделка",
+        "steps": [{"title": "Подписи", "mode": "par", "steps": [
+            {"id": 1, "title": "Говнов", "control_date": "2026-08-10"},
+            {"id": 2, "title": "Банк", "control_date": "2026-08-15"},
+        ]}]}))
+    assert result["ok"], result
+    meta, _ = read(path)
+    группа = meta["steps"][0]
+    assert группа["mode"] == "par" and группа["id"] == 3
+    assert [(s["id"], s["parent"]) for s in meta["steps"][1:]] == [(1, 3), (2, 3)]
+    assert meta["steps"][1]["status"] == "done"
+    assert meta["steps"][1]["log"][-1]["event"] == "done"
+    assert meta["progress"] == "1/2"
+
+
+def test_миграция_доращивает_старую_базу(tmp_path, monkeypatch):
+    """База, созданная кодом до групп (нет parent_id/mode), открывается и
+    работает: колонки добавляются, данные не трогаются. Ровно это случится
+    на ноутбуке заказчика при первом запуске после git pull."""
+    db = tmp_path / "вольт.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript("""
+        CREATE TABLE tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL UNIQUE,
+            schema INTEGER NOT NULL DEFAULT 1, created TEXT NOT NULL,
+            start_date TEXT NOT NULL, cancelled INTEGER NOT NULL DEFAULT 0,
+            cancelled_reason TEXT, body TEXT NOT NULL DEFAULT '', extra TEXT);
+        CREATE TABLE steps (
+            task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            step_id INTEGER NOT NULL, position INTEGER NOT NULL,
+            title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+            start_date TEXT, control_date TEXT, completed_date TEXT, note TEXT,
+            PRIMARY KEY (task_id, step_id));
+        INSERT INTO tasks (title, created, start_date, body)
+            VALUES ('Старая', '2026-08-01', '2026-08-01', '');
+        INSERT INTO steps (task_id, step_id, position, title, control_date)
+            VALUES (1, 1, 0, 'Единственный шаг', '2026-08-15');
+    """)
+    conn.commit()
+    conn.close()
+
+    задачи = store.Store(db).load_tasks()
+    assert len(задачи) == 1
+    шаг = задачи[0]["meta"]["steps"][0]
+    assert шаг["title"] == "Единственный шаг"
+    assert шаг["parent"] is None and шаг["mode"] is None
+
+    conn = sqlite3.connect(str(db))
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA
+    conn.close()

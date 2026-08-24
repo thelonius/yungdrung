@@ -19,7 +19,7 @@ import sqlite3
 import sys
 import time
 import zipfile
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -28,6 +28,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import backup  # noqa: E402
+import store  # noqa: E402
 
 ЗАДАЧА = """---
 schema: 1
@@ -144,6 +145,69 @@ def задачи_из_копии(архив, имя, куда):
     with zipfile.ZipFile(архив) as z:
         z.extract(имя, куда)
     return задачи(куда / имя)
+
+
+def положить_задачу_в_базу(vault, title, steps, *, created=date(2026, 8, 5),
+                           tags=(), extra=None,
+                           body="Заметка заказчика по задаче.\n"):
+    """Кладёт задачу в `вольт.db` в обход движка — реальной схемой из
+    `store.py`, не игрушечной таблицей `сделать_базу` (та имитирует чужой файл
+    базы для копий, а не хранилище задач). Задачи `backup.export` теперь читает
+    только отсюда — markdown в `Задачи/` для экспорта больше не источник."""
+    conn = sqlite3.connect(str(vault / "вольт.db"))
+    store.migrate_schema(conn)
+    cur = conn.execute(
+        "INSERT INTO tasks (title, schema, created, start_date, body, extra) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (title, 1, store._iso(created), store._iso(created), body,
+         json.dumps(extra, ensure_ascii=False) if extra else None))
+    task_id = cur.lastrowid
+    for i, s in enumerate(steps):
+        conn.execute(
+            "INSERT INTO steps (task_id, step_id, position, title, status, "
+            "control_date, completed_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (task_id, s["id"], i, s["title"], s.get("status", "pending"),
+             store._iso(s.get("control_date")), store._iso(s.get("completed_date"))))
+        for e in s.get("log") or []:
+            conn.execute(
+                "INSERT INTO step_log (task_id, step_id, date, event, reason, "
+                "was, to_date) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (task_id, s["id"], store._iso(e.get("date")), e["event"],
+                 e.get("reason"), store._iso(e.get("was")), store._iso(e.get("to"))))
+    for name in tags:
+        row = conn.execute("SELECT id FROM tags WHERE name=?", (name,)).fetchone()
+        tag_id = row[0] if row else conn.execute(
+            "INSERT INTO tags (name, color, pinned) VALUES (?, '#999999', 0)",
+            (name,)).lastrowid
+        conn.execute("INSERT OR IGNORE INTO task_tags (task_id, tag_id) VALUES (?, ?)",
+                     (task_id, tag_id))
+    conn.commit()
+    conn.close()
+    return task_id
+
+
+# Шаги задачи из константы ЗАДАЧА выше, но для вставки в БД, а не в YAML —
+# те же значения, тем же приёмом, каким их вставляет `положить_задачу_в_базу`.
+ШАГИ_ГРАНТА = [
+    {"id": 1, "title": "Собрать пакет документов", "status": "done",
+     "control_date": date(2026, 8, 8), "completed_date": date(2026, 8, 7),
+     "log": [{"date": date(2026, 8, 7), "event": "done"}]},
+    {"id": 2, "title": "Отправить на согласование", "status": "pending",
+     "control_date": date(2026, 8, 15), "completed_date": None,
+     "log": [{"date": date(2026, 8, 13), "event": "defer",
+              "was": date(2026, 8, 13), "to": date(2026, 8, 15),
+              "reason": "Говнов в отъезде"}]},
+]
+
+
+def задача_гранта(vault):
+    """Задача из константы ЗАДАЧА выше, но в `вольт.db` — там её теперь ищет
+    `backup.export`. Файл `Задачи/Заявка на грант ФПГ.md` из фикстуры `vault`
+    остаётся рядом: для тестов копии (R25) он по-прежнему источник, а для
+    экспорта — осиротевший след переезда, который экспорт обязан игнорировать."""
+    return положить_задачу_в_базу(vault, "Заявка на грант ФПГ", ШАГИ_ГРАНТА,
+                                   tags=["гранты"],
+                                   extra={"срок_по_договору": "2026-09-01"})
 
 
 # --- имена копий -----------------------------------------------------------
@@ -683,7 +747,15 @@ def test_список_копий_новые_сверху(копии):
 # --- экспорт в JSON --------------------------------------------------------
 
 def test_экспорт_задачи_целиком(vault):
-    """Ожидаемая структура выписана руками по содержимому файла задачи."""
+    """Ожидаемая структура выписана руками по содержимому задачи в вольт.db.
+
+    `start_date`/`note` в каждом шаге — реальные колонки `store.py`, которых во
+    времена markdown не было; здесь они `None`, потому что тест их не задавал.
+    `start_date` задачи в `extra` по той же причине, что и любое другое поле,
+    для которого нет отдельного места в форме ответа: свой top-level ключ есть
+    только у `created` (так было и до переезда), а `start_date` — новая колонка,
+    и заводить ей выделенное поле экспорта — отдельное решение, не эта правка."""
+    задача_гранта(vault)
     данные = backup.export(vault, now=datetime(2026, 8, 18, 14, 30, 5))
     assert данные["tasks"] == [{
         "file": "Задачи/Заявка на грант ФПГ.md",
@@ -692,13 +764,17 @@ def test_экспорт_задачи_целиком(vault):
         "created": "2026-08-05",
         "tags": ["гранты"],
         "body": "Заметка заказчика по задаче.",
-        "extra": {"срок_по_договору": "2026-09-01"},
+        "extra": {"срок_по_договору": "2026-09-01", "start_date": "2026-08-05"},
         "steps": [
             {"id": 1, "title": "Собрать пакет документов", "status": "done",
-             "control_date": "2026-08-08", "completed_date": "2026-08-07",
+             "start_date": None, "control_date": "2026-08-08",
+             "completed_date": "2026-08-07", "note": None,
+             "parent": None, "mode": None,
              "log": [{"date": "2026-08-07", "event": "done"}]},
             {"id": 2, "title": "Отправить на согласование", "status": "pending",
-             "control_date": "2026-08-15", "completed_date": None,
+             "start_date": None, "control_date": "2026-08-15",
+             "completed_date": None, "note": None,
+             "parent": None, "mode": None,
              "log": [{"date": "2026-08-13", "event": "defer",
                       "was": "2026-08-13", "to": "2026-08-15",
                       "reason": "Говнов в отъезде"}]},
@@ -728,7 +804,9 @@ def test_шапка_экспорта_называет_формат(vault):
 
 def test_пересчитываемые_поля_в_экспорт_не_идут(vault):
     """Статус, прогресс и текущий шаг движок считает из шагов при каждой записи.
-    В экспорте это был бы второй источник правды, который разойдётся первым."""
+    В SQLite для них и вовсе нет колонок (store.py), но проверяем это на форме
+    ответа, а не на схеме: второй источник правды — риск экспорта, не БД."""
+    задача_гранта(vault)
     задача = backup.export(vault)["tasks"][0]
     assert "status" not in задача and "status" not in задача["extra"]
     assert "progress" not in задача["extra"] and "stalled" not in задача["extra"]
@@ -750,26 +828,26 @@ def test_дописанное_руками_поле_заметки_не_теря
 
 
 def test_числовой_ключ_во_frontmatter_переживает_круг_через_файл(vault, tmp_path):
-    """YAML читает `2026:` ключом-числом, а JSON ключи умеет только строками.
-    Без приведения к строке заранее экспорт после чтения из файла перестал бы
-    совпадать с тем, что отдали в память."""
-    (vault / "Задачи" / "Тарифы.md").write_text(
-        "---\ntype: task\ntitle: Тарифы\ncreated: 2026-08-05\n"
-        "тарифы:\n  2026: 15000\n---\n\nтело\n", encoding="utf-8")
+    """`extra` в `вольт.db` — JSON-текст (store.py), и `json.dumps` сам приводит
+    числовой ключ словаря к строке при записи в БД. Экспорт обязан отдать ровно
+    то, что там уже лежит, а не развернуть его обратно в число."""
+    положить_задачу_в_базу(vault, "Тарифы", [], extra={"тарифы": {2026: 15000}})
+    ожидаемое_extra = {"тарифы": {"2026": 15000}, "start_date": "2026-08-05"}
     задача = [t for t in backup.export(vault)["tasks"] if t["name"] == "Тарифы"][0]
-    assert задача["extra"] == {"тарифы": {"2026": 15000}}
+    assert задача["extra"] == ожидаемое_extra
 
     файл = tmp_path / "выгрузка.json"
     backup.write_export(vault, файл)
     с_диска = [t for t in json.loads(файл.read_text(encoding="utf-8"))["tasks"]
                if t["name"] == "Тарифы"][0]
-    assert с_диска["extra"] == {"тарифы": {"2026": 15000}}
+    assert с_диска["extra"] == ожидаемое_extra
 
 
 def test_экспорт_переживает_запись_и_разбор(vault, tmp_path):
     """Экспорт проходит через файл и возвращается тем же. Здесь ловится дата,
     просочившаяся объектом, и числовой ключ словаря — то, что `json.dumps`
     молча превратит во что-то другое."""
+    задача_гранта(vault)
     данные = backup.export(vault, now=datetime(2026, 8, 18, 14, 30, 5))
     файл = tmp_path / "выгрузка.json"
     backup.write_export(vault, файл, now=datetime(2026, 8, 18, 14, 30, 5))
@@ -778,14 +856,17 @@ def test_экспорт_переживает_запись_и_разбор(vault,
 
 def test_экспорт_пишется_в_utf8_а_не_в_escape(vault, tmp_path):
     """Файл читает человек и чужая программа. `\\u0417` не читает никто."""
+    задача_гранта(vault)
     файл = tmp_path / "выгрузка.json"
     backup.write_export(vault, файл)
     assert "Заявка на грант ФПГ" in файл.read_text(encoding="utf-8")
 
 
 def test_сломанный_файл_попадает_в_ответ_а_не_теряется(vault):
-    """Вольт правится руками, и опечатка в YAML не должна означать, что задача
-    молча не уехала в новую версию."""
+    """Вольт правится руками, и опечатка в YAML не должна означать, что запись
+    молча не уехала в новую версию. Поломка ловится при разборе — до того, как
+    экспорт вообще смотрит на `type`, поэтому неважно, что это был бы за файл."""
+    задача_гранта(vault)
     (vault / "Задачи" / "сломанная.md").write_text(
         "---\nтип: [не закрытая скобка\n---\n\nтекст\n", encoding="utf-8")
     данные = backup.export(vault)
@@ -796,6 +877,7 @@ def test_сломанный_файл_попадает_в_ответ_а_не_те
 def test_посторонний_markdown_не_ломает_экспорт(vault):
     """Ежедневная заметка Obsidian лежит в вольте, но записью трекера не является:
     ни в задачи, ни в поломки она попадать не должна."""
+    задача_гранта(vault)
     (vault / "2026-08-18.md").write_text("Просто заметка на день\n", encoding="utf-8")
     данные = backup.export(vault)
     assert данные["broken"] == []
@@ -852,9 +934,15 @@ def test_по_выгрузке_вольт_собирается_заново(vaul
 
 def test_собранная_заново_задача_читается_движком(vault, tmp_path):
     """Мало совпасть с выгрузкой — собранный файл должен быть рабочей задачей.
-    Сводку движок пересчитает из шагов, поэтому в выгрузке её и нет."""
+    Сводку движок пересчитает из шагов, поэтому в выгрузке её и нет.
+
+    Реального движка на SQLite это не превращает обратно в задачу — импорт
+    выгрузки в базу отдельным инструментом не написан, это лишь проверка формы
+    файла: то, что чужая программа соберёт по схеме экспорта, должно быть
+    валидным для `engine.parse_file`, а не мусором."""
     import engine
 
+    задача_гранта(vault)
     данные = backup.export(vault)
     новый = tmp_path / "Восстановленный вольт"
     новый.mkdir()
@@ -867,16 +955,17 @@ def test_собранная_заново_задача_читается_движ�
     assert [ш["status"] for ш in meta["steps"]] == ["done", "pending"]
 
 
-def test_экспорт_из_базы_говорит_правду(tmp_path):
-    """После переезда путь вольта станет файлом базы. Сообщение «нет папки
-    вольта» отправило бы человека искать пропавшую папку вместо правды: копии с
-    базой уже работают, а экспорт из неё ещё не написан."""
+def test_путь_вольта_не_папка_ошибка_с_полем(tmp_path):
+    """Задачи `export` давно читает из `вольт.db` (`_export_tasks`), но заметки
+    и шаблоны — всё ещё файлы внутри папки вольта. Если путь указывает не на
+    папку, а на файл (например, саму базу), ошибка должна называть поле, а не
+    ронять процесс traceback'ом."""
     база = tmp_path / "вольт.db"
     сделать_базу(база, ["Заявка"]).close()
     with pytest.raises(backup.BackupError) as e:
         backup.export(база)
     assert e.value.field == "vault"
-    assert "вольт.db" in e.value.message
+    assert "нет папки вольта" in e.value.message
 
 
 # --- восстановление --------------------------------------------------------
@@ -1286,6 +1375,7 @@ def test_битый_файл_шаблонов_не_роняет_выгрузку
     задач и заметок доезжает."""
     import templates
 
+    задача_гранта(vault)
     templates.templates_path(vault).write_text("{это не json", encoding="utf-8")
 
     данные = backup.export(vault)
@@ -1295,11 +1385,14 @@ def test_битый_файл_шаблонов_не_роняет_выгрузку
     assert len(данные["tasks"]) == 1 and len(данные["notes"]) == 1
 
 
-def test_сломанное_поле_steps_не_разбирается_по_буквам(vault):
-    """`steps: перенести` вместо списка достижимо правкой руками — ровно та
-    дыра, из-за которой хранилище и переезжает в базу. Без проверки строка
-    разошлась бы по буквам, и у задачи на той стороне оказалось бы девять
-    шагов из одной опечатки."""
+def test_осиротевший_markdown_с_type_task_не_задача_и_не_поломка(vault):
+    """`steps: перенести` вместо списка была ровно та дыра правки руками, из-за
+    которой хранилище переехало в SQLite (решение в CLAUDE.md) — в базе такую
+    строку напечатать неправильно нечего. Файл в `Задачи/` с `type: task` теперь
+    просто осиротевший след переезда: задачи `export` туда не смотрит вообще, и
+    что бы ни было в `steps` такого файла, экспорт его не заметит — ни как
+    задачу, ни как поломку. Приберёт файл отдельный процесс, не экспорт."""
+    задача_гранта(vault)
     (vault / "Задачи" / "Кривая.md").write_text(
         "---\ntype: task\ntitle: Кривая\ncreated: 2026-08-05\n"
         "steps: перенести\n---\n\nтело\n", encoding="utf-8")
@@ -1307,13 +1400,14 @@ def test_сломанное_поле_steps_не_разбирается_по_бу
     данные = backup.export(vault)
 
     assert [t["name"] for t in данные["tasks"]] == ["Заявка на грант ФПГ"]
-    assert [b["file"] for b in данные["broken"]] == ["Задачи/Кривая.md"]
+    assert данные["broken"] == []
 
 
 def test_журнал_переносов_доезжает_до_файла_выгрузки(vault, tmp_path):
     """Журнал шага — история задачи (R2), и живёт он внутри шага. Проверяем
-    именно через файл: даты в журнале YAML отдаёт объектами `date`, и без
+    именно через файл: `store.py` отдаёт даты в журнале объектами `date`, и без
     приведения к строке `json.dump` упал бы на первой же записи."""
+    задача_гранта(vault)
     файл = tmp_path / "выгрузка.json"
     backup.write_export(vault, файл, now=datetime(2026, 8, 18, 14, 30, 5))
 

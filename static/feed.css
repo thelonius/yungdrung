@@ -147,6 +147,80 @@
   gap: 16px;
 }
 
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1.5px solid var(--line);
+}
+
+.tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1.5px;
+  padding: 9px 4px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tab:hover { color: var(--ink); }
+.tab.on { color: var(--ink); border-bottom-color: var(--accent); }
+
+.tab-pane { display: flex; flex-direction: column; gap: 14px; }
+
+.backlog-progress {
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+}
+
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--card);
+  border: 1.5px solid var(--line-strong);
+  border-radius: var(--radius);
+}
+
+.bulk-count { font-size: 13px; color: var(--muted); font-weight: 600; }
+
+.bulk-actions { display: flex; gap: 8px; }
+
+.table-wrap { overflow-x: auto; }
+
+.backlog-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.backlog-table th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 6px 10px;
+  border-bottom: 1.5px solid var(--line);
+}
+
+.backlog-table td {
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.backlog-table tr.is-stalled td:first-child { border-left: 2px solid var(--danger); }
+
+.col-check { width: 32px; }
+
+.backlog-table td.postponed { font-weight: 600; }
+
 /* --- окно контроля --- */
 
 dialog {
@@ -168,6 +242,14 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
   flex-direction: column;
   gap: 18px;
   color: var(--ink);
+}
+
+.control-progress {
+  margin: 0 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
 }
 
 .control-task {
