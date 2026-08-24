@@ -508,7 +508,31 @@ def save(task, today):
     meta = task["meta"]
     meta["schema"] = SCHEMA
     meta.update(task_summary(task, today))
-    get_store().save_task(task, today)
+    склад = get_store()
+    склад.save_task(task, today)
+    _index_task(склад, task)
+
+
+def _index_task(склад, task):
+    """Обновить поисковый индекс по одной задаче — сразу после её записи.
+
+    Одна строка, а не пересборка всего: `reindex_search` нужен после переезда и
+    для починки, но платить им за каждую отметку шага нельзя. Индексируется
+    новое название, поэтому строка сначала удаляется по нему же — при
+    переименовании старая осталась бы висеть и находилась по прежнему слову.
+    Отсюда `_forget_old_title`: имя до правки знает только вызывающий.
+
+    Сбой индексации не роняет запись: задача уже в базе, и потерять её из-за
+    того, что не собрались леммы, было бы хуже, чем разойтись с индексом —
+    индекс чинится командой `reindex`, а задача ничем.
+    """
+    try:
+        склад.search_replace(
+            "task", task["path"].stem, task["path"].stem,
+            (task.get("body") or "").strip()[:200],
+            kb.lemmatize_text(_search_text_of_task(task)))
+    except Exception:
+        pass
 
 
 # --- команды ---------------------------------------------------------------
@@ -1345,6 +1369,7 @@ def cmd_update(args, today):
         return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
 
     task = find_task(args.task)
+    прежнее_имя = task["path"].stem
     existing = [t["path"].stem for t in load_tasks()]
     errors = validate_task_edit(task, data, existing, today)
     if errors:
@@ -1371,6 +1396,12 @@ def cmd_update(args, today):
     except store.DuplicateTitle:
         return {"ok": False, "errors": [{"field": "title", "error": "Задача с таким названием уже есть"}]}
 
+    # Строку индекса адресует название, поэтому переименованная задача оставила
+    # бы позади себя старую: она находилась бы по прежнему слову и вела в
+    # никуда. `save` уже записал новую — снимаем только прежнюю.
+    if task["path"].stem != прежнее_имя:
+        get_store().search_forget("task", прежнее_имя)
+
     return {"ok": True, "task": task["path"].stem, "status": task["meta"]["status"],
             "steps": len(task["meta"]["steps"])}
 
@@ -1395,7 +1426,11 @@ def cmd_delete(args, today):
     """Удалить задачу насовсем. Подтверждение — дело интерфейса, не движка:
     здесь только сам необратимый шаг."""
     task = find_task(args.task)
-    get_store().delete_task(task["path"].id)
+    склад = get_store()
+    склад.delete_task(task["path"].id)
+    # Из индекса тоже: иначе удалённая задача продолжает находиться поиском, и
+    # клик по ней ведёт в никуда.
+    склад.search_forget("task", task["path"].stem)
     return {"ok": True, "task": task["path"].stem, "deleted": True}
 
 
@@ -2157,6 +2192,86 @@ def cmd_migrate_kb(args, today):
     return migrate_kb_to_db(today)
 
 
+def _search_text_of_task(task):
+    """Что от задачи попадает в поиск: заголовок, заметка и названия шагов.
+
+    Причины переносов сюда не идут — решение по Q21 («пока не нужно»). Когда
+    понадобятся, они станут отдельными строками индекса со своим `source_type`,
+    и ни эта функция, ни форма таблицы не изменятся.
+    """
+    куски = [task["path"].stem, (task.get("body") or "")]
+    куски += [s.get("title") or "" for s in steps_of(task)]
+    return "\n".join(к for к in куски if к)
+
+
+def reindex_search(store_=None):
+    """Собрать поисковый индекс заново по всему вольту. Требования R24, R25.
+
+    Полная пересборка, а не досборка: она нужна после переезда, после смены
+    правил лемматизации и как способ починить индекс, если он разошёлся с
+    данными. На целевом объёме ТЗ это секунды, а разошедшийся индекс чинится
+    иначе только руками.
+
+    Дальше индекс поддерживается по одной задаче в `save()` — там своя строка
+    переписывается, а не пересобирается всё.
+    """
+    склад = store_ or get_store()
+    склад.search_clear()
+    задач = 0
+    for task in load_tasks():
+        склад.search_replace(
+            "task", task["path"].stem, task["path"].stem,
+            (task.get("body") or "").strip()[:200],
+            kb.lemmatize_text(_search_text_of_task(task)))
+        задач += 1
+    записей = 0
+    for з in склад.load_kb_notes():
+        склад.search_replace(
+            "kb_note", з["id"], з["title"], (з.get("body") or "").strip()[:200],
+            kb.lemmatize_text(" ".join([з["title"], *(з.get("aliases") or []),
+                                        з.get("body") or ""])))
+        записей += 1
+    return {"ok": True, "tasks": задач, "kb_notes": записей}
+
+
+def cmd_reindex(args, today):
+    return reindex_search()
+
+
+def search_query(text):
+    """Человеческий запрос → выражение FTS5.
+
+    Слова приводятся к тем же леммам, что и текст в индексе: иначе «гранту» в
+    поиске не нашло бы «грант» в задаче, ради чего лемматизация и заводилась.
+    Слова соединяются через AND — человек, набравший два слова, ищет то, где
+    есть оба, а не то, где есть хоть одно.
+
+    Каждое слово берётся в кавычки: в запрос попадают знаки, которые FTS5
+    считает синтаксисом (дефис в «финмодель-2026», звёздочка, скобки), и без
+    кавычек он на них ругается или понимает их не так, как человек имел в виду.
+    """
+    слова = [w for w, _, _ in kb.tokenize(text or "")]
+    if not слова:
+        return ""
+    return " AND ".join(f'"{kb.lemma(w)}"' for w in слова)
+
+
+def cmd_search(args, today):
+    """Поиск по истории — R24, главный ответ на «как я это делал в прошлый раз».
+
+    Ищет по задачам, их заметкам, названиям шагов и записям базы знаний.
+    """
+    запрос = search_query(getattr(args, "text", None))
+    if not запрос:
+        return {"ok": False, "errors": [{"field": "text", "error": "Пустой запрос"}]}
+    виды = None
+    if getattr(args, "kind", None):
+        виды = [args.kind]
+    найдено = get_store().search(запрос, limit=int(getattr(args, "limit", None) or 50),
+                                 source_types=виды)
+    return {"ok": True, "query": запрос, "count": len(найдено), "results": найдено}
+
+
 def cmd_kb_scan(args, today):
     """Гипотезы упоминаний записей базы знаний в тексте — R17, разделы 5.7/5.8 ТЗ.
 
@@ -2782,6 +2897,15 @@ def main():
     k = sub.add_parser("skip", help="снять шаг")
     k.add_argument("task"); k.add_argument("step"); k.add_argument("--reason")
     k.set_defaults(func=cmd_skip)
+
+    sr = sub.add_parser("search", help="поиск по задачам, заметкам и базе знаний")
+    sr.add_argument("text")
+    sr.add_argument("--kind", choices=["task", "kb_note"], help="только этот вид")
+    sr.add_argument("--limit", type=int, default=50)
+    sr.set_defaults(func=cmd_search)
+
+    ri = sub.add_parser("reindex", help="собрать поисковый индекс заново")
+    ri.set_defaults(func=cmd_reindex)
 
     mk = sub.add_parser("migrate-kb",
                         help="перенести базу знаний из База/*.md в таблицы (этап b)")

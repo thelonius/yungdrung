@@ -153,6 +153,26 @@ CREATE TABLE IF NOT EXISTS attachments (
     added        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_attachments_source ON attachments(source_type, source_id);
+
+-- Поисковый индекс (R24, R25). Отдельная таблица, а не колонки в tasks:
+-- источники добавляются строками, а не сменой формы. Сейчас индексируются
+-- задачи, шаги и записи базы; причины переносов решено не индексировать
+-- (вопрос Q21, ответ «пока не нужно»), и подключить их потом можно будет,
+-- ничего не пересобирая — появится ещё один source_type.
+--
+-- Ищется одна колонка, `lemmas`: там текст, приведённый pymorphy3 к
+-- нормальным формам, и тем же прогоняется запрос. Без этого «грант» не нашёл
+-- бы «гранту» — unicode61 морфологии не знает и сводит слова только по
+-- регистру. Остальные колонки UNINDEXED: они нужны, чтобы показать найденное,
+-- а не чтобы по ним искать.
+CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(
+    source_type UNINDEXED,
+    source_id   UNINDEXED,
+    title       UNINDEXED,
+    preview     UNINDEXED,
+    lemmas,
+    tokenize = 'unicode61'
+);
 """
 
 # Поля задачи, которые движок сам вычисляет при каждом save() и которые
@@ -543,6 +563,59 @@ class Store:
             conn.executemany(
                 "INSERT INTO kb_exclusions (kb_entry_id, text) VALUES (?, ?)",
                 [(e.get("kb_entry_id"), e["text"]) for e in exclusions])
+
+    # --- поиск ----------------------------------------------------------
+    #
+    # SQL и только SQL: леммы приходят готовыми. Приводит их `kb.lemmatize_text`,
+    # и знать про морфологию хранилищу незачем — иначе `store.py` потянул бы за
+    # собой pymorphy3 ради каждого открытия базы.
+
+    def search_replace(self, source_type, source_id, title, preview, lemmas):
+        """Переписать одну строку индекса. Сначала удаление: FTS5 не знает
+        UPSERT, а вторая строка на тот же источник выдала бы дубль в выдаче."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM search WHERE source_type=? AND source_id=?",
+                         (source_type, str(source_id)))
+            conn.execute(
+                "INSERT INTO search (source_type, source_id, title, preview, lemmas)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (source_type, str(source_id), title, preview, lemmas))
+
+    def search_forget(self, source_type, source_id):
+        with self._connect() as conn:
+            conn.execute("DELETE FROM search WHERE source_type=? AND source_id=?",
+                         (source_type, str(source_id)))
+
+    def search_clear(self):
+        with self._connect() as conn:
+            conn.execute("DELETE FROM search")
+
+    def search(self, fts_query, limit=50, source_types=None):
+        """Найденное по запросу FTS5, свежесовпавшее выше.
+
+        Порядок — `rank`: встроенная в FTS5 мера bm25, где слово из короткого
+        заголовка весит больше того же слова из длинного тела. Для «как я это
+        делал в прошлый раз» это верный порядок: совпадение в названии задачи
+        нужнее совпадения где-то в заметке.
+
+        Синтаксическая ошибка в запросе — не наша ошибка и не повод падать:
+        человек набирает в строке поиска что угодно, включая кавычки и скобки,
+        а FTS5 на них ругается. Пустая выдача честнее исключения.
+        """
+        условие = "search MATCH ?"
+        параметры = [fts_query]
+        if source_types:
+            места = ",".join("?" * len(source_types))
+            условие += f" AND source_type IN ({места})"
+            параметры += list(source_types)
+        try:
+            with self._connect() as conn:
+                return [dict(r) for r in conn.execute(
+                    f"SELECT source_type, source_id, title, preview FROM search"
+                    f" WHERE {условие} ORDER BY rank LIMIT ?",
+                    (*параметры, limit))]
+        except sqlite3.OperationalError:
+            return []
 
     def rename_tag_everywhere(self, old_name, new_name):
         """Переименование ИЛИ слияние — вызывающий (engine.rename_tag_everywhere)

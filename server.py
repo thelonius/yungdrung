@@ -99,6 +99,10 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/templates":
             начало = _param(self.path, "start")
             return self._json(200, engine.cmd_templates(_args(start=начало), date.today()))
+        if route == "/api/search":
+            return self._json(200, engine.cmd_search(
+                _args(text=_param(self.path, "q"), kind=_param(self.path, "kind"),
+                      limit=_param(self.path, "limit")), date.today()))
         if route == "/api/reasons":
             return self._json(200, {"reasons": engine.get_reasons()})
         if route == "/api/tasks":

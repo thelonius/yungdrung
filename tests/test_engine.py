@@ -2180,3 +2180,99 @@ def test_происхождение_не_дублируется_в_extra(vault):
     extra = conn.execute("SELECT extra FROM tasks").fetchone()[0]
     conn.close()
     assert extra is None or "template_name" not in extra
+
+
+# --- поиск по истории (R24) --------------------------------------------------
+#
+# Главный ответ на вопрос заказчика «как я это делал в прошлый раз». Проверяется
+# не «нашлось хоть что-то», а падежи: unicode61 в FTS5 морфологии не знает, и
+# без лемматизации «грант» не нашёл бы «гранту» — ровно то, ради чего слой
+# лемм и заводился.
+
+@pytest.fixture
+def вольт_для_поиска(vault):
+    run(engine.cmd_create, json=json.dumps({
+        "title": "Подать заявку на грант ФПГ",
+        "body": "Созвониться с Василием про декларацию",
+        "steps": [{"title": "Собрать документы"}, {"title": "Отправить в фонд"}]}))
+    run(engine.cmd_create, json=json.dumps({
+        "title": "Налоги за третий квартал",
+        "steps": [{"title": "Свериться с бухгалтером"}]}))
+    return vault
+
+
+@pytest.mark.parametrize("запрос, ожидание", [
+    ("гранту", "Подать заявку на грант ФПГ"),        # падеж в заголовке
+    ("заявка", "Подать заявку на грант ФПГ"),        # именительный против винительного
+    ("декларациях", "Подать заявку на грант ФПГ"),   # падеж в заметке
+    ("документ", "Подать заявку на грант ФПГ"),      # слово из названия шага
+    ("бухгалтеру", "Налоги за третий квартал"),      # падеж в названии шага
+    ("Василия", "Подать заявку на грант ФПГ"),       # имя в другом падеже
+    ("налог", "Налоги за третий квартал"),
+])
+def test_поиск_находит_в_любом_падеже(вольт_для_поиска, запрос, ожидание):
+    r = run(engine.cmd_search, text=запрос, kind=None, limit=None)
+    assert r["ok"], r
+    assert [н["title"] for н in r["results"]] == [ожидание]
+
+
+def test_два_слова_ищутся_вместе_а_не_по_отдельности(вольт_для_поиска):
+    """Человек, набравший два слова, ищет то, где есть оба."""
+    assert run(engine.cmd_search, text="заявка грант",
+               kind=None, limit=None)["count"] == 1
+    assert run(engine.cmd_search, text="заявка налоги",
+               kind=None, limit=None)["count"] == 0
+
+
+def test_новая_задача_ищется_сразу(вольт_для_поиска):
+    """Индекс поддерживается при записи, а не только командой `reindex`:
+    иначе заказчик заведёт задачу и не найдёт её."""
+    run(engine.cmd_create, json=json.dumps({
+        "title": "Совсем свежая про субсидию", "steps": [{"title": "Шаг"}]}))
+    assert run(engine.cmd_search, text="субсидии", kind=None, limit=None)["count"] == 1
+
+
+def test_удалённая_задача_уходит_из_поиска(вольт_для_поиска):
+    """Иначе она находится и ведёт в никуда."""
+    run(engine.cmd_delete, task="Налоги за третий квартал")
+    assert run(engine.cmd_search, text="налог", kind=None, limit=None)["count"] == 0
+
+
+def test_переименованная_не_находится_по_старому_названию(vault):
+    """Строку индекса адресует название: без снятия старой задача находилась бы
+    и по прежнему слову, и по новому."""
+    run(engine.cmd_create, json=json.dumps({
+        "title": "Старое про грант", "start_date": "2026-08-17",
+        "steps": [{"title": "Шаг", "control_date": "2026-08-17"}]}))
+    r = run(engine.cmd_update, task="Старое про грант", json=json.dumps({
+        "title": "Новое про декларацию", "start_date": "2026-08-17",
+        "steps": [{"id": 1, "title": "Шаг", "control_date": "2026-08-17"}]}))
+    assert r["ok"], r
+    assert run(engine.cmd_search, text="грант", kind=None, limit=None)["count"] == 0
+    assert run(engine.cmd_search, text="декларация", kind=None, limit=None)["count"] == 1
+
+
+def test_мусорный_запрос_не_роняет_поиск(вольт_для_поиска):
+    """В строку поиска набирают что угодно, включая скобки и кавычки, на
+    которых FTS5 ругается синтаксической ошибкой. Пустая выдача честнее
+    исключения, вылетевшего в морду."""
+    for мусор in ["(((", '"', "* AND", "^^^"]:
+        r = run(engine.cmd_search, text=мусор, kind=None, limit=None)
+        assert r["count"] == 0 if r.get("ok") else r["errors"]
+
+
+def test_reindex_собирает_индекс_заново(вольт_для_поиска):
+    """Способ починить разошедшийся индекс: чинится он только так."""
+    engine.get_store().search_clear()
+    assert run(engine.cmd_search, text="грант", kind=None, limit=None)["count"] == 0
+    итог = run(engine.cmd_reindex)
+    assert итог["tasks"] == 2
+    assert run(engine.cmd_search, text="грант", kind=None, limit=None)["count"] == 1
+
+
+def test_записи_базы_знаний_тоже_ищутся(vault):
+    engine.get_store().add_kb_note("Василий Говнов", ["Вася"], "Юрист и согласующий")
+    run(engine.cmd_reindex)
+    r = run(engine.cmd_search, text="юристу", kind=None, limit=None)
+    assert [н["source_type"] for н in r["results"]] == ["kb_note"]
+    assert r["results"][0]["title"] == "Василий Говнов"
