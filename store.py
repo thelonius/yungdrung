@@ -410,6 +410,101 @@ class Store:
         with self._connect() as conn:
             conn.execute("DELETE FROM attachments WHERE id=?", (attachment_id,))
 
+    # --- база знаний ----------------------------------------------------
+    #
+    # Этап (b) переезда: записи, ссылки и исключения перебираются из
+    # `База/*.md`, `Ссылки.json` и `Исключения.json` в таблицы. Формы методов
+    # подогнаны под то, что уже ждут `kb.LinkStore` и `kb.ExclusionStore`:
+    # у них вынесены `_load`/`_commit`, и наследнику остаётся прочитать всё и
+    # записать всё. Отсюда `save_kb_links`, переписывающий таблицу целиком —
+    # так требует их контракт, а на нашем объёме (сотни записей, тысячи
+    # ссылок) это доли миллисекунды. Порезать на INSERT/DELETE по строке
+    # можно будет, не трогая ни одного вызывающего.
+    #
+    # Идентификатор записи здесь числовой, а в markdown им было имя файла.
+    # Поэтому `legacy_file` — не мусор, а мостик: по нему миграция
+    # перецепляет старые ссылки, у которых `kb_entry_id` — строка «Василий
+    # Говнов», на свежие числовые id.
+
+    def load_kb_notes(self):
+        with self._connect() as conn:
+            return [self._assemble_kb_note(r) for r in conn.execute(
+                "SELECT * FROM kb_notes ORDER BY title").fetchall()]
+
+    @staticmethod
+    def _assemble_kb_note(row):
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            # Синонимы лежат JSON-списком в одной колонке: искать по ним
+            # средствами SQL не требуется (индекс собирает `kb.build_index` в
+            # памяти), а отдельная таблица ради этого — лишний join.
+            "aliases": json.loads(row["aliases"]) if row["aliases"] else [],
+            "body": row["body"] or "",
+            "legacy_file": row["legacy_file"],
+        }
+
+    def add_kb_note(self, title, aliases=(), body="", legacy_file=None):
+        with self._connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO kb_notes (title, aliases, body, legacy_file) "
+                "VALUES (?, ?, ?, ?)",
+                (title, json.dumps(list(aliases), ensure_ascii=False), body or "",
+                 legacy_file))
+            return cur.lastrowid
+
+    def update_kb_note(self, note_id, title, aliases=(), body=""):
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE kb_notes SET title=?, aliases=?, body=? WHERE id=?",
+                (title, json.dumps(list(aliases), ensure_ascii=False), body or "",
+                 note_id))
+
+    def delete_kb_note(self, note_id):
+        """Ссылки и исключения записи уходят с ней: у обеих таблиц
+        ON DELETE CASCADE, и висячая ссылка на несуществующую запись хуже
+        отсутствующей — по ней потом нечего показать в «Упоминается в»."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM kb_notes WHERE id=?", (note_id,))
+
+    def load_kb_links(self):
+        with self._connect() as conn:
+            return [{"kb_entry_id": r["kb_entry_id"], "source_type": r["source_type"],
+                     "source_id": r["source_id"], "offset_start": r["offset_start"],
+                     "offset_end": r["offset_end"], "confirmed_at": r["confirmed_at"],
+                     "matched": r["matched"]}
+                    for r in conn.execute("SELECT * FROM kb_links ORDER BY id")]
+
+    def save_kb_links(self, links):
+        """Переписать все ссылки. Форма продиктована `kb.LinkStore._commit`.
+
+        `INSERT OR IGNORE` вместо голого INSERT: у таблицы есть UNIQUE на
+        (запись, источник, смещения), и повтор той же ссылки в списке не должен
+        ронять запись целиком — идемпотентность `LinkStore.add` обещана его
+        докстрингой.
+        """
+        with self._connect() as conn:
+            conn.execute("DELETE FROM kb_links")
+            conn.executemany(
+                "INSERT OR IGNORE INTO kb_links (kb_entry_id, source_type, source_id,"
+                " offset_start, offset_end, confirmed_at, matched)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [(l["kb_entry_id"], l["source_type"], str(l["source_id"]),
+                  l["offset_start"], l["offset_end"], str(l["confirmed_at"]),
+                  l["matched"]) for l in links])
+
+    def load_kb_exclusions(self):
+        with self._connect() as conn:
+            return [{"kb_entry_id": r["kb_entry_id"], "text": r["text"]}
+                    for r in conn.execute("SELECT * FROM kb_exclusions ORDER BY id")]
+
+    def save_kb_exclusions(self, exclusions):
+        with self._connect() as conn:
+            conn.execute("DELETE FROM kb_exclusions")
+            conn.executemany(
+                "INSERT INTO kb_exclusions (kb_entry_id, text) VALUES (?, ?)",
+                [(e.get("kb_entry_id"), e["text"]) for e in exclusions])
+
     def rename_tag_everywhere(self, old_name, new_name):
         """Переименование ИЛИ слияние — вызывающий (engine.rename_tag_everywhere)
         не различает их, потому что settings.py тоже не различает: `rename_tag`

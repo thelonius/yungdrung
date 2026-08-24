@@ -196,11 +196,17 @@ KB_BROKEN = []
 def load_kb_entries():
     """Записи базы знаний для kb.build_index — раздел 5.7 ТЗ.
 
-    Источник — `База/*.md` в том же формате frontmatter, что и задачи. Папки
-    может не быть вовсе: заказчик вправе завести первую задачу раньше первой
-    записи базы, и это не поломка, а нет — пустой список.
+    Источник — база, если в неё уже переехали, иначе `База/*.md`. Порядок
+    именно такой: этап (b) переносит записи один раз, и после переноса markdown
+    остаётся на диске как был (мы его не удаляем — это данные заказчика), но
+    источником правды перестаёт быть. Читать оба разом нельзя: одна и та же
+    запись дала бы два совпадения в тексте.
     """
     KB_BROKEN.clear()
+    из_базы = get_store().load_kb_notes()
+    if из_базы:
+        return [{"id": з["id"], "title": з["title"], "aliases": з["aliases"]}
+                for з in из_базы]
     if not KB_DIR.is_dir():
         return []
     out = []
@@ -2059,6 +2065,88 @@ def _read_json_arg(value):
     return value
 
 
+def _kb_stores():
+    """Склады ссылок и отказов: БД, если база знаний туда переехала, иначе файлы.
+
+    Признак тот же, что у `load_kb_entries`, — есть ли записи в `kb_notes`.
+    Держать его в одном месте обязательно: разъехавшись, чтение записей и
+    чтение ссылок к ним начнут смотреть в разные хранилища, и подтверждённое
+    подчёркивание перестанет находиться.
+    """
+    if get_store().load_kb_notes():
+        return kb.SqliteLinkStore(VAULT), kb.SqliteExclusionStore(VAULT)
+    return kb.JsonLinkStore(VAULT), kb.JsonExclusionStore(VAULT)
+
+
+def migrate_kb_to_db(today=None):
+    """Перенести базу знаний из markdown в таблицы. Этап (b) плана.
+
+    Что переносится: `База/*.md` → `kb_notes`, `Ссылки.json` → `kb_links`,
+    `Исключения.json` → `kb_exclusions`. Файлы после переноса остаются на диске
+    нетронутыми: это данные заказчика, и удалять их за него мы не будем — но
+    источником правды они быть перестают (см. `load_kb_entries`).
+
+    Главная работа тут не в переливании, а в **смене идентификатора**. В
+    markdown записью правило имя файла, то есть строка «Василий Говнов», и
+    ссылки в `Ссылки.json` ссылаются ею. В базе id числовой. Поэтому запись
+    сохраняет своё прежнее имя в `legacy_file`, а ссылки перецепляются по нему.
+    Ссылка на запись, которой в `База/` уже нет (файл удалили руками, а ссылка
+    осталась), переносу не подлежит: в базе внешний ключ, и висячая строка туда
+    просто не ляжет. Такие считаются и возвращаются числом, а не выбрасываются
+    молча — заказчику стоит знать, что часть подчёркиваний исчезнет.
+
+    Идемпотентно: если в `kb_notes` уже что-то есть, второй прогон ничего не
+    делает. Повторный запуск после обрыва не должен заводить вторые копии.
+    """
+    склад = get_store()
+    if склад.load_kb_notes():
+        return {"ok": True, "skipped": "база знаний уже в БД",
+                "notes": 0, "links": 0, "exclusions": 0, "dropped_links": 0}
+
+    записи = load_kb_entries()   # здесь ещё markdown: таблица пуста
+    имя_к_id = {}
+    for з in записи:
+        тело = ""
+        путь = KB_DIR / f"{з['id']}.md"
+        if путь.is_file():
+            try:
+                _, тело = parse_file(путь)
+            except Exception:
+                тело = ""
+        имя_к_id[str(з["id"])] = склад.add_kb_note(
+            з["title"], з.get("aliases") or [], тело, legacy_file=str(з["id"]))
+
+    старые_ссылки = kb.JsonLinkStore(VAULT).all() if (VAULT / "Ссылки.json").is_file() else []
+    новые, потеряно = [], 0
+    for с in старые_ссылки:
+        новый_id = имя_к_id.get(str(с.get("kb_entry_id")))
+        if новый_id is None:
+            потеряно += 1
+            continue
+        новые.append({**с, "kb_entry_id": новый_id})
+    склад.save_kb_links(новые)
+
+    старые_отказы = (kb.JsonExclusionStore(VAULT).keys()
+                     if (VAULT / "Исключения.json").is_file() else set())
+    отказы = []
+    for запись, написание in старые_отказы:
+        # None в первом поле — «слово никогда не ссылка, у любой записи»: такой
+        # отказ не привязан к записи и переезжает как есть.
+        отказы.append({"kb_entry_id": имя_к_id.get(str(запись)) if запись is not None else None,
+                       "text": написание})
+    склад.save_kb_exclusions([о for о in отказы
+                              if о["kb_entry_id"] is not None or о["text"]])
+
+    return {"ok": True, "notes": len(имя_к_id), "links": len(новые),
+            "exclusions": len(отказы), "dropped_links": потеряно}
+
+
+def cmd_migrate_kb(args, today):
+    """Команда для этапа (b). Отдельная и запускаемая руками, а не при старте:
+    миграция трогает данные, и делать это молча в фоне нельзя."""
+    return migrate_kb_to_db(today)
+
+
 def cmd_kb_scan(args, today):
     """Гипотезы упоминаний записей базы знаний в тексте — R17, разделы 5.7/5.8 ТЗ.
 
@@ -2070,7 +2158,8 @@ def cmd_kb_scan(args, today):
     if not text or not entries:
         return {"hypotheses": [], "confirmed": [], "kb_broken": list(KB_BROKEN)}
 
-    исключения = kb.JsonExclusionStore(VAULT).keys()
+    _ссылки_склад, _отказы_склад = _kb_stores()
+    исключения = _отказы_склад.keys()
     индекс = kb.build_index(entries)
     гипотезы = kb.find_mentions(text, индекс, excluded=исключения)
 
@@ -2078,7 +2167,7 @@ def cmd_kb_scan(args, today):
     source_id = getattr(args, "source_id", None)
     подтверждённые = []
     if source_type and source_id:
-        подтверждённые = kb.JsonLinkStore(VAULT).for_source(source_type, source_id)
+        подтверждённые = _ссылки_склад.for_source(source_type, source_id)
         # Уже отвеченное не переспрашиваем: смещения подтверждённых ссылок
         # исключаются из новых гипотез по тому же месту в тексте.
         занято = {(с["offset_start"], с["offset_end"]) for с in подтверждённые}
@@ -2168,7 +2257,7 @@ def cmd_kb_confirm(args, today):
         return {"ok": False, "links": [],
                 "errors": [{"field": "mentions", "error": f"битый JSON: {e}"}]}
 
-    склад = kb.JsonLinkStore(VAULT)
+    склад, _ = _kb_stores()
     успешные, ошибки = [], []
     for i, гипотеза in enumerate(mentions):
         try:
@@ -2202,7 +2291,7 @@ def cmd_kb_reject(args, today):
     except json.JSONDecodeError as e:
         return {"ok": False, "errors": [{"field": "mention", "error": f"битый JSON: {e}"}]}
 
-    склад = kb.JsonExclusionStore(VAULT)
+    _, склад = _kb_stores()
     if getattr(args, "mute", False):
         склад.mute_word(гипотеза["matched"])
     else:
@@ -2683,6 +2772,10 @@ def main():
     k = sub.add_parser("skip", help="снять шаг")
     k.add_argument("task"); k.add_argument("step"); k.add_argument("--reason")
     k.set_defaults(func=cmd_skip)
+
+    mk = sub.add_parser("migrate-kb",
+                        help="перенести базу знаний из База/*.md в таблицы (этап b)")
+    mk.set_defaults(func=cmd_migrate_kb)
 
     ks = sub.add_parser("kb-scan", help="гипотезы упоминаний записей базы знаний в тексте")
     ks.add_argument("--text", default="")

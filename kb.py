@@ -844,3 +844,61 @@ class JsonExclusionStore(ExclusionStore):
         строки = [{"kb_entry_id": запись, "text": написание}
                   for запись, написание in sorted(keys, key=lambda k: (str(k[0]), k[1]))]
         _atomic_write(self.path, {"schema": SCHEMA, "excluded": строки})
+
+
+# --- хранение в БД: этап (b) переезда ---------------------------------------
+#
+# Третьи наследники, обещанные докстрингами `LinkStore` и `ExclusionStore`. Вся
+# работа — прочитать всё и записать всё; ни `find_mentions`, ни `confirm` о них
+# не знают, поэтому переезд не тронул ни строчки расчётов.
+#
+# Импорт `store` отложен внутрь методов: `kb` зовут ради `tokenize` и разбора
+# текста там, где база не нужна вовсе, а тянуть за собой sqlite и миграцию
+# схемы ради этого незачем. Обратной зависимости нет — `store` про `kb` не
+# знает, — так что цикла тут не возникает, вопрос только в цене импорта.
+
+class SqliteLinkStore(LinkStore):
+    """Ссылки в `вольт.db`, таблица `kb_links`.
+
+    Отличие от JSON-предшественника одно и важное: `kb_entry_id` здесь число,
+    внешний ключ на `kb_notes`, а не имя файла. Висячих ссылок на исчезнувшую
+    запись из-за этого не бывает — их уносит ON DELETE CASCADE, тогда как в
+    файле они оставались и всплывали пустотой в «Упоминается в».
+    """
+
+    def __init__(self, vault):
+        self.vault = Path(vault)
+
+    def _склад(self):
+        import store
+        return store.Store(self.vault / "вольт.db")
+
+    def _load(self):
+        return self._склад().load_kb_links()
+
+    def _commit(self, links):
+        self._склад().save_kb_links(links)
+
+
+class SqliteExclusionStore(ExclusionStore):
+    """Отказы в `вольт.db`, таблица `kb_exclusions`.
+
+    Наружу отдаётся то же множество пар `(kb_entry_id, написание)`, что и у
+    файлового склада: `None` в первом поле означает «слово целиком, у любой
+    записи». Форма продиктована `ExclusionStore`, а не таблицей.
+    """
+
+    def __init__(self, vault):
+        self.vault = Path(vault)
+
+    def _склад(self):
+        import store
+        return store.Store(self.vault / "вольт.db")
+
+    def _load(self):
+        return {(и["kb_entry_id"], и["text"]) for и in self._склад().load_kb_exclusions()}
+
+    def _commit(self, keys):
+        self._склад().save_kb_exclusions(
+            [{"kb_entry_id": запись, "text": написание}
+             for запись, написание in sorted(keys, key=lambda k: (str(k[0]), k[1]))])

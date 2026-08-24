@@ -681,3 +681,117 @@ def test_название_без_зацепок_попадает_в_skipped():
     assert пропущено[0]["field"] == "title"
     assert len(индекс.names) == 1, "недостижимое имя осталось в индексе"
     assert kb.find_mentions("встреча с Василием Говновым", индекс), "рабочая запись пострадала"
+
+
+# --- этап (b): переезд базы знаний в БД --------------------------------------
+#
+# Главное здесь не переливание строк, а смена идентификатора: в markdown записью
+# правило имя файла, в базе — число. Ссылки ссылались именем, и если их не
+# перецепить, подчёркивания просто исчезнут.
+
+import json  # noqa: E402
+import engine  # noqa: E402
+import store as store_mod  # noqa: E402
+
+
+@pytest.fixture
+def вольт_с_базой(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "VAULT", tmp_path)
+    monkeypatch.setattr(engine, "KB_DIR", tmp_path / "База")
+    (tmp_path / "База").mkdir()
+    (tmp_path / "База" / "Василий Говнов.md").write_text(
+        "---\ntype: note\ntitle: Василий Говнов\naliases: [Вася]\n---\n\nЮрист.\n",
+        encoding="utf-8")
+    (tmp_path / "База" / "Заявка на грант ФПГ.md").write_text(
+        "---\ntype: note\ntitle: Заявка на грант ФПГ\n---\n\nТело.\n", encoding="utf-8")
+    return tmp_path
+
+
+def _ссылки_файлом(vault, links):
+    (vault / "Ссылки.json").write_text(
+        json.dumps({"schema": 1, "links": links}, ensure_ascii=False), encoding="utf-8")
+
+
+def test_миграция_перецепляет_ссылки_с_имени_на_числовой_id(вольт_с_базой):
+    _ссылки_файлом(вольт_с_базой, [
+        {"kb_entry_id": "Василий Говнов", "source_type": "task", "source_id": "Грант",
+         "offset_start": 0, "offset_end": 4, "confirmed_at": "2026-08-20T10:00:00",
+         "matched": "Васе"}])
+
+    итог = engine.migrate_kb_to_db()
+    assert итог["notes"] == 2 and итог["links"] == 1 and итог["dropped_links"] == 0
+
+    записи = {з["title"]: з["id"] for з in engine.get_store().load_kb_notes()}
+    ссылка = engine.get_store().load_kb_links()[0]
+    assert ссылка["kb_entry_id"] == записи["Василий Говнов"]
+    assert isinstance(ссылка["kb_entry_id"], int), "id остался строкой — ссылка не перецеплена"
+
+
+def test_ссылка_на_исчезнувшую_запись_не_переезжает_но_считается(вольт_с_базой):
+    """Файл записи удалили руками, ссылка на неё осталась. В базе внешний ключ,
+    висячая строка туда не ляжет; молча её терять тоже нельзя — по ней у
+    заказчика пропадёт подчёркивание, и он должен об этом узнать."""
+    _ссылки_файлом(вольт_с_базой, [
+        {"kb_entry_id": "Кого-то удалили", "source_type": "task", "source_id": "Грант",
+         "offset_start": 0, "offset_end": 4, "confirmed_at": "2026-08-20T10:00:00",
+         "matched": "кого-то"}])
+    итог = engine.migrate_kb_to_db()
+    assert итог["links"] == 0
+    assert итог["dropped_links"] == 1
+
+
+def test_миграция_идемпотентна(вольт_с_базой):
+    """Повтор после обрыва не должен заводить вторые копии записей."""
+    первый = engine.migrate_kb_to_db()
+    второй = engine.migrate_kb_to_db()
+    assert первый["notes"] == 2
+    assert второй["notes"] == 0 and "skipped" in второй
+    assert len(engine.get_store().load_kb_notes()) == 2
+
+
+def test_markdown_остаётся_на_диске(вольт_с_базой):
+    """Это данные заказчика: источником правды они быть перестают, но удалять
+    их за него мы не будем."""
+    engine.migrate_kb_to_db()
+    assert (вольт_с_базой / "База" / "Василий Говнов.md").is_file()
+
+
+def test_после_миграции_записи_читаются_из_базы_а_не_из_файлов(вольт_с_базой):
+    """Читать оба источника разом нельзя: одна запись дала бы два совпадения
+    в тексте."""
+    до = engine.load_kb_entries()
+    assert [з["id"] for з in до] == ["Василий Говнов", "Заявка на грант ФПГ"]
+
+    engine.migrate_kb_to_db()
+    после = engine.load_kb_entries()
+    assert all(isinstance(з["id"], int) for з in после)
+    assert {з["title"] for з in после} == {"Василий Говнов", "Заявка на грант ФПГ"}
+    # Синонимы пережили переезд — по ним ищет `build_index`.
+    assert [з["aliases"] for з in после if з["title"] == "Василий Говнов"] == [["Вася"]]
+
+
+def test_распознавание_работает_на_перевезённых_записях(вольт_с_базой):
+    """Проверка сквозная: падежи, индекс и смещения должны пережить смену
+    хранилища, иначе переезд формально удался, а продукт сломался."""
+    engine.migrate_kb_to_db()
+    текст = "Позвонить Василию Говнову про заявку на грант ФПГ"
+    индекс = kb.build_index(engine.load_kb_entries())
+    найдено = kb.find_mentions(текст, индекс)
+    assert {м["title"] for м in найдено} == {"Василий Говнов", "Заявка на грант ФПГ"}
+    for м in найдено:
+        assert текст[м["offset_start"]:м["offset_end"]] == м["matched"]
+
+
+def test_склад_ссылок_в_бд_каскадно_чистится_при_удалении_записи(tmp_path):
+    """В файловом складе висячая ссылка оставалась и всплывала пустотой в
+    «Упоминается в». Внешний ключ такого не допускает."""
+    s = store_mod.Store(tmp_path / "вольт.db")
+    номер = s.add_kb_note("Василий Говнов", ["Вася"])
+    склад = kb.SqliteLinkStore(tmp_path)
+    склад.add({"entry_id": номер, "offset_start": 0, "offset_end": 4,
+               "matched": "Васе", "title": "Василий Говнов"},
+              source_type="task", source_id="Грант",
+              at=datetime(2026, 8, 24, 10, 0))
+    assert len(склад.for_entry(номер)) == 1
+    s.delete_kb_note(номер)
+    assert склад.all() == []
