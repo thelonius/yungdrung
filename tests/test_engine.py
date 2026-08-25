@@ -337,7 +337,7 @@ def test_notdone_leaves_step_open(vault):
     """Ключевое отличие от «сделан»: причина внешняя, решать всё равно надо."""
     path = task(vault, "Подшипник", [step(1, "Снять колесо", control_date=TODAY)])
     result = run(engine.cmd_notdone, task="Подшипник", step="1",
-                    reason="мастер в отпуске")
+                    reason="внешние обстоятельства")
 
     assert result["status"] == "pending"
     assert result["next_check"] == "2026-08-16"
@@ -350,7 +350,7 @@ def test_notdone_leaves_step_open(vault):
     assert step1.get("completed_date") is None
     assert step1["control_date"] == TOMORROW          # по умолчанию едет на завтра
     assert step1["log"][-1] == {"date": TODAY, "event": "not_done",
-                               "reason": "мастер в отпуске",
+                               "reason": "внешние обстоятельства",
                                "was": TODAY, "to": TOMORROW}
     assert meta["status"] == "ждёт"
 
@@ -362,12 +362,12 @@ def test_notdone_accumulates_counter(vault):
     run(engine.cmd_notdone, today=date(2026, 8, 15), task="Подшипник",
               step="1", reason="не было времени")
     run(engine.cmd_notdone, today=date(2026, 8, 16), task="Подшипник",
-              step="1", reason="сервис не отвечал")
+              step="1", reason="жду ответа от другого человека")
 
     meta, _ = read(path)
     assert len(meta["steps"][0]["log"]) == 2
     assert [e["reason"] for e in meta["steps"][0]["log"]] == [
-        "не было времени", "сервис не отвечал"]
+        "не было времени", "жду ответа от другого человека"]
     assert meta["stalled"] == 2
     assert engine.stall_count(meta["steps"][0]) == 2
 
@@ -385,11 +385,11 @@ def test_three_marks_in_a_row_is_stalling(vault):
     path = task(vault, "Подшипник", [
         step(1, "Снять колесо", control_date=TODAY, log=[
             {"date": date(2026, 8, 1), "event": "not_done", "reason": "не было времени"},
-            {"date": date(2026, 8, 8), "event": "not_done", "reason": "сервис не отвечал"},
+            {"date": date(2026, 8, 8), "event": "not_done", "reason": "жду ответа от другого человека"},
         ]),
     ])
     result = run(engine.cmd_notdone, task="Подшипник", step="1",
-                    reason="мастер в отпуске до сентября")
+                    reason="внешние обстоятельства")
 
     assert result["stalled"] == 3
     assert result["hint"] == "шаг буксует, нужен другой ход"
@@ -398,7 +398,7 @@ def test_three_marks_in_a_row_is_stalling(vault):
     # в сборке следующего дня шаг попадает в отдельный список
     build = run(engine.cmd_next, today=TOMORROW)
     assert [v["task"] for v in build["stalled"]] == ["Подшипник"]
-    assert build["stalled"][0]["last_reason"] == "мастер в отпуске до сентября"
+    assert build["stalled"][0]["last_reason"] == "внешние обстоятельства"
 
 
 def test_two_marks_not_yet_stalling(vault):
@@ -430,7 +430,7 @@ def test_defer_does_not_count_as_stalling(vault):
 def test_defer_sets_given_date(vault):
     path = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
     result = run(engine.cmd_defer, task="Грант", step="1",
-                    to="2026-08-20", reason="Говнов в отъезде")
+                    to="2026-08-20", reason="внешние обстоятельства")
 
     assert result["next_check"] == "2026-08-20"
     meta, _ = read(path)
@@ -438,7 +438,7 @@ def test_defer_sets_given_date(vault):
     assert meta["steps"][0]["control_date"] != TOMORROW
     assert meta["steps"][0]["status"] == "pending"
     assert meta["steps"][0]["log"][-1] == {
-        "date": TODAY, "event": "defer", "reason": "Говнов в отъезде",
+        "date": TODAY, "event": "defer", "reason": "внешние обстоятельства",
         "was": TODAY, "to": date(2026, 8, 20)}
     assert meta["status"] == "ждёт"
     assert meta["control_date"] == date(2026, 8, 20)
@@ -464,7 +464,7 @@ def test_bulk_defer_increases_counter_and_writes_distinct_log_entry(vault):
 
     result = run(engine.cmd_backlog_bulk, op="defer",
                 items=[{"task": "Грант", "step": "1"}, {"task": "Договор", "step": "1"}],
-                reason="разбор завала, отложил всё разом", to="2026-08-25")
+                reason="не было времени", to="2026-08-25")
 
     assert result["ok_count"] == 2 and result["fail_count"] == 0
     for item in result["items"]:
@@ -478,7 +478,7 @@ def test_bulk_defer_increases_counter_and_writes_distinct_log_entry(vault):
         assert step1["control_date"] == date(2026, 8, 25)
         entry = step1["log"][-1]
         assert entry["event"] == "mass_defer"          # не "defer" — отличимо
-        assert entry["reason"] == "разбор завала, отложил всё разом"
+        assert entry["reason"] == "не было времени"
         assert entry["to"] == date(2026, 8, 25)
         assert engine.stall_count(step1) == 1
 
@@ -513,13 +513,13 @@ def test_bulk_fail_marks_step_failed_and_opens_next(vault):
         step(2, "Отправить"),
     ])
     result = run(engine.cmd_backlog_bulk, op="fail",
-                items=[{"task": "Грант", "step": "1"}], reason="не срослось")
+                items=[{"task": "Грант", "step": "1"}], reason="внешние обстоятельства")
 
     assert result["ok_count"] == 1
     meta, _ = read(a)
     assert meta["steps"][0]["status"] == "failed"
     assert meta["steps"][0]["log"][-1] == {"date": TODAY, "event": "failed",
-                                           "reason": "не срослось"}
+                                           "reason": "внешние обстоятельства"}
     assert meta["steps"][1]["control_date"] == TODAY
 
 
@@ -564,7 +564,7 @@ def test_bulk_defer_requires_reason_and_date(vault):
     assert без_причины["errors"][0]["field"] == "reason"
 
     без_даты = run(engine.cmd_backlog_bulk, op="defer",
-                   items=[{"task": "Грант", "step": "1"}], reason="причина")
+                   items=[{"task": "Грант", "step": "1"}], reason="не было времени")
     assert без_даты["ok"] is False
     assert без_даты["errors"][0]["field"] == "to"
 
@@ -2431,7 +2431,7 @@ def test_defer_сохраняет_время_а_не_только_дату(vault
     «перенести на конкретный час», а тем более пресет «через час», был
     в принципе недостижим."""
     т = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
-    r = run(engine.cmd_defer, task=т.stem, step="1", to="2026-08-25 15:00", reason="занят")
+    r = run(engine.cmd_defer, task=т.stem, step="1", to="2026-08-25 15:00", reason="не было времени")
     assert r["ok"], r
     assert r["next_check"] == "2026-08-25 15:00"
     meta, _ = read(т)
@@ -2440,7 +2440,7 @@ def test_defer_сохраняет_время_а_не_только_дату(vault
 
 def test_notdone_с_явной_датой_сохраняет_время(vault):
     т = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
-    r = run(engine.cmd_notdone, task=т.stem, step="1", to="2026-08-25 09:30", reason="занят")
+    r = run(engine.cmd_notdone, task=т.stem, step="1", to="2026-08-25 09:30", reason="не было времени")
     assert r["ok"], r
     assert r["next_check"] == "2026-08-25 09:30"
 
@@ -2448,7 +2448,7 @@ def test_notdone_с_явной_датой_сохраняет_время(vault):
 def test_backlog_bulk_defer_сохраняет_время(vault):
     т = task(vault, "Грант", [step(1, "Собрать", control_date=date(2026, 8, 1))])
     r = run(engine.cmd_backlog_bulk, op="defer", items=[{"task": т.stem, "step": 1}],
-            to="2026-08-25 15:00", reason="занят")
+            to="2026-08-25 15:00", reason="не было времени")
     assert r["ok_count"] == 1, r
     assert r["items"][0]["next_check"] == "2026-08-25 15:00"
 
@@ -2476,3 +2476,48 @@ def test_через_дни_не_путается_с_через_часами():
     сейчас = datetime(2026, 8, 24, 14, 10)
     assert engine.parse_date_input("через 3 дня", date(2026, 8, 24), now=сейчас) == \
         date(2026, 8, 27)
+
+
+# --- причина обязана быть словом из справочника (R16) ------------------------
+
+def test_причина_не_из_справочника_отвергается(vault):
+    """Раздел 5.4 ТЗ: причина «из справочника», а не любой текст."""
+    т = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    r = run(engine.cmd_notdone, task=т.stem, step="1", reason="просто так")
+    assert not r["ok"]
+    assert r["errors"][0]["field"] == "reason"
+
+
+def test_причина_сверяется_без_учёта_регистра(vault):
+    """«Не было денег» и «не было денег» — одна причина, тем же приёмом, что
+    у тегов и шаблонов."""
+    т = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    r = run(engine.cmd_notdone, task=т.stem, step="1", reason="Не Было Денег")
+    assert r["ok"], r
+
+
+def test_архивная_причина_не_годится_для_новой_записи(vault):
+    """«Больше не предлагается при выборе новой» (решение по R16) — значит и
+    для CLI тоже: заархивированная причина остаётся в истории тех записей,
+    где уже стояла, но новый выбор её не принимает, дропдауна с ней нет."""
+    cfg.add_reason("своя причина", path=cfg.settings_path(vault))
+    cfg.archive_reason("своя причина", path=cfg.settings_path(vault))
+    т = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    r = run(engine.cmd_notdone, task=т.stem, step="1", reason="своя причина")
+    assert not r["ok"]
+    assert r["errors"][0]["field"] == "reason"
+
+
+def test_defer_и_fail_тоже_проверяют_причину(vault):
+    т = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    assert not run(engine.cmd_defer, task=т.stem, step="1", to="2026-09-01",
+                   reason="выдумка")["ok"]
+    assert not run(engine.cmd_fail, task=т.stem, step="1", reason="выдумка")["ok"]
+
+
+def test_пустая_причина_не_проверяется_по_справочнику(vault):
+    """Обязательна причина или нет — решает вызывающий (оболочка или argparse);
+    этот справочник проверяет только то, что уже указано."""
+    т = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    r = run(engine.cmd_notdone, task=т.stem, step="1", reason=None)
+    assert r["ok"], r

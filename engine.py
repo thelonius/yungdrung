@@ -2115,8 +2115,28 @@ def cmd_done(args, today):
             "task_status": task_status(task, today)}
 
 
+def _reason_error(reason):
+    """Причина обязана быть словом из справочника — раздел 5.4 ТЗ прямо
+    говорит «из справочника», не «любой текст». Сравнение без регистра, тем же
+    приёмом, что у тегов и шаблонов: «Не было денег» и «не было денег» — одна
+    причина, а не две.
+
+    Пустую причину сюда не пускают вызывающие: обязательна она или нет,
+    решает конкретная операция (у провала — всегда, у переноса — оболочка),
+    а не этот справочник. Здесь только «если указана — должна быть настоящей».
+    """
+    if not reason:
+        return None
+    if reason.strip().lower() not in {r.lower() for r in get_reasons()}:
+        return {"field": "reason", "error": f"Причина «{reason}» не из справочника"}
+    return None
+
+
 def cmd_notdone(args, today):
     """Шаг остаётся открытым: причина обычно внешняя, решать всё равно надо."""
+    ошибка = _reason_error(args.reason)
+    if ошибка:
+        return {"ok": False, "errors": [ошибка]}
     task = find_task(args.task)
     step = get_step(task, args.step)
     if step.get("status") != OPEN:
@@ -2144,6 +2164,9 @@ def _defer_step(task, step, today, to, reason, event="defer"):
 
 
 def cmd_defer(args, today):
+    ошибка = _reason_error(args.reason)
+    if ошибка:
+        return {"ok": False, "errors": [ошибка]}
     task = find_task(args.task)
     step = get_step(task, args.step)
     if step.get("status") != OPEN:
@@ -2162,6 +2185,9 @@ def cmd_fail(args, today):
     что снятый шаг перестал быть нужен, а проваленный был нужен и не случился —
     и в истории это разные вещи.
     """
+    ошибка = _reason_error(args.reason)
+    if ошибка:
+        return {"ok": False, "errors": [ошибка]}
     task = find_task(args.task)
     step = get_step(task, args.step)
     if is_closed(step):
@@ -2228,6 +2254,9 @@ def cmd_backlog_bulk(args, today):
         return {"ok": False, "errors": [{"field": "op", "error": f"неизвестное действие: {op}"}]}
     if op in ("defer", "fail") and not reason:
         return {"ok": False, "errors": [{"field": "reason", "error": "причина обязательна"}]}
+    ошибка = _reason_error(reason)
+    if ошибка:
+        return {"ok": False, "errors": [ошибка]}
     if op == "defer" and to is None:
         return {"ok": False, "errors": [{"field": "to", "error": "нужна новая дата"}]}
 
