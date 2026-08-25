@@ -85,7 +85,7 @@ class Handler(BaseHTTPRequestHandler):
         route = unquote(self.path.split("?")[0])
         СТРАНИЦЫ = {"/": "feed.html", "/лента": "feed.html", "/новая": "index.html",
                     "/шаблоны": "templates.html", "/задача": "task.html",
-                    "/настройки": "settings.html"}
+                    "/настройки": "settings.html", "/архив": "archive.html"}
         if route in СТРАНИЦЫ:
             return self._static(СТРАНИЦЫ[route], "text/html; charset=utf-8")
         if route.endswith(".css"):
@@ -99,6 +99,10 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/templates":
             начало = _param(self.path, "start")
             return self._json(200, engine.cmd_templates(_args(start=начало), date.today()))
+        if route == "/api/archive":
+            return self._json(200, engine.cmd_archive(
+                _args(tag=_param(self.path, "tag"), since=_param(self.path, "since"),
+                      until=_param(self.path, "until")), date.today()))
         if route == "/api/search":
             return self._json(200, engine.cmd_search(
                 _args(text=_param(self.path, "q"), kind=_param(self.path, "kind"),

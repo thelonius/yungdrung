@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Архив — Yungdrung</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/feed.css">
+<link rel="stylesheet" href="/archive.css">
+</head>
+<body>
+
+<main class="wrap">
+
+  <header class="head">
+    <div class="head-row">
+      <h1>Архив</h1>
+      <div class="head-links">
+        <a class="ghost small" href="/">К ленте</a>
+      </div>
+    </div>
+    <p class="hint">Закрытые и отменённые задачи. «Как я это делал в прошлый раз»</p>
+  </header>
+
+  <div class="field">
+    <label for="q">Поиск</label>
+    <input type="text" id="q" autocomplete="off"
+           placeholder="грант, декларация, Василий Говнов — по любому падежу">
+  </div>
+
+  <!-- Фильтры действуют на список истории; пока идёт поиск (поле «Поиск» не
+       пустое), список истории скрыт — это два разных ответа, не одна лента. -->
+  <div class="archive-filters" id="filters">
+    <div class="field">
+      <label for="f-tag">Тег</label>
+      <input type="text" id="f-tag" autocomplete="off" placeholder="например, финансы">
+    </div>
+    <div class="field">
+      <label for="f-since">С даты</label>
+      <input type="text" id="f-since" autocomplete="off" placeholder="18.08, неделю назад">
+    </div>
+    <div class="field">
+      <label for="f-until">По дату</label>
+      <input type="text" id="f-until" autocomplete="off" placeholder="сегодня">
+    </div>
+    <button type="button" class="ghost small" id="f-clear">Сбросить</button>
+  </div>
+
+  <p class="note" id="count"></p>
+  <ol class="archive-list" id="list"></ol>
+  <p class="empty" id="empty" hidden>Ничего не нашлось</p>
+
+</main>
+
+<template id="cycle-tpl">
+  <li class="archive-card is-group">
+    <button type="button" class="archive-group-head">
+      <span class="archive-group-title"></span>
+      <span class="archive-group-count"></span>
+      <span class="archive-group-toggle">Показать циклы ▾</span>
+    </button>
+    <ol class="archive-cycles" hidden></ol>
+  </li>
+</template>
+
+<script src="/archive.js"></script>
+</body>
+</html>

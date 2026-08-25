@@ -1,0 +1,93 @@
+/* Список истории и раскрывающиеся группы циклов. Общие токены — в style.css. */
+
+.archive-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin: 4px 0 18px;
+}
+
+.archive-filters .field { flex: 1 1 140px; min-width: 120px; }
+
+.archive-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.archive-card {
+  background: var(--surface);
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 16px;
+}
+
+.archive-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.archive-row-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.archive-row-title { font-weight: 650; }
+.archive-row-meta { font-size: 13px; color: var(--muted); }
+.archive-row-date { font-size: 13px; color: var(--muted); white-space: nowrap; }
+
+.archive-status {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 100px;
+  border: 1.5px solid var(--line-strong);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.archive-status.is-cancelled { color: var(--danger); border-color: var(--danger); }
+
+.archive-group-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.archive-group-title { font-weight: 650; }
+.archive-group-count { font-size: 13px; color: var(--muted); margin-right: auto; margin-left: 8px; }
+.archive-group-toggle { font-size: 13px; color: var(--accent, var(--ink)); white-space: nowrap; }
+
+.archive-cycles {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.archive-cycles .archive-row-title { font-weight: 500; }
+
+/* Результаты поиска — та же карточка, но без группировки: адрес найденного
+   разный (задача или запись базы), а расчёт «куда вести» на строке-агрегате
+   уже не поместится. */
+.search-kind {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}

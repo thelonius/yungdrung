@@ -2276,3 +2276,95 @@ def test_записи_базы_знаний_тоже_ищутся(vault):
     r = run(engine.cmd_search, text="юристу", kind=None, limit=None)
     assert [н["source_type"] for н in r["results"]] == ["kb_note"]
     assert r["results"][0]["title"] == "Василий Говнов"
+
+
+# --- архив: история и свёртка циклов (R24, Q24) ------------------------------
+
+@pytest.fixture
+def вольт_с_архивом(vault):
+    склад = tpl.JsonStore(vault)
+    склад.save({"name": "Налоги", "steps": [{"title": "Подать", "offset_days": 0}],
+                "recurrence": {"anchor": "2026-06-05", "freq": "monthly",
+                               "bymonthday": [5]}})
+    for d in (date(2026, 6, 5), date(2026, 7, 5), date(2026, 8, 5)):
+        run(engine.cmd_recur, today=d, name=None, limit=None)
+        имя = f"Налоги — {d:%d.%m.%Y}"
+        run(engine.cmd_done, today=d, task=имя, step=1)
+
+    run(engine.cmd_create, json=json.dumps({
+        "title": "Разовая закрытая", "tags": ["личное"], "start_date": "2026-08-10",
+        "steps": [{"title": "Шаг", "control_date": "2026-08-10"}]}))
+    run(engine.cmd_done, today=date(2026, 8, 11), task="Разовая закрытая", step=1)
+
+    run(engine.cmd_create, json=json.dumps({
+        "title": "Отменённая", "start_date": "2026-08-01",
+        "steps": [{"title": "Шаг"}]}))
+    run(engine.cmd_cancel, task="Отменённая", reason="не актуально")
+
+    run(engine.cmd_create, json=json.dumps({
+        "title": "Ещё живая", "steps": [{"title": "Шаг", "control_date": "2026-12-01"}]}))
+    return vault
+
+
+def test_архив_не_показывает_открытые_задачи(вольт_с_архивом):
+    r = run(engine.cmd_archive, tag=None, since=None, until=None)
+    имена = {i["task"] for i in r["items"] if i["kind"] == "task"}
+    assert "Ещё живая" not in имена
+    assert r["count"] == 5  # 3 цикла + разовая + отменённая
+
+
+def test_циклы_повторения_сворачиваются_в_группу(вольт_с_архивом):
+    r = run(engine.cmd_archive, tag=None, since=None, until=None)
+    группы = [i for i in r["items"] if i["kind"] == "cycle_group"]
+    assert len(группы) == 1
+    группа = группы[0]
+    assert группа["template_name"] == "Налоги"
+    assert группа["count"] == 3
+    assert [t["cycle_key"] for t in группа["tasks"]] == \
+        ["2026-08-05", "2026-07-05", "2026-06-05"]  # свежее выше
+
+
+def test_отменённая_и_разовая_не_группируются(вольт_с_архивом):
+    r = run(engine.cmd_archive, tag=None, since=None, until=None)
+    одиночные = {i["task"] for i in r["items"] if i["kind"] == "task"}
+    assert одиночные == {"Разовая закрытая", "Отменённая"}
+
+
+def test_фильтр_по_тегу(вольт_с_архивом):
+    r = run(engine.cmd_archive, tag="личное", since=None, until=None)
+    assert r["count"] == 1
+    assert r["items"][0]["task"] == "Разовая закрытая"
+
+
+def test_фильтр_по_периоду_разбивает_группу(вольт_с_архивом):
+    """Один цикл прошёл фильтр, два отсеялись — группе сворачивать больше
+    нечего, она обязана превратиться в одиночную строку."""
+    r = run(engine.cmd_archive, tag=None, since=None, until="2026-07-01")
+    циклы = [i for i in r["items"] if i.get("template_name") == "Налоги"]
+    assert len(циклы) == 1
+    assert циклы[0]["kind"] == "task"
+    assert циклы[0]["task"] == "Налоги — 05.06.2026"
+
+
+def test_период_фильтрует_отменённую_по_дате_начала(вольт_с_архивом):
+    """У отменённой задачи может не быть completed_date вовсе — фильтровать её
+    неоткуда, кроме даты начала (2026-08-01 в этом вольте)."""
+    r = run(engine.cmd_archive, tag=None, since="2026-08-01", until="2026-08-01")
+    имена = {i["task"] for i in r["items"] if i["kind"] == "task"}
+    assert имена == {"Отменённая"}
+
+
+def test_архив_отклоняет_непонятную_дату_границы(vault):
+    r = run(engine.cmd_archive, tag=None, since="тридцать первое февраля", until=None)
+    assert not r["ok"]
+    assert r["errors"][0]["field"] == "since"
+
+
+def test_граница_периода_смотрит_в_прошлое_а_не_вперёд(vault):
+    """`parse_period_date` — не то же самое, что `parse_date_input`: тот
+    планирует вперёд («18.08» без года ушло бы в следующий август), а для
+    границы архива это означало бы «ничего не найдено» вместо прошлого."""
+    assert engine.parse_period_date("18.08", date(2026, 8, 25)) == date(2026, 8, 18)
+    assert engine.parse_period_date("01.01", date(2026, 8, 25)) == date(2026, 1, 1)
+    # Ещё не наступившая в этом году дата — годом раньше, не годом позже.
+    assert engine.parse_period_date("31.12", date(2026, 1, 5)) == date(2025, 12, 31)

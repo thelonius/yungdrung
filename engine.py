@@ -1858,6 +1858,140 @@ def cmd_refresh(args, today):
             "forced": bool(args.force), "broken": list(BROKEN)}
 
 
+def parse_period_date(text, today):
+    """Дата для границы периода — «с даты», «по дату» в архиве.
+
+    Отдельно от `parse_date_input` намеренно, а не тот же вызов: тот планирует
+    вперёд («пн» значит ближайший понедельник **после** сегодня — так и должен
+    вести себя срок задачи), а граница периода смотрит в прошлое. «18.08» без
+    года при разборе вперёд ушло бы в следующий август — для фильтра истории
+    это означало бы «ничего не найдено» вместо прошлого августа, который
+    заказчик и имел в виду. Здесь бортик наоборот: день без года берётся не
+    позже сегодня, а если такой день ещё не наступил в этом году — годом раньше.
+    """
+    if text is None:
+        return None
+    s = str(text).strip().lower().replace("ё", "е")
+    if not s:
+        return None
+    if s == "сегодня":
+        return today
+    if s == "вчера":
+        return today - timedelta(days=1)
+    if s == "позавчера":
+        return today - timedelta(days=2)
+    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", s)
+    if m:
+        return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    m = re.fullmatch(r"(\d{1,2})[.\-/](\d{1,2})(?:[.\-/](\d{2,4}))?", s)
+    if m:
+        день, месяц = int(m.group(1)), int(m.group(2))
+        if m.group(3):
+            год = int(m.group(3))
+            return date(год + 2000 if год < 100 else год, месяц, день)
+        try:
+            кандидат = date(today.year, месяц, день)
+        except ValueError:
+            raise ValueError(f"не дата: {text!r}")
+        return кандидат if кандидат <= today else date(today.year - 1, месяц, день)
+    raise ValueError(f"не дата: {text!r}")
+
+
+def _finished_date(task):
+    """Дата, по которой архив фильтрует задачу периодом.
+
+    Для закрытой — самое позднее `completed_date` среди листьев: момент, когда
+    задача реально завершилась, а не когда её завели. Для отменённой листья
+    даты закрытия могут не нести вовсе (отмена не требует закрывать шаги), тогда
+    берётся дата начала — точнее взять неоткуда, а вовсе не фильтровать её по
+    периоду означало бы, что отменённые задачи не находятся периодом никогда.
+    """
+    листья = leaves_of(task)
+    завершения = [as_date(s["completed_date"]) for s in листья if s.get("completed_date")]
+    if завершения:
+        return max(завершения)
+    return as_date(task["meta"].get("start_date"))
+
+
+def cmd_archive(args, today):
+    """История: закрытые и отменённые задачи. Раздел 5.9 ТЗ, требование R24.
+
+    Фильтры — тег и период, дальше по тексту ищет `cmd_search`: полнотекстовый
+    поиск и просмотр списком — разные операции с разными ответами, а не одна
+    команда с необязательными полями.
+
+    Циклы одного повторения сворачиваются в одну строку с возможностью
+    развернуть (решение по Q24: заказчик выбрал именно так, а не список всех
+    экземпляров подряд). Свёртка — по `template_name`, тому самому полю из
+    схемы v3: группа получает `kind="cycle_group"` и список задач внутри,
+    одиночная задача или шаблон с единственным закрытым циклом — `kind="task"`,
+    сворачивать нечего.
+    """
+    тег = getattr(args, "tag", None)
+    ошибки = []
+    since = until = None
+    try:
+        if getattr(args, "since", None):
+            since = parse_period_date(args.since, today)
+    except ValueError:
+        ошибки.append({"field": "since", "error": f"Дату не понял: «{args.since}»"})
+    try:
+        if getattr(args, "until", None):
+            until = parse_period_date(args.until, today)
+    except ValueError:
+        ошибки.append({"field": "until", "error": f"Дату не понял: «{args.until}»"})
+    if ошибки:
+        return {"ok": False, "errors": ошибки}
+
+    строки = []
+    for task in load_tasks():
+        status = task_status(task, today)
+        if status not in ("done", "cancelled"):
+            continue
+        теги = task["meta"].get("tags") or []
+        if тег and тег not in теги:
+            continue
+        когда = _finished_date(task)
+        if since and (когда is None or когда < since):
+            continue
+        if until and (когда is None or когда > until):
+            continue
+        листья = leaves_of(task)
+        строки.append({
+            "task": task["path"].stem,
+            "status": STATUS_RU[status],
+            "date": когда.isoformat() if когда else None,
+            "category": теги,
+            "steps_total": len(листья),
+            "template_name": task["meta"].get("template_name"),
+            "cycle_key": task["meta"].get("cycle_key"),
+        })
+
+    группы, одиночные = {}, []
+    for r in строки:
+        (группы.setdefault(r["template_name"], []) if r["template_name"] else одиночные).append(r)
+
+    out = []
+    for имя, циклы in группы.items():
+        циклы.sort(key=lambda r: r["cycle_key"] or "", reverse=True)
+        if len(циклы) > 1:
+            out.append({"kind": "cycle_group", "template_name": имя,
+                       "count": len(циклы), "tasks": циклы})
+        else:
+            out.append({"kind": "task", **циклы[0]})
+    for r in одиночные:
+        out.append({"kind": "task", **r})
+
+    def _дата_сортировки(item):
+        if item["kind"] == "cycle_group":
+            даты = [t["date"] for t in item["tasks"] if t["date"]]
+            return max(даты) if даты else ""
+        return item.get("date") or ""
+
+    out.sort(key=_дата_сортировки, reverse=True)
+    return {"ok": True, "today": today.isoformat(), "count": len(строки), "items": out}
+
+
 def cmd_list(args, today):
     out = []
     for task in load_tasks():
@@ -2897,6 +3031,12 @@ def main():
     k = sub.add_parser("skip", help="снять шаг")
     k.add_argument("task"); k.add_argument("step"); k.add_argument("--reason")
     k.set_defaults(func=cmd_skip)
+
+    ar = sub.add_parser("archive", help="история: закрытые и отменённые задачи")
+    ar.add_argument("--tag", help="только с этим тегом")
+    ar.add_argument("--since", help="не раньше этой даты")
+    ar.add_argument("--until", help="не позже этой даты")
+    ar.set_defaults(func=cmd_archive)
 
     sr = sub.add_parser("search", help="поиск по задачам, заметкам и базе знаний")
     sr.add_argument("text")
