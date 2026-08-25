@@ -8,8 +8,9 @@
 
 Календарь: 17 августа 2026 — понедельник. Рабочее время 09:00–21:00.
 """
+import json
 import sys
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -206,3 +207,64 @@ def test_битый_файл_настроек_не_отменяет_напоми
     cfg.settings_path(вольт).write_text("{ не json", encoding="utf-8")
     from types import SimpleNamespace
     assert remind.повтор_минут(SimpleNamespace(repeat=None)) == notify.ПОВТОР_МИНУТ
+
+
+# --- звук тоста и автобэкап по расписанию (сверка покрытия) ------------------
+
+def test_тост_без_звука_несёт_silent_audio(monkeypatch):
+    """`notifications.sound=False` должен реально выключать звук, а не просто
+    валидироваться и лежать в файле."""
+    захвачено = {}
+
+    class Заглушка:
+        returncode = 0
+        stderr = ""
+
+    def перехват(cmd, **kw):
+        захвачено["script"] = cmd[-1]
+        return Заглушка()
+
+    monkeypatch.setattr("subprocess.run", перехват)
+    канал = notify.WindowsToast()
+    канал.send([{"task": "Т", "title": "Ш", "postponed": 0}], sound=False)
+    assert '<audio silent="true"/>' in захвачено["script"]
+
+    канал.send([{"task": "Т", "title": "Ш", "postponed": 0}], sound=True)
+    assert '<audio silent="true"/>' not in захвачено["script"]
+
+
+def test_автобэкап_снимает_копию_когда_пора(вольт):
+    (вольт / "Задачи").mkdir()
+    данные = cfg.defaults()
+    данные["backup"]["frequency_hours"] = 24
+    данные["backup"]["folder"] = str(вольт / "копии")
+    cfg.save(данные, cfg.settings_path(вольт))
+
+    remind.автобэкап(date(2026, 8, 24))
+    копии = list((вольт / "копии").glob("*.zip"))
+    assert len(копии) == 1
+
+
+def test_автобэкап_на_битом_файле_настроек_падает_на_дефолт(вольт):
+    """`_backup_settings` ловит `SettingsError` и подставляет дефолты (частота
+    24 часа) — автобэкап не должен упасть из-за испорченного JSON, он же не
+    виноват в том, что файл настроек сломан руками."""
+    (вольт / "Задачи").mkdir()
+    cfg.settings_path(вольт).write_text("{ не json", encoding="utf-8")
+
+    remind.автобэкап(date(2026, 8, 24))
+    копии = list(engine.default_backup_dir().glob("*.zip"))
+    assert len(копии) == 1
+
+
+def test_автобэкап_не_снимает_вторую_копию_раньше_срока(вольт):
+    (вольт / "Задачи").mkdir()
+    dest = вольт / "копии"
+    данные = cfg.defaults()
+    данные["backup"]["frequency_hours"] = 24
+    данные["backup"]["folder"] = str(dest)
+    cfg.save(данные, cfg.settings_path(вольт))
+
+    remind.автобэкап(date(2026, 8, 24))
+    remind.автобэкап(date(2026, 8, 24))
+    assert len(list(dest.glob("*.zip"))) == 1

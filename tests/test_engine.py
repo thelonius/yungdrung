@@ -2368,3 +2368,51 @@ def test_граница_периода_смотрит_в_прошлое_а_не_
     assert engine.parse_period_date("01.01", date(2026, 8, 25)) == date(2026, 1, 1)
     # Ещё не наступившая в этом году дата — годом раньше, не годом позже.
     assert engine.parse_period_date("31.12", date(2026, 1, 5)) == date(2025, 12, 31)
+
+
+# --- настройки базы знаний доходят до сканирования (сверка покрытия) --------
+
+def test_auto_recognition_выключенный_гасит_новые_гипотезы(vault):
+    """Флаг выключает поиск новых совпадений, а не сканирование как таковое:
+    уже подтверждённая ссылка — факт, который заказчик когда-то подтвердил
+    сам, и выключенный флаг не должен стирать историю."""
+    (vault / "База").mkdir()
+    (vault / "База" / "Василий Говнов.md").write_text(
+        "---\ntype: note\ntitle: Василий Говнов\n---\n\nЮрист.\n", encoding="utf-8")
+    engine.migrate_kb_to_db()
+
+    данные = cfg.defaults()
+    cfg.save(данные, cfg.settings_path(vault))
+    r = run(engine.cmd_kb_scan, text="Спросить у Василия Говнова",
+            source_type=None, source_id=None)
+    assert r["hypotheses"], "с настройками по умолчанию гипотеза должна найтись"
+
+    данные["kb"]["auto_recognition"] = False
+    cfg.save(данные, cfg.settings_path(vault))
+    r = run(engine.cmd_kb_scan, text="Спросить у Василия Говнова",
+            source_type=None, source_id=None)
+    assert r["hypotheses"] == []
+
+
+def test_min_match_length_читается_из_настроек(vault):
+    """Раньше поле лежало в файле и искало ровно четыре буквы, что бы там
+    ни было записано — `kb.MIN_MATCH` был зашит намертво."""
+    (vault / "База").mkdir()
+    (vault / "База" / "Уно.md").write_text(
+        "---\ntype: note\ntitle: Уно\n---\n\nТри буквы.\n", encoding="utf-8")
+    engine.migrate_kb_to_db()
+
+    данные = cfg.defaults()
+    данные["kb"]["min_match_length"] = 2
+    cfg.save(данные, cfg.settings_path(vault))
+    r = run(engine.cmd_kb_scan, text="Свериться с Уно", source_type=None, source_id=None)
+    assert any(h["title"] == "Уно" for h in r["hypotheses"])
+
+
+def test_битые_настройки_kb_не_роняют_сканирование(vault):
+    (vault / "База").mkdir()
+    (vault / "База" / "Уно.md").write_text(
+        "---\ntype: note\ntitle: Уно\n---\n\n.\n", encoding="utf-8")
+    cfg.settings_path(vault).write_text("{ не json", encoding="utf-8")
+    r = run(engine.cmd_kb_scan, text="проверка", source_type=None, source_id=None)
+    assert r == {"hypotheses": [], "confirmed": [], "kb_broken": []}

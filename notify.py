@@ -131,7 +131,7 @@ class Console:
 
     name = "console"
 
-    def send(self, items, url=None):
+    def send(self, items, url=None, sound=True):
         заголовок, текст = подпись(items)
         print(f"\n=== {заголовок} ===\n{текст}\n", flush=True)
         return True
@@ -157,6 +157,7 @@ $xml = @"
     <text>{HEAD}</text>
     <text>{BODY}</text>
   </binding></visual>
+  {AUDIO}
 </toast>
 "@
 $doc = New-Object Windows.Data.Xml.Dom.XmlDocument
@@ -172,12 +173,17 @@ $appId = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershe
         return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                  .replace('"', "&quot;"))
 
-    def send(self, items, url=None):
+    def send(self, items, url=None, sound=True):
         заголовок, текст = подпись(items)
+        # <audio silent="true"/> — задокументированный элемент схемы тоста
+        # Windows, а не костыль: без звука по умолчанию тост звучит, и молчания
+        # можно добиться только явным тегом, не отсутствием тега.
+        аудио = "" if sound else '<audio silent="true"/>'
         скрипт = (self.PS
                   .replace("{HEAD}", self.escape(заголовок))
                   .replace("{BODY}", self.escape(текст))
-                  .replace("{URL}", self.escape(url or "http://127.0.0.1:8765/")))
+                  .replace("{URL}", self.escape(url or "http://127.0.0.1:8765/"))
+                  .replace("{AUDIO}", аудио))
         try:
             r = subprocess.run(
                 ["powershell", "-NoProfile", "-NonInteractive",
@@ -198,7 +204,7 @@ class Telegram:
 
     name = "telegram"
 
-    def send(self, items, url=None):
+    def send(self, items, url=None, sound=True):
         print("[канал telegram ещё не готов]", file=sys.stderr)
         return False
 

@@ -2406,27 +2406,47 @@ def cmd_search(args, today):
     return {"ok": True, "query": запрос, "count": len(найдено), "results": найдено}
 
 
+def _kb_settings():
+    """Настройки автораспознавания. Тот же приём, что `_work`/`_backup_settings`:
+    файл — база, битый файл не роняет сканирование."""
+    try:
+        сохранённые = cfg.load(cfg.settings_path(VAULT))["kb"]
+    except cfg.SettingsError:
+        сохранённые = cfg.defaults()["kb"]
+    return сохранённые
+
+
 def cmd_kb_scan(args, today):
     """Гипотезы упоминаний записей базы знаний в тексте — R17, разделы 5.7/5.8 ТЗ.
 
     Индекс собирается заново на каждый вызов, не кэшируется: заказчик правит
     заметки базы в Obsidian, а кэш без инвалидации на эту правку не среагирует.
+
+    `kb.auto_recognition` выключает поиск новых совпадений целиком — заказчик
+    решил, что подчёркивания мешают, а не сканирование сломано. Уже
+    подтверждённые ссылки при этом продолжают показываться: это не гипотезы,
+    а факт, который заказчик когда-то подтвердил сам, и выключенный флаг не
+    должен стирать историю. `kb.min_match_length` идёт в `build_index` вместо
+    зашитой в `kb.py` константы — раньше это поле лежало в файле настроек,
+    а искало ровно четыре буквы, что бы там ни было записано.
     """
-    text = getattr(args, "text", None) or ""
-    entries = load_kb_entries()
-    if not text or not entries:
-        return {"hypotheses": [], "confirmed": [], "kb_broken": list(KB_BROKEN)}
-
-    _ссылки_склад, _отказы_склад = _kb_stores()
-    исключения = _отказы_склад.keys()
-    индекс = kb.build_index(entries)
-    гипотезы = kb.find_mentions(text, индекс, excluded=исключения)
-
+    настройки = _kb_settings()
     source_type = getattr(args, "source_type", None)
     source_id = getattr(args, "source_id", None)
-    подтверждённые = []
-    if source_type and source_id:
-        подтверждённые = _ссылки_склад.for_source(source_type, source_id)
+    _ссылки_склад, _отказы_склад = _kb_stores()
+    подтверждённые = (_ссылки_склад.for_source(source_type, source_id)
+                      if source_type and source_id else [])
+
+    text = getattr(args, "text", None) or ""
+    entries = load_kb_entries()
+    if not text or not entries or not настройки.get("auto_recognition", True):
+        return {"hypotheses": [], "confirmed": подтверждённые, "kb_broken": list(KB_BROKEN)}
+
+    исключения = _отказы_склад.keys()
+    индекс = kb.build_index(entries, min_match=настройки.get("min_match_length") or kb.MIN_MATCH)
+    гипотезы = kb.find_mentions(text, индекс, excluded=исключения)
+
+    if подтверждённые:
         # Уже отвеченное не переспрашиваем: смещения подтверждённых ссылок
         # исключаются из новых гипотез по тому же месту в тексте.
         занято = {(с["offset_start"], с["offset_end"]) for с in подтверждённые}
