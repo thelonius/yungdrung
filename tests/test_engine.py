@@ -2521,3 +2521,37 @@ def test_пустая_причина_не_проверяется_по_справ
     т = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
     r = run(engine.cmd_notdone, task=т.stem, step="1", reason=None)
     assert r["ok"], r
+
+
+# --- разбор завала: сортировка и CLI (R20) -----------------------------------
+
+def test_завал_сортирован_по_давности_а_не_по_буксованию(vault):
+    """Раздел 6.9 ТЗ: «сортировка по умолчанию — сначала самое давнее», без
+    исключения для буксующих. Раньше буксующий элемент всплывал наверх поверх
+    более старой просрочки — удобно на глаз, но противоречит ТЗ."""
+    task(vault, "Свежее", [step(1, "Шаг", control_date=date(2026, 8, 14))])
+    task(vault, "Буксует", [
+        step(1, "Шаг", control_date=date(2026, 8, 12), log=[
+            {"date": date(2026, 7, 20), "event": "not_done", "reason": "не было времени"},
+            {"date": date(2026, 7, 27), "event": "not_done", "reason": "не было времени"},
+            {"date": date(2026, 8, 3), "event": "not_done", "reason": "не было времени"},
+        ]),
+    ])
+    task(vault, "Самое старое", [step(1, "Шаг", control_date=date(2026, 8, 1))])
+
+    r = run(engine.cmd_backlog)
+    имена = [i["task"] for i in r["backlog"]]
+    assert имена == ["Самое старое", "Буксует", "Свежее"]
+
+
+def test_backlog_bulk_принимает_json_строку_как_из_cli(vault):
+    т = task(vault, "Грант", [step(1, "Собрать", control_date=date(2026, 8, 1))])
+    r = run(engine.cmd_backlog_bulk, op="done",
+            items=json.dumps([{"task": т.stem, "step": 1}]))
+    assert r["ok_count"] == 1, r
+
+
+def test_backlog_bulk_битый_json_даёт_структурную_ошибку(vault):
+    r = run(engine.cmd_backlog_bulk, op="done", items="не json")
+    assert r["ok"] is False
+    assert r["errors"][0]["field"] == "items"

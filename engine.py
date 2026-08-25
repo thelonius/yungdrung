@@ -640,11 +640,16 @@ def cmd_feed(args, today):
 
 
 def cmd_backlog(args, today):
-    """Разбор завала — раздел 6.9 ТЗ. Всё просроченное, худшее сверху."""
+    """Разбор завала — раздел 6.9 ТЗ. Сортировка по умолчанию — сначала самое
+    давнее, то есть по `show_at` возрастанием: пункт ТЗ явный и без исключений
+    для буксующих. Раньше буксующие элементы всплывали наверх поверх более
+    старых просрочек (`(not stalled, show_at)`) — это удобно интуитивно, но
+    противоречит явно записанному правилу, и ни один тест этого не стерёг.
+    """
     now = _now(args, today)
     work = _work(args)
     _, завал, _ = collect_open(now, work)
-    завал.sort(key=lambda i: (not i["stalled"], i["show_at"] or "9999"))
+    завал.sort(key=lambda i: i["show_at"] or "9999")
     return {"now": now.isoformat(), "backlog": завал, "count": len(завал),
             "broken": list(BROKEN)}
 
@@ -2247,6 +2252,14 @@ def cmd_backlog_bulk(args, today):
     """
     op = args.op
     items = args.items or []
+    if isinstance(items, str):
+        # CLI отдаёт JSON-строку (или "-" для stdin), сервер — уже готовый
+        # список: тот же приём, что у `cmd_create` с телом задачи.
+        сырое = sys.stdin.read() if items == "-" else items
+        try:
+            items = json.loads(сырое)
+        except json.JSONDecodeError as e:
+            return {"ok": False, "errors": [{"field": "items", "error": f"битый JSON: {e}"}]}
     reason = (args.reason or "").strip() or None
     to = parse_stored_control(args.to) if getattr(args, "to", None) else None
 
@@ -2994,6 +3007,16 @@ def main():
     sub.add_parser("next", help="что требует внимания").set_defaults(func=cmd_next)
     sub.add_parser("feed", help="лента «Что сегодня»").set_defaults(func=cmd_feed)
     sub.add_parser("backlog", help="всё просроченное — разбор завала").set_defaults(func=cmd_backlog)
+
+    bb = sub.add_parser("backlog-bulk",
+                        help="массовые действия из разбора завала, вкладка «Списком» (R20)")
+    bb.add_argument("op", choices=["defer", "done", "fail"])
+    bb.add_argument("items", help='JSON-список [{"task":"...","step":1}, ...] '
+                                  'или "-" для чтения из stdin')
+    bb.add_argument("--reason", help="одна причина на всю пачку; обязательна для defer/fail")
+    bb.add_argument("--to", help="новая дата для defer, формат 2026-08-24 или "
+                                 "2026-08-24 15:00 — уже разобранная, не «+3»")
+    bb.set_defaults(func=cmd_backlog_bulk)
     sub.add_parser("list", help="все задачи").set_defaults(func=cmd_list)
     r = sub.add_parser("refresh", help="пересчитать сводку во всех задачах (перед сборкой)")
     r.add_argument("--force", action="store_true",
