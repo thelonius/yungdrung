@@ -244,6 +244,27 @@ def as_date(value):
     return datetime.fromisoformat(str(value).strip()).date()
 
 
+def parse_stored_control(text):
+    """Строка control_date (из `parse_date_input` или уже из хранилища) →
+    `date` или `datetime`, время сохраняется, если было.
+
+    Отдельно от `as_date` намеренно: тот всегда режет время, а перенос шага
+    («перенести на 15:00», пресет «через час») обязан его пронести. Раньше
+    `cmd_defer`/`cmd_notdone` звали `date.fromisoformat(args.to)` напрямую —
+    на строке без времени это работало, а на «2026-08-24 15:00» падало с
+    ValueError, и «перенести на конкретный час» было в принципе недостижимо.
+
+    Порядок проверки важен: `date.fromisoformat` на строке с временем сам
+    бросает ValueError, и код проваливается в `datetime.fromisoformat`,
+    который с Python 3.11 принимает и пробел, и «T» как разделитель.
+    """
+    s = str(text).strip()
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return datetime.fromisoformat(s)
+
+
 def steps_of(task):
     return task["meta"].get("steps") or []
 
@@ -872,7 +893,7 @@ def _время_суток(t, слово):
     return dtime(ч, t.minute)
 
 
-def parse_date_input(text, today):
+def parse_date_input(text, today, *, now=None):
     """Человеческий ввод → date или datetime. Здесь, а не в браузере.
 
     Форма и CLI обязаны понимать ввод одинаково, иначе появятся задачи, которые
@@ -894,12 +915,25 @@ def parse_date_input(text, today):
     (9:45), «без двадцати пяти шесть» (5:35). Разворачиваются в «ЧЧ:ММ» до
     основного разбора (`_разговорное_время`), поэтому складываются со всем
     остальным: «завтра в полдесятого вечера» — это 21:30 следующего дня.
+
+    «Через час» / «через N часов» — от текущего момента, а не от полуночи
+    `today`, поэтому требует именной аргумент `now`: без него `today` несёт
+    только дату, часа в ней нет и отсчитывать не от чего. Вызовы, которым
+    точный момент не нужен или недоступен (CLI с `--today`, предпросмотр
+    шаблона), `now` не передают — фраза для них так и остаётся нераспознанной,
+    с тем же `ValueError`, что и любой другой непонятный текст. Единственный
+    вызывающий, у которого есть настоящее «сейчас», — окно контроля на ленте.
     """
     if text is None:
         return None
     s = str(text).strip().lower().replace("ё", "е")
     if not s:
         return None
+
+    if now is not None:
+        часовой = re.fullmatch(r"через\s+(\d+)?\s*час\w*", s)
+        if часовой:
+            return now + timedelta(hours=int(часовой.group(1) or 1))
 
     слова = [ИМЕНА_ЧАСОВ.get(w, w) for w in s.split() if w not in СВЯЗКИ]
     if not слова:
@@ -2087,14 +2121,14 @@ def cmd_notdone(args, today):
     step = get_step(task, args.step)
     if step.get("status") != OPEN:
         sys.exit(f"шаг {args.step} уже {step.get('status')}")
-    new_date = date.fromisoformat(args.to) if args.to else today + timedelta(days=1)
+    new_date = parse_stored_control(args.to) if args.to else today + timedelta(days=1)
     log_event(step, "not_done", today, reason=args.reason,
               was=as_date(step.get("control_date")), to=new_date)
     step["control_date"] = new_date
     save(task, today)
     count = stall_count(step)
     return {"ok": True, "task": task["path"].stem, "step": args.step, "status": OPEN,
-            "next_check": new_date.isoformat(), "stalled": count,
+            "next_check": tpl.control_text(new_date), "stalled": count,
             "hint": "шаг буксует, нужен другой ход" if count >= 3 else None}
 
 
@@ -2114,10 +2148,10 @@ def cmd_defer(args, today):
     step = get_step(task, args.step)
     if step.get("status") != OPEN:
         sys.exit(f"шаг {args.step} уже {step.get('status')}")
-    to = date.fromisoformat(args.to)
+    to = parse_stored_control(args.to)
     _defer_step(task, step, today, to, args.reason)
     return {"ok": True, "task": task["path"].stem, "step": args.step,
-            "next_check": to.isoformat()}
+            "next_check": tpl.control_text(to)}
 
 
 def cmd_fail(args, today):
@@ -2188,7 +2222,7 @@ def cmd_backlog_bulk(args, today):
     op = args.op
     items = args.items or []
     reason = (args.reason or "").strip() or None
-    to = date.fromisoformat(args.to) if getattr(args, "to", None) else None
+    to = parse_stored_control(args.to) if getattr(args, "to", None) else None
 
     if op not in ("defer", "done", "fail"):
         return {"ok": False, "errors": [{"field": "op", "error": f"неизвестное действие: {op}"}]}
@@ -2213,7 +2247,7 @@ def cmd_backlog_bulk(args, today):
                     raise ValueError(f"шаг {id_шага} уже {step.get('status')}")
                 _defer_step(task, step, today, to, reason, event="mass_defer")
                 результат = {"ok": True, "task": task["path"].stem, "step": строка_шага,
-                            "next_check": to.isoformat(), "stalled": stall_count(step)}
+                            "next_check": tpl.control_text(to), "stalled": stall_count(step)}
             elif op == "done":
                 результат = cmd_done(
                     SimpleNamespace(task=имя_задачи, step=строка_шага, reason=reason), today)

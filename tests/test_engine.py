@@ -2416,3 +2416,63 @@ def test_битые_настройки_kb_не_роняют_сканирован
     cfg.settings_path(vault).write_text("{ не json", encoding="utf-8")
     r = run(engine.cmd_kb_scan, text="проверка", source_type=None, source_id=None)
     assert r == {"hypotheses": [], "confirmed": [], "kb_broken": []}
+
+
+# --- перенос с точным временем, не только датой (блокирует пресет «через час») -
+
+def test_parse_stored_control_понимает_дату_и_время():
+    assert engine.parse_stored_control("2026-08-24") == date(2026, 8, 24)
+    assert engine.parse_stored_control("2026-08-24 15:00") == datetime(2026, 8, 24, 15, 0)
+    assert engine.parse_stored_control("2026-08-24T15:00:00") == datetime(2026, 8, 24, 15, 0)
+
+
+def test_defer_сохраняет_время_а_не_только_дату(vault):
+    """Раньше `date.fromisoformat(args.to)` падал на строке с временем —
+    «перенести на конкретный час», а тем более пресет «через час», был
+    в принципе недостижим."""
+    т = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    r = run(engine.cmd_defer, task=т.stem, step="1", to="2026-08-25 15:00", reason="занят")
+    assert r["ok"], r
+    assert r["next_check"] == "2026-08-25 15:00"
+    meta, _ = read(т)
+    assert meta["steps"][0]["control_date"] == datetime(2026, 8, 25, 15, 0)
+
+
+def test_notdone_с_явной_датой_сохраняет_время(vault):
+    т = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    r = run(engine.cmd_notdone, task=т.stem, step="1", to="2026-08-25 09:30", reason="занят")
+    assert r["ok"], r
+    assert r["next_check"] == "2026-08-25 09:30"
+
+
+def test_backlog_bulk_defer_сохраняет_время(vault):
+    т = task(vault, "Грант", [step(1, "Собрать", control_date=date(2026, 8, 1))])
+    r = run(engine.cmd_backlog_bulk, op="defer", items=[{"task": т.stem, "step": 1}],
+            to="2026-08-25 15:00", reason="занят")
+    assert r["ok_count"] == 1, r
+    assert r["items"][0]["next_check"] == "2026-08-25 15:00"
+
+
+def test_через_час_считается_от_текущего_момента_а_не_от_полуночи():
+    """Пресет «через час» в окне контроля — единственное место, где нужен не
+    календарный день, а настоящее «сейчас». `today` его не несёт."""
+    сейчас = datetime(2026, 8, 24, 14, 10)
+    assert engine.parse_date_input("через час", date(2026, 8, 24), now=сейчас) == \
+        datetime(2026, 8, 24, 15, 10)
+    assert engine.parse_date_input("через 2 часа", date(2026, 8, 24), now=сейчас) == \
+        datetime(2026, 8, 24, 16, 10)
+    assert engine.parse_date_input("через 5 часов", date(2026, 8, 24), now=сейчас) == \
+        datetime(2026, 8, 24, 19, 10)
+
+
+def test_через_час_без_now_остаётся_непонятой_фразой():
+    """Вызовы без настоящего «сейчас» (CLI, предпросмотр шаблона) эту фразу не
+    понимают — лучше явная ошибка, чем «час» посчитанный от полуночи `today`."""
+    with pytest.raises(ValueError):
+        engine.parse_date_input("через час", date(2026, 8, 24))
+
+
+def test_через_дни_не_путается_с_через_часами():
+    сейчас = datetime(2026, 8, 24, 14, 10)
+    assert engine.parse_date_input("через 3 дня", date(2026, 8, 24), now=сейчас) == \
+        date(2026, 8, 27)

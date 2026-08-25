@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import attachments  # noqa: E402
 import engine  # noqa: E402
 import settings as cfg  # noqa: E402
+import templates as tpl  # noqa: E402
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -355,7 +356,10 @@ class Handler(BaseHTTPRequestHandler):
         """
         today = date.today()
         try:
-            parsed = engine.parse_date_input(payload.get("text"), today)
+            # `now=` — иначе пресет «через час» в форме превью падал бы
+            # ошибкой, хотя то же самое сохранение через `_parse_to` прошло бы:
+            # два разных пути разбора одной фразы дали бы разный ответ.
+            parsed = engine.parse_date_input(payload.get("text"), today, now=datetime.now())
         except (ValueError, TypeError):
             return {"ok": False}
         if parsed is None:
@@ -397,9 +401,15 @@ class Handler(BaseHTTPRequestHandler):
         if not сырая:
             return None, None
         try:
-            return engine.as_date(engine.parse_date_input(сырая, today)), None
+            # Не `as_date`: перенос («перенести на 15:00», пресет «через час»)
+            # обязан пронести время, если человек его указал, а не только дату.
+            # `now=datetime.now()`, а не производное от `today`: «через час»
+            # считается от настоящего текущего момента, и только здесь он есть —
+            # окно контроля отвечает пользователю прямо сейчас, а не когда-то
+            # к началу дня `today`.
+            return engine.parse_date_input(сырая, today, now=datetime.now()), None
         except (ValueError, TypeError):
-            return None, {"field": "to", "error": "Дату не понял. Можно: 18.08 · 15 марта · завтра · +3 · пн · полдесятого"}
+            return None, {"field": "to", "error": "Дату не понял. Можно: 18.08 · 15 марта · завтра · +3 · пн · полдесятого · через час"}
 
     def _action(self, payload):
         op = payload.get("op")
@@ -425,7 +435,7 @@ class Handler(BaseHTTPRequestHandler):
 
         args = _args(task=payload["task"], step=str(payload["step"]),
                      reason=причина or None,
-                     to=дата.isoformat() if дата else None)
+                     to=tpl.control_text(дата) if дата else None)
         try:
             return команда(args, today)
         except SystemExit as e:
@@ -453,7 +463,7 @@ class Handler(BaseHTTPRequestHandler):
 
         args = _args(op=payload.get("op"), items=items,
                      reason=(payload.get("reason") or "").strip() or None,
-                     to=дата.isoformat() if дата else None)
+                     to=tpl.control_text(дата) if дата else None)
         return engine.cmd_backlog_bulk(args, today)
 
     def _task_update(self, payload):
