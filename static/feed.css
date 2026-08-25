@@ -86,6 +86,13 @@
 .row-title {
   font-weight: 600;
   line-height: 1.35;
+  /* Заголовок теперь до 200 символов (раздел 6.3 ТЗ) — без обрезки такой
+     занял бы несколько строк и растянул строку ленты. Полный текст остаётся
+     доступен через title-атрибут и в самой карточке. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 .row-sub {

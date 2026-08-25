@@ -2555,3 +2555,114 @@ def test_backlog_bulk_битый_json_даёт_структурную_ошибк
     r = run(engine.cmd_backlog_bulk, op="done", items="не json")
     assert r["ok"] is False
     assert r["errors"][0]["field"] == "items"
+
+
+# --- заголовок до 200 символов (R27) -----------------------------------------
+
+def test_заголовок_ровно_200_символов_проходит(vault):
+    """Раздел 6.3 ТЗ: до 200 символов. Раньше здесь стояло 120 — соображение о
+    вёрстке ленты, подменившее число из требования; вёрстка теперь решена
+    обрезкой с многоточием в CSS, а не запретом длинного названия."""
+    assert engine.MAX_TITLE == 200
+    r = run(engine.cmd_create, json=json.dumps({
+        "title": "О" * 200, "steps": [{"title": "Шаг"}]}))
+    assert r["ok"], r
+
+
+def test_заголовок_длиннее_200_отвергается(vault):
+    r = run(engine.cmd_create, json=json.dumps({
+        "title": "О" * 201, "steps": [{"title": "Шаг"}]}))
+    assert not r["ok"]
+    assert r["errors"][0]["field"] == "title"
+
+
+# --- подсветка активного шага (R27) -------------------------------------------
+
+def test_cmd_show_отмечает_активный_шаг_в_последовательной_цепочке(vault):
+    """Раздел 6.3 ТЗ: «активный подсвечен цветом». Не любой незакрытый лист —
+    в цепочке `status="pending"` одинаков у первого и у всех следующих, а
+    спрашивать про них ещё рано. Раньше поля не было вовсе, CSS `.is-active`
+    висел мёртвым правилом."""
+    т = task(vault, "Ремонт", [
+        step(1, "Снять колесо", control_date=TODAY),
+        step(2, "Заменить подшипник", control_date=None),
+        step(3, "Собрать", control_date=None),
+    ])
+    показ = run(engine.cmd_show, task=т.stem)
+    активные = {s["id"]: s["active"] for s in показ["steps"]}
+    assert активные == {1: True, 2: False, 3: False}
+
+
+def test_активный_переходит_на_следующий_шаг_после_закрытия(vault):
+    т = task(vault, "Ремонт", [
+        step(1, "Снять колесо", control_date=TODAY),
+        step(2, "Заменить подшипник", control_date=None),
+    ])
+    run(engine.cmd_done, task=т.stem, step="1")
+    показ = run(engine.cmd_show, task=т.stem)
+    активные = {s["id"]: s["active"] for s in показ["steps"]}
+    assert активные == {1: False, 2: True}
+
+
+def test_закрытый_шаг_никогда_не_активен(vault):
+    """Даже если бы движок ошибся и вернул его в current_steps — двойное
+    условие в отрисовке (`s.active && !закрыт`) на странице подстраховано, а
+    в самом ответе ядра closed и active не должны противоречить друг другу."""
+    т = task(vault, "Ремонт", [step(1, "Снять колесо", status="done",
+                                     completed_date=TODAY)])
+    показ = run(engine.cmd_show, task=т.stem)
+    assert показ["steps"][0]["active"] is False
+    assert показ["steps"][0]["closed"] is True
+
+
+# --- «Закрыть» задачу вручную (R27) ------------------------------------------
+#
+# Толкование неоднозначного пункта ТЗ (кнопка в шапке карточки перечислена без
+# описания действия) — интерпретация, не факт от заказчика: закрытие говорит
+# «работа сделана вся разом», не проходя оставшиеся шаги по одному, парой к
+# «Отменить» («работа не нужна»).
+
+def test_close_закрывает_все_открытые_шаги_сразу(vault):
+    т = task(vault, "Ремонт", [
+        step(1, "Снять колесо", control_date=TODAY),
+        step(2, "Заменить подшипник", control_date=None),
+        step(3, "Собрать", control_date=None),
+    ])
+    r = run(engine.cmd_close, task=т.stem)
+    assert r["ok"] and r["closed_steps"] == 3
+    assert r["task_status"] == "done"
+    meta, _ = read(т)
+    assert all(s["status"] == "done" for s in meta["steps"])
+    assert all(s["completed_date"] == TODAY for s in meta["steps"])
+
+
+def test_close_пишет_в_журнал_каждого_шага(vault):
+    т = task(vault, "Ремонт", [step(1, "Снять колесо", control_date=TODAY)])
+    run(engine.cmd_close, task=т.stem)
+    meta, _ = read(т)
+    assert meta["steps"][0]["log"][-1]["event"] == "done"
+
+
+def test_close_отменённую_задачу_отклоняет(vault):
+    т = task(vault, "Ремонт", [step(1, "Снять колесо", control_date=TODAY)],
+             cancelled=True, cancelled_reason="не актуально")
+    with pytest.raises(SystemExit):
+        run(engine.cmd_close, task=т.stem)
+
+
+def test_close_уже_закрытой_задачи_идемпотентен(vault):
+    т = task(vault, "Ремонт", [step(1, "Снять колесо", status="done",
+                                     completed_date=TODAY)])
+    r = run(engine.cmd_close, task=т.stem)
+    assert r["ok"] and r["closed_steps"] == 0
+
+
+def test_close_с_параллельной_группой_закрывает_всех_детей_разом(vault):
+    т = task(vault, "Сделка", [
+        step(1, "Согласовать", parent=None, mode="par"),
+        step(2, "Юрист", parent=1, control_date=TODAY),
+        step(3, "Бухгалтер", parent=1, control_date=TODAY),
+    ])
+    r = run(engine.cmd_close, task=т.stem)
+    assert r["ok"] and r["closed_steps"] == 2
+    assert r["task_status"] == "done"

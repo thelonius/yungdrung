@@ -215,6 +215,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/task-cancel":
             return self._json(200, self._guarded(engine.cmd_cancel, _args(
                 task=payload.get("task"), reason=payload.get("reason"))))
+        if route == "/api/task-close":
+            return self._json(200, self._guarded(engine.cmd_close,
+                                                  _args(task=payload.get("task"))))
         if route == "/api/task-delete":
             return self._json(200, self._guarded(engine.cmd_delete,
                                                   _args(task=payload.get("task"))))

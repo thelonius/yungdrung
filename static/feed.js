@@ -40,6 +40,7 @@ function строка(item) {
   const title = document.createElement('div');
   title.className = 'row-title';
   title.textContent = item.title;
+  title.title = item.title; // при обрезке длинного названия полный текст — в подсказке
   main.append(title);
 
   const sub = document.createElement('div');

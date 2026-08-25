@@ -186,6 +186,10 @@ function отрисовать(d) {
   $('#cancel-task').hidden = отменена;
   $('#cancel-task').textContent = отменена ? 'Уже отменена' : 'Отменить задачу';
   $('#cancel-task').disabled = отменена;
+  // «Закрыть» смысла не имеет ни у отменённой, ни у уже полностью закрытой —
+  // d.status здесь английский, тот же, что сравнивают все остальные проверки
+  // на странице.
+  $('#close-task').hidden = отменена || d.status === 'done';
 
   шаги = d.steps.map((s) => ({ ...s }));
   перерисоватьЧеклист();
@@ -250,6 +254,10 @@ function строкаШага(s, индекс) {
   const закрыт = группа ? !!s.closed : ['done', 'skipped', 'failed'].includes(s.status);
   li.classList.toggle('is-closed', закрыт);
   li.classList.toggle('is-overdue', s.state === 'overdue');
+  // active — тоже поле ядра (cmd_show): в последовательной цепочке активен
+  // только первый незакрытый лист, дальше по цепочке status тот же "pending",
+  // и без этого поля страница не отличила бы «сейчас» от «ещё не дошла очередь».
+  li.classList.toggle('is-active', !!s.active && !закрыт);
   li.classList.toggle('is-group', группа);
   li.classList.toggle('is-substep', (s.parent ?? null) !== null);
   li.dataset.index = индекс;
@@ -663,6 +671,13 @@ async function сохранить(force = false) {
 $('#save-card').addEventListener('click', () => сохранить(false));
 
 // --- отмена, удаление, шаблон -------------------------------------------------
+
+$('#close-task').addEventListener('click', async () => {
+  if (!confirm('Закрыть задачу? Оставшиеся шаги отметятся сделанными разом, без отдельной отметки по каждому.')) return;
+  const r = await post('/api/task-close', { task: имя });
+  if (r.ok) { всплывашка(`Задача закрыта · шагов сразу: ${r.closed_steps}`); загрузить(); }
+  else всплывашка((r.errors || [{}])[0].error || 'не получилось');
+});
 
 $('#cancel-task').addEventListener('click', async () => {
   if (!confirm('Отменить задачу целиком?')) return;

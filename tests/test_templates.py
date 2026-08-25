@@ -301,7 +301,7 @@ def test_рабочий_шаблон_проходит():
     ({"name": ""}, "name"),
     ({"name": "   "}, "name"),
     ({"name": "Отчёт/квартал"}, "name"),
-    ({"name": "О" * 121}, "name"),
+    ({"name": "О" * (engine.MAX_TITLE + 1)}, "name"),
     ({"steps": []}, "steps"),
     ({"steps": [{"title": "  ", "offset_days": 0}]}, "steps.0.title"),
     ({"steps": [{"title": "Шаг", "offset_days": -1}]}, "steps.0.offset_days"),
