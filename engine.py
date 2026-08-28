@@ -423,6 +423,18 @@ def get_step(task, step_id):
     sys.exit(f"нет шага {step_id} в «{task['path'].stem}»")
 
 
+def _step_snapshot(step):
+    """Значения шага в момент чтения — сторож для `save(expected_step=...)`
+    против гонки при одновременной отметке (issue #11). Все поля, которые
+    команды над одним шагом (done/notdone/defer/fail/skip) вообще меняют:
+    если хоть одно успело измениться в базе между этим чтением и записью —
+    чужая запись уже выиграла гонку, и переписывать её нельзя."""
+    return {"status": step.get("status", OPEN),
+            "control_date": step.get("control_date"),
+            "completed_date": step.get("completed_date"),
+            "note": step.get("note")}
+
+
 STEPS_START = "<!-- шаги: пишет движок, править руками не нужно -->"
 STEPS_END = "<!-- /шаги -->"
 
@@ -537,7 +549,7 @@ def _sync_tags_to_catalog(tags):
             pass
 
 
-def save(task, today):
+def save(task, today, expected_step=None):
     """Статус и сводка пересчитываются при каждой записи, руками их никто не ставит.
 
     Сводка в БД не хранится вообще — колонок под неё нет, это была чистая
@@ -545,13 +557,18 @@ def save(task, today):
     `task["meta"]`, потому что вызывающий код (`cmd_update`/`cmd_cancel`/
     `cmd_reopen` и другие) читает `task["meta"]["status"]` сразу после save() —
     источник правды остаётся в шагах, а это просто удобный снимок для JSON.
+
+    `expected_step` пробрасывается в `store.save_task` как есть — см. его
+    докстринг про guard от гонки (issue #11). Команды, которым нечего
+    сторожить (правка задачи целиком, отмена и т.п.), его не передают — для
+    них поведение не меняется.
     """
     meta = task["meta"]
     meta["schema"] = SCHEMA
     meta.update(task_summary(task, today))
     _sync_tags_to_catalog(meta.get("tags") or [])
     склад = get_store()
-    склад.save_task(task, today)
+    склад.save_task(task, today, expected_step=expected_step)
     _index_task(склад, task)
 
 
@@ -2252,6 +2269,7 @@ def cmd_done(args, today):
     step = get_step(task, args.step)
     if step.get("status") != OPEN:
         sys.exit(f"шаг {args.step} уже {step.get('status')}")
+    expected_step = (step["id"], _step_snapshot(step))
     step["status"] = DONE
     step["completed_date"] = today
     log_event(step, "done", today, reason=args.reason)
@@ -2264,7 +2282,10 @@ def cmd_done(args, today):
     for s in активные:
         if not s.get("control_date"):
             s["control_date"] = today
-    save(task, today)
+    try:
+        save(task, today, expected_step=expected_step)
+    except store.StepConflict as e:
+        sys.exit(f"шаг {args.step} уже {e.actual_status}")
     return {"ok": True, "task": task["path"].stem, "step": args.step, "status": DONE,
             "next_step": активные[0].get("title") if активные else None,
             "date_assigned_to_step": assigned[0] if assigned else None,
@@ -2298,26 +2319,34 @@ def cmd_notdone(args, today):
     step = get_step(task, args.step)
     if step.get("status") != OPEN:
         sys.exit(f"шаг {args.step} уже {step.get('status')}")
+    expected_step = (step["id"], _step_snapshot(step))
     new_date = parse_stored_control(args.to) if args.to else today + timedelta(days=1)
     log_event(step, "not_done", today, reason=args.reason,
               was=as_date(step.get("control_date")), to=new_date)
     step["control_date"] = new_date
-    save(task, today)
+    try:
+        save(task, today, expected_step=expected_step)
+    except store.StepConflict as e:
+        sys.exit(f"шаг {args.step} уже {e.actual_status}")
     count = stall_count(step)
     return {"ok": True, "task": task["path"].stem, "step": args.step, "status": OPEN,
             "next_check": tpl.control_text(new_date), "stalled": count,
             "hint": "шаг буксует, нужен другой ход" if count >= 3 else None}
 
 
-def _defer_step(task, step, today, to, reason, event="defer"):
+def _defer_step(task, step, today, to, reason, event="defer", expected_step=None):
     """Общая механика переноса: пишет событие в журнал шага, двигает дату,
     сохраняет задачу. Используется одиночным `defer` и массовым переносом из
     разбора завала (R20 ТЗ) — второй передаёт `event="mass_defer"`, чтобы
-    запись в журнале была отличима от обычного переноса."""
+    запись в журнале была отличима от обычного переноса.
+
+    `expected_step` пробрасывается в `save()` как есть; вызывающие ловят
+    `store.StepConflict` сами — сообщение об ошибке у одиночного и массового
+    переноса оформлено по-разному (`sys.exit` против записи в список)."""
     log_event(step, event, today, reason=reason,
               was=as_date(step.get("control_date")), to=to)
     step["control_date"] = to
-    save(task, today)
+    save(task, today, expected_step=expected_step)
 
 
 def cmd_defer(args, today):
@@ -2328,8 +2357,12 @@ def cmd_defer(args, today):
     step = get_step(task, args.step)
     if step.get("status") != OPEN:
         sys.exit(f"шаг {args.step} уже {step.get('status')}")
+    expected_step = (step["id"], _step_snapshot(step))
     to = parse_stored_control(args.to)
-    _defer_step(task, step, today, to, args.reason)
+    try:
+        _defer_step(task, step, today, to, args.reason, expected_step=expected_step)
+    except store.StepConflict as e:
+        sys.exit(f"шаг {args.step} уже {e.actual_status}")
     return {"ok": True, "task": task["path"].stem, "step": args.step,
             "next_check": tpl.control_text(to)}
 
@@ -2349,13 +2382,17 @@ def cmd_fail(args, today):
     step = get_step(task, args.step)
     if is_closed(step):
         sys.exit(f"шаг {args.step} уже {step.get('status')}")
+    expected_step = (step["id"], _step_snapshot(step))
     step["status"] = FAILED
     log_event(step, "failed", today, reason=args.reason)
     активные = current_steps(task)
     for s in активные:
         if not s.get("control_date"):
             s["control_date"] = today
-    save(task, today)
+    try:
+        save(task, today, expected_step=expected_step)
+    except store.StepConflict as e:
+        sys.exit(f"шаг {args.step} уже {e.actual_status}")
     return {"ok": True, "task": task["path"].stem, "step": args.step, "status": FAILED,
             "next_step": активные[0].get("id") if активные else None,
             "task_status": task_status(task, today)}
@@ -2370,12 +2407,16 @@ def cmd_skip(args, today):
     # рядом со статусом «снят» — запись, противоречащая сама себе.
     if is_closed(step):
         sys.exit(f"шаг {args.step} уже {step.get('status')}")
+    expected_step = (step["id"], _step_snapshot(step))
     step["status"] = SKIPPED
     log_event(step, "skipped", today, reason=args.reason)
     for s in current_steps(task):
         if not s.get("control_date"):
             s["control_date"] = today
-    save(task, today)
+    try:
+        save(task, today, expected_step=expected_step)
+    except store.StepConflict as e:
+        sys.exit(f"шаг {args.step} уже {e.actual_status}")
     return {"ok": True, "task": task["path"].stem, "step": args.step, "status": SKIPPED,
             "task_status": task_status(task, today)}
 
@@ -2439,7 +2480,12 @@ def cmd_backlog_bulk(args, today):
                 step = get_step(task, id_шага)
                 if step.get("status") != OPEN:
                     raise ValueError(f"шаг {id_шага} уже {step.get('status')}")
-                _defer_step(task, step, today, to, reason, event="mass_defer")
+                expected_step = (step["id"], _step_snapshot(step))
+                try:
+                    _defer_step(task, step, today, to, reason, event="mass_defer",
+                                expected_step=expected_step)
+                except store.StepConflict as e:
+                    raise ValueError(f"шаг {id_шага} уже {e.actual_status}") from e
                 результат = {"ok": True, "task": task["path"].stem, "step": строка_шага,
                             "next_check": tpl.control_text(to), "stalled": stall_count(step)}
             elif op == "done":

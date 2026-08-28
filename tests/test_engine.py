@@ -29,7 +29,8 @@ import re
 import sqlite3
 import subprocess
 import sys
-from datetime import date, datetime, time as dtime
+import threading
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -843,6 +844,91 @@ def test_closed_step_not_touched_again(vault, command):
         run(getattr(engine, command), task="Грант", step="1", to="2026-08-20")
     assert "уже done" in str(e.value)
     assert read(path) == before      # ничего не записано
+
+
+def test_concurrent_done_and_notdone_loser_gets_honest_error(vault, monkeypatch):
+    """Issue #11: два потока отмечают один и тот же открытый шаг одновременно —
+    два окна браузера или двойной клик до того, как кнопка успела задизейблиться
+    (server.py — ThreadingHTTPServer, см. его заголовок). Раньше оба читали
+    статус до того, как другой успевал записать, оба проходили проверку `!=
+    OPEN` и оба репортовали `ok: true` — при этом эффекты проигравшего (счётчик
+    буксования, своя запись в журнале) пропадали без следа, а кто именно
+    победил, решал просто порядок записи.
+
+    Настоящая гонка, не последовательные вызовы — но и не голый `Barrier`: если
+    просто отпустить оба потока разом, GIL почти всегда успевает прогнать
+    `notdone` целиком (чтение-проверка-запись-коммит) раньше, чем `done` вообще
+    дойдёт до чтения — тогда `done` честно прочитает уже обновлённый шаг и
+    оба легитимно завершатся `ok` без всякой гонки. Чтобы воспроизводить
+    именно гонку, а не эту благополучную последовательность, `store.save_task`
+    патчится так, что поток `done` придерживается ровно между чтением шага и
+    записью — окно, в котором `notdone` должен успеть целиком прочитать,
+    проверить и записать свою версию. Это то самое окно из issue #11: `done`
+    уже прочитал шаг открытым до того, как `notdone` его тронул, и обязан
+    получить конфликт, а не молча переписать шаг своей устаревшей копией.
+    """
+    имя = "Тест гонки"
+    ref = task(vault, имя, [step(1, "Собрать", control_date=TODAY)])
+    # Прогрев: первое подключение к свежему файлу переключает journal_mode на
+    # WAL — отдельная, не относящаяся к делу гонка (сама смена режима требует
+    # эксклюзивного лока). Прогоняем её один раз вне потоков.
+    engine.load_tasks()
+
+    done_прочитал = threading.Event()
+    notdone_записал = threading.Event()
+    настоящий_save_task = store.Store.save_task
+
+    def задержанный_save_task(self, task, today, expected_step=None):
+        # Именно здесь, а не раньше: к этому моменту cmd_done уже прочитал шаг
+        # и посчитал expected_step в Python — ровно момент, который в issue
+        # был уязвим, потому что до записи никто соединение не держал.
+        if threading.current_thread().name == "поток-done":
+            done_прочитал.set()
+            assert notdone_записал.wait(timeout=5), "notdone не отозвался — дедлок в тесте"
+        return настоящий_save_task(self, task, today, expected_step=expected_step)
+
+    monkeypatch.setattr(store.Store, "save_task", задержанный_save_task)
+
+    results = {}
+
+    def запустить_done():
+        try:
+            results["done"] = ("ok", run(engine.cmd_done, task=имя, step="1"))
+        except SystemExit as e:
+            results["done"] = ("error", str(e))
+
+    def запустить_notdone():
+        assert done_прочитал.wait(timeout=5), "done не отозвался — дедлок в тесте"
+        try:
+            results["notdone"] = ("ok", run(engine.cmd_notdone, task=имя, step="1",
+                                            reason="внешние обстоятельства"))
+        finally:
+            notdone_записал.set()
+
+    t1 = threading.Thread(target=запустить_done, name="поток-done")
+    t2 = threading.Thread(target=запустить_notdone, name="поток-notdone")
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    # notdone читал и писал в чистом окне (done ещё не решился к тому
+    # моменту) — обязан пройти без сучка.
+    assert results["notdone"][0] == "ok"
+    # done прочитал шаг открытым, но пока он спал, notdone его уже поменял —
+    # обязан получить честную ошибку, а не ok:true поверх устаревшей копии.
+    assert results["done"][0] == "error"
+    assert "уже" in results["done"][1]
+
+    meta, _ = read(ref)
+    шаг = meta["steps"][0]
+    # В базе стоит ровно то, что записал победитель — ни полу-состояния,
+    # ни следов проигравшего done (который заново открыл бы шаг, поставил
+    # completed_date и своё событие "done" в журнал).
+    assert шаг["status"] == "pending"
+    assert шаг["completed_date"] is None
+    assert шаг["control_date"] == TODAY + timedelta(days=1)
+    assert [e["event"] for e in шаг["log"]] == ["not_done"]
 
 
 # Раньше здесь стояли пять тестов на BROKEN/KB_BROKEN — сборка не падает
