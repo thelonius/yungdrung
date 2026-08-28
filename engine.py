@@ -1750,6 +1750,7 @@ def cmd_from_template(args, today):
     if errors:
         return {"ok": False, "errors": errors}
     файлы = copy_template_attachments(шаблон["name"], задача["path"].stem, today)
+    _record_manual_cycle(шаблон, задача["path"].stem, today)
     return {"ok": True, "task": задача["path"].stem, "template": шаблон["name"],
             "steps": len(задача["meta"]["steps"]), "attachments": файлы,
             "status": задача["meta"]["status"]}
@@ -1809,6 +1810,58 @@ def _cycle_closed(task_name, today):
     return True
 
 
+def _recompute_previous(запись, today):
+    """`previous` из журнала повторений с пересчитанным на сегодня `closed`.
+
+    Статус закрытия не хранится, а вычисляется заново из фактического состояния
+    задачи при каждом обращении (см. `_cycle_closed`) — и `cmd_recur`, и запись
+    цикла из `from-template` должны считать его одинаково, иначе один сочтёт
+    цикл открытым, а другой закрытым, и решения разойдутся.
+    """
+    if not запись.get("previous"):
+        return None
+    предыдущий = dict(запись["previous"])
+    задача_цикла = предыдущий.pop("task", None)
+    if задача_цикла:
+        предыдущий["closed"] = _cycle_closed(задача_цикла, today)
+    return предыдущий
+
+
+def _record_manual_cycle(шаблон, task_name, today):
+    """Задача, заведённая вручную через «Завести задачу» (`from-template`) по
+    шаблону с активным повторением, закрывает собой тот же цикл, который иначе
+    следующим прогоном создал бы `recur` — issue #2. Без этой записи `recur` не
+    видит ручную задачу (её имя не совпадает с `recurring_title`) и заводит для
+    того же цикла второй экземпляр.
+
+    Журнал правится так, будто цикл создал сам `recur`: тот же расчёт через
+    `due_cycles`, и только если он в самом деле нашёл цикл к созданию — цикл,
+    заведённый заранее (раньше своего дня по `lead_days`) или заблокированный
+    незакрытым предыдущим, ручная задача не трогает.
+    """
+    правило = шаблон.get("recurrence")
+    if not правило:
+        return
+    имя = шаблон["name"]
+    state = load_recurrence_state()
+    запись = state.get(имя) or {}
+    предыдущий = _recompute_previous(запись, today)
+    якорь = as_date(правило["anchor"])
+    try:
+        решения = rec.due_cycles(
+            {k: v for k, v in правило.items() if k != "anchor"}, якорь, today,
+            previous=предыдущий, work=worktime.settings(), force=False, limit=1)
+    except rec.RuleError:
+        return
+    создан = next((р for р in решения if р["action"] == "create"), None)
+    if создан is None:
+        return
+    запись["previous"] = {"date": создан["date"].isoformat(), "closed": False,
+                          "task": task_name}
+    state[имя] = запись
+    save_recurrence_state(state)
+
+
 def cmd_recur(args, today):
     """Прогнать шаблоны с правилом повторения: создать очередной цикл или
     записать пропуск. Раздел 5.12 ТЗ.
@@ -1829,12 +1882,7 @@ def cmd_recur(args, today):
             continue
         имя = шаблон["name"]
         запись = state.get(имя) or {}
-        предыдущий = None
-        if запись.get("previous"):
-            предыдущий = dict(запись["previous"])
-            задача_цикла = предыдущий.pop("task", None)
-            if задача_цикла:
-                предыдущий["closed"] = _cycle_closed(задача_цикла, today)
+        предыдущий = _recompute_previous(запись, today)
 
         якорь = as_date(правило["anchor"])
         сила = bool(getattr(args, "force", False)) and getattr(args, "name", None) == имя

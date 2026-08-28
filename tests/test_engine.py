@@ -1462,6 +1462,65 @@ def test_recur_несколько_шаблонов_независимы(vault):
     assert all(t["created"] for t in r["templates"])
 
 
+# --- issue #2: ручное «Завести задачу» не должно плодить дубль циклом -------
+#
+# Если по шаблону с активным повторением сперва завели задачу вручную через
+# from-template, а потом прогнали recur (то, что реально дёргает cron), для
+# того же цикла заводился второй, дублирующий экземпляр: `_cycle_closed`
+# искала задачу с именем ровно `recurring_title(имя, дата)` = «шаблон — дата»,
+# а ручная задача называется просто именем шаблона — совпадения нет, журнал
+# `.повторения.json` про ручную задачу тоже ничего не знает.
+
+def test_from_template_и_recur_не_дают_дубль_ежедневно(vault):
+    tpl.JsonStore(vault).save({
+        "name": "Полить цветы",
+        "steps": [{"title": "Полить", "offset_days": 0}],
+        "recurrence": {"anchor": "2026-08-26", "freq": "daily"},
+    })
+    r1 = run(engine.cmd_from_template, today=date(2026, 8, 26),
+             name="Полить цветы", start=None, title=None)
+    assert r1["ok"]
+
+    r2 = run(engine.cmd_recur, today=date(2026, 8, 26), name=None, limit=None)
+    assert r2["created"] == 0
+    задачи = [t["path"].stem for t in engine.load_tasks()]
+    assert задачи == ["Полить цветы"]
+
+
+def test_from_template_и_recur_не_дают_дубль_ежемесячно(vault):
+    месячный_шаблон(vault, day=5)
+    r1 = run(engine.cmd_from_template, today=date(2026, 8, 5),
+             name="Отчёт по кассе", start=None, title=None)
+    assert r1["ok"]
+
+    r2 = run(engine.cmd_recur, today=date(2026, 8, 5), name=None, limit=None)
+    assert r2["created"] == 0
+    задачи = [t["path"].stem for t in engine.load_tasks()]
+    assert задачи == ["Отчёт по кассе"]
+
+
+def test_from_template_закрытая_вручную_задача_открывает_следующий_цикл(vault):
+    """Ручная задача блокирует ровно так же, как автосозданная: следующий
+    цикл появляется только после того, как эта закрыта."""
+    месячный_шаблон(vault, day=5)
+    run(engine.cmd_from_template, today=date(2026, 8, 5),
+        name="Отчёт по кассе", start=None, title=None)
+    run(engine.cmd_done, today=date(2026, 8, 5), task="Отчёт по кассе", step="1")
+
+    r = run(engine.cmd_recur, today=date(2026, 9, 5), name=None, limit=None)
+    задачи = r["templates"][0]
+    assert [c["task"] for c in задачи["created"]] == ["Отчёт по кассе — 05.09.2026"]
+
+
+def test_from_template_без_повторения_журнал_не_трогает(vault):
+    """Шаблон без правила повторения не должен ничего писать в `.повторения.json`."""
+    tpl.JsonStore(vault).save({"name": "Просто шаблон",
+                               "steps": [{"title": "Шаг", "offset_days": 0}]})
+    run(engine.cmd_from_template, today=date(2026, 8, 5),
+        name="Просто шаблон", start=None, title=None)
+    assert engine.load_recurrence_state() == {}
+
+
 # --- база знаний: подключение kb.py (R17, разделы 5.7/5.8/7 ТЗ) ------------
 #
 # Сама морфология и защита от мусора уже проверены в test_kb.py на голом
