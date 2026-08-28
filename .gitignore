@@ -19,6 +19,10 @@ __pycache__/
 !Задачи/.gitkeep
 !База/.gitkeep
 Настройки.json
+Шаблоны.json
+Ссылки.json
+Исключения.json
+.повторения.json
 вольт.db
 вольт.db-shm
 вольт.db-wal
