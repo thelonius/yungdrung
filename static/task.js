@@ -721,6 +721,10 @@ function окно(s) {
   dlg.showModal();
 }
 
+// Клик по подложке закрывает окно так же, как Esc. target === dlg только у
+// клика вне карточки: сама карточка перехватывает событие раньше.
+dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
+
 function формаОкна(показать) {
   $('#c-form').hidden = !показать;
   $('#c-err').hidden = true;

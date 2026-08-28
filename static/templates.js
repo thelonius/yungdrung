@@ -125,6 +125,10 @@ for (const btn of dlg.querySelectorAll('.presets button')) {
 
 $('#x-back').addEventListener('click', () => dlg.close());
 
+// Клик по подложке — то же самое, что «Назад»: target === dlg только у клика
+// вне карточки.
+dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
+
 $('#x-save').addEventListener('click', async () => {
   $('#x-err').hidden = true;
   const save = $('#x-save');
@@ -289,6 +293,9 @@ $('#r-text').addEventListener('input', () => {
 
 $('#r-back').addEventListener('click', () => recurDlg.close());
 
+// Клик по подложке — то же самое, что «Назад».
+recurDlg.addEventListener('click', (e) => { if (e.target === recurDlg) recurDlg.close(); });
+
 $('#r-save').addEventListener('click', async () => {
   $('#r-err').hidden = true;
   const якорь = $('#r-anchor').value.trim();
@@ -417,6 +424,9 @@ async function открытьФайлы(name) {
 
 $('#tf-add').addEventListener('click', () => $('#tf-input').click());
 $('#tf-back').addEventListener('click', () => tfDlg.close());
+
+// Клик по подложке — то же самое, что «Назад».
+tfDlg.addEventListener('click', (e) => { if (e.target === tfDlg) tfDlg.close(); });
 
 $('#tf-input').addEventListener('change', async (e) => {
   const file = e.target.files[0];
@@ -660,6 +670,9 @@ function ntОткрыть() {
 $('#new-template-btn').addEventListener('click', ntОткрыть);
 $('#nt-add-step').addEventListener('click', () => ntAddStep());
 $('#nt-back').addEventListener('click', () => ntDlg.close());
+
+// Клик по подложке — то же самое, что «Назад».
+ntDlg.addEventListener('click', (e) => { if (e.target === ntDlg) ntDlg.close(); });
 $('#nt-start').addEventListener('input', ntПересчитать);
 $('#nt-attach-btn').addEventListener('click', () => $('#nt-attach-input').click());
 
