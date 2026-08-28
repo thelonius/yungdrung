@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Тесты движка шагов.
 
-Проверяем то, на чём держится вольт: запись YAML без порчи, вычисление статуса
+Проверяем то, на чём держится стор: запись YAML без порчи, вычисление статуса
 из шагов, отметки шагов и идемпотентность утреннего `refresh`. Код скоро уедет
 на чужой ноутбук, где чинить придётся вслепую, поэтому тесты идут по инвариантам
-из CLAUDE.md и ПРОТОКОЛ.md, а не по строчкам движка.
+из CLAUDE.md и PROTOCOL.md, а не по строчкам движка.
 
-Изоляция. Путь к вольту движок читает из `YUNGDRUNG_VAULT` один раз, на уровне
+Изоляция. Путь к стору движок читает из `YUNGDRUNG_VAULT` один раз, на уровне
 модуля (`VAULT`), — менять переменную окружения после импорта бесполезно.
 Подменяем саму модульную переменную через monkeypatch (`db_path()` в engine.py
 читает `VAULT` заново при каждом вызове ровно ради этого). Так тесты зовут
@@ -17,9 +17,9 @@
 которого подмена не достаёт: чтение `YUNGDRUNG_VAULT` и связка argparse —
 два теста в самом конце файла.
 
-Хранилище задач — SQLite (`вольт.db`), база знаний пока остаётся markdown
-(`База/*.md`) — переезд на неё отдельным этапом. Реальный вольт репозитория не
-участвует: свой `вольт.db` заводится заново в tmp_path на каждый тест, в обход
+Хранилище задач — SQLite (`стор.db`), база знаний пока остаётся markdown
+(`База/*.md`) — переезд на неё отдельным этапом. Реальный стор репозитория не
+участвует: свой `стор.db` заводится заново в tmp_path на каждый тест, в обход
 движка — `task()` пишет строки в БД напрямую тем же приёмом, что раньше был у
 прямой записи YAML: код под тестом не должен готовить свои же данные.
 """
@@ -63,11 +63,11 @@ class NoAliasDumper(yaml.SafeDumper):
 
 @pytest.fixture
 def vault(tmp_path, monkeypatch):
-    """Временный вольт вместо репозитория.
+    """Временный стор вместо репозитория.
 
     KB_DIR патчится отдельно от VAULT: без этого kb-команды читали бы «База»
     настоящего репозитория, а не тестовую папку. TASKS_DIR ушёл вместе с
-    markdown-хранилищем задач — вольт.db заводится в tmp_path сам, лениво,
+    markdown-хранилищем задач — стор.db заводится в tmp_path сам, лениво,
     при первом обращении Store.
     """
     monkeypatch.setattr(engine, "VAULT", tmp_path)
@@ -84,7 +84,7 @@ def step(number, title, *, status="pending", control_date=None,
 
 
 def task(vault, name, steps, *, body="Тело заметки, его пишет заказчик.\n", **fields):
-    """Кладёт задачу прямо в вольт.db, в обход движка. Сводку верхнего уровня
+    """Кладёт задачу прямо в стор.db, в обход движка. Сводку верхнего уровня
     (status/current_step/...) намеренно не пишем — в БД для неё нет колонок,
     её каждый раз считает движок заново, а тесты проверяют, что он это делает.
 
@@ -98,7 +98,7 @@ def task(vault, name, steps, *, body="Тело заметки, его пишет
     cancelled_reason = fields.pop("cancelled_reason", None)
     assert not fields, f"task(): неизвестные поля {list(fields)}"
 
-    conn = sqlite3.connect(str(vault / "вольт.db"))
+    conn = sqlite3.connect(str(vault / "стор.db"))
     store.migrate_schema(conn)
     cur = conn.execute(
         "INSERT INTO tasks (title, schema, created, start_date, cancelled, "
@@ -162,7 +162,7 @@ def snapshot_db(vault):
     команды ничего не изменил. `step_log.id` из сравнения исключён: это
     autoincrement, а не часть данных, и он не обязан совпадать после
     пересохранения с тем же содержимым."""
-    conn = sqlite3.connect(str(vault / "вольт.db"))
+    conn = sqlite3.connect(str(vault / "стор.db"))
     conn.row_factory = sqlite3.Row
     попытка = {}
     for row in conn.execute("SELECT * FROM tasks ORDER BY id"):
@@ -652,7 +652,7 @@ def test_list_status_filter_is_computed_by_engine(vault):
 
 def test_list_carries_control_date_and_russian_status_text(vault):
     """Карточка списка не должна сама переводить статус или решать, есть ли
-    дата — оба поля уже готовы у ядра (see КОНТРАКТ.md)."""
+    дата — оба поля уже готовы у ядра (see CONTRACT.md)."""
     status_set(vault)
     by_task = {t["task"]: t for t in run(engine.cmd_list)["tasks"]}
     assert by_task["Ждёт"]["control_date"] == "2026-08-20"
@@ -684,7 +684,7 @@ def test_build_includes_only_what_needs_attention(vault):
 #
 # Раньше второй прогон в тот же день не трогал ни одного файла: сводка
 # сравнивалась с тем, что уже лежало на диске (экономило запись и не
-# заставляло Obsidian переиндексировать вольт впустую). В БД сравнивать не с
+# заставляло Obsidian переиндексировать стор впустую). В БД сравнивать не с
 # чем — сводка нигде не хранится, поэтому refresh честно пересчитывает и
 # отдаёт всё заново при каждом вызове; см. docstring cmd_refresh в engine.py.
 
@@ -754,7 +754,7 @@ def test_refresh_sets_summary_from_scratch(vault):
 # --- 10. Статус устаревает сам по себе -------------------------------------
 
 def test_status_goes_stale_as_day_passes(vault):
-    """Тот же вольт, другой день — другой статус. Без этого утренняя сборка
+    """Тот же стор, другой день — другой статус. Без этого утренняя сборка
     показывала бы вчерашнюю картину."""
     path = task(vault, "Грант", [step(1, "Собрать", control_date=date(2026, 8, 20))])
 
@@ -782,7 +782,7 @@ def test_status_goes_stale_as_day_passes(vault):
 # миграция (см. migrate_to_sqlite.py и его тесты).
 
 def test_unknown_meta_field_survives_save(vault):
-    conn = sqlite3.connect(str(vault / "вольт.db"))
+    conn = sqlite3.connect(str(vault / "стор.db"))
     store.migrate_schema(conn)
     conn.execute(
         "INSERT INTO tasks (title, schema, created, start_date, extra) "
@@ -934,7 +934,7 @@ def test_concurrent_done_and_notdone_loser_gets_honest_error(vault, monkeypatch)
 # Раньше здесь стояли пять тестов на BROKEN/KB_BROKEN — сборка не падает
 # целиком от одного файла с битым YAML, ошибка видна в JSON-ответе, а не
 # только в stderr. Для задач это устройство хранилища и было заплаткой на
-# то, что вольт правится руками мимо движка: SQLite такого файла не пропустит
+# то, что стор правится руками мимо движка: SQLite такого файла не пропустит
 # мимо INSERT вовсе, разбираться после записи ужe не с чем. Список остаётся в
 # ответе — пустым — ради стабильности формы; следующий тест это фиксирует.
 
@@ -958,7 +958,7 @@ def test_empty_vault(vault):
 # регрессионными: они описывают ровно то поведение, которого раньше не было.
 
 def test_unknown_step_status_does_not_break_build(vault):
-    """Вольт правится руками, и `status: сделан` вместо `done` — вопрос времени.
+    """Стор правится руками, и `status: сделан` вместо `done` — вопрос времени.
 
     Раньше это валило list/next/refresh/export целиком: «закрыт» и «открыт»
     проверялись разными правилами и на незнакомом статусе расходились.
@@ -985,7 +985,7 @@ def test_cannot_skip_closed_step(vault):
 # --- CLI как его увидит чужой ноутбук ---------------------------------------
 #
 # Отсюда и до конца — настоящий процесс: только так проверяется, что путь к
-# вольту вообще берётся из YUNGDRUNG_VAULT и что argparse связан с командами.
+# стору вообще берётся из YUNGDRUNG_VAULT и что argparse связан с командами.
 # Подмена модульных переменных этот кусок обходит стороной.
 
 def run_cli(vault, *args):
@@ -1011,15 +1011,15 @@ def test_cli_reads_env_var(tmp_path):
     result = run_cli(tmp_path, "--today", "2026-08-15", "list")
     assert [t["task"] for t in result["tasks"]] == ["Грант"]
     assert result["tasks"][0]["status"] == "due"
-    # реальный вольт репозитория при этом не читается
+    # реальный стор репозитория при этом не читается
     assert "Заявка на грант ФПГ" not in [t["task"] for t in result["tasks"]]
 
 
 def _real_repo_db_bytes():
-    """Байты настоящего вольт.db репозитория, если он уже мигрирован — или
+    """Байты настоящего стор.db репозитория, если он уже мигрирован — или
     None, пока миграция (этап d) не прошла. Оба случая проверяют одно и то
     же: CLI с другим YUNGDRUNG_VAULT не должен коснуться этого файла."""
-    настоящий = ROOT / "вольт.db"
+    настоящий = ROOT / "стор.db"
     return настоящий.read_bytes() if настоящий.is_file() else None
 
 
@@ -1038,7 +1038,7 @@ def test_cli_writes_to_its_own_vault(tmp_path):
     # использует фикстуру `vault`, `engine.VAULT` в текущем процессе на
     # tmp_path не подменён нарочно — весь смысл теста в том, что запись
     # виден через переменную окружения субпроцесса, а не через monkeypatch.
-    conn = sqlite3.connect(str(tmp_path / "вольт.db"))
+    conn = sqlite3.connect(str(tmp_path / "стор.db"))
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT id FROM tasks WHERE title='Грант'").fetchone()
     steps = {s["step_id"]: s for s in conn.execute(
@@ -1047,7 +1047,7 @@ def test_cli_writes_to_its_own_vault(tmp_path):
 
     assert steps[1]["status"] == "done"
     assert steps[2]["status"] == "pending"
-    assert _real_repo_db_bytes() == repo_before, "движок тронул настоящий вольт.db"
+    assert _real_repo_db_bytes() == repo_before, "движок тронул настоящий стор.db"
 
 
 # --- разбор человеческой даты ----------------------------------------------
@@ -1367,7 +1367,7 @@ def test_create_требует_хотя_бы_один_шаг(vault):
 
 @pytest.mark.parametrize("плохое", ['Отчёт/квартал', 'Файл: имя', 'Что?', 'a<b'])
 def test_create_отвергает_запрещённые_в_windows_символы(vault, плохое):
-    """Название задачи — это имя файла. Вольт уезжает на Windows, и задача,
+    """Название задачи — это имя файла. Стор уезжает на Windows, и задача,
     заведённая на маке, должна там открыться."""
     result = run(engine.cmd_create, json=json.dumps({
         "title": плохое, "steps": [{"title": "Шаг"}]}))
@@ -1731,10 +1731,10 @@ def test_from_template_без_повторения_журнал_не_трога�
 # Сама морфология и защита от мусора уже проверены в test_kb.py на голом
 # kb.py — здесь только то, что добавляет движок: чтение База/*.md,
 # `--source-*` подмешивание уже подтверждённого, сплайс [[ссылок]] в тело
-# задачи по убыванию смещения и идемпотентность через настоящий вольт.
+# задачи по убыванию смещения и идемпотентность через настоящий стор.
 
 def kb_note(vault, title, *, aliases=None, body=""):
-    """Кладёт запись базы знаний в вольт — по образцу task()."""
+    """Кладёт запись базы знаний в стор — по образцу task()."""
     (vault / "База").mkdir(exist_ok=True)
     meta = {"type": "note", "title": title}
     if aliases:
@@ -1969,8 +1969,8 @@ def test_kb_reject_mute_гасит_слово_у_любой_записи(vault):
 # к движку: путь по умолчанию, перевод BackupError в структурную ошибку
 # контракта, и что restore реально возвращает файлы к прежнему состоянию.
 
-def test_backup_копия_снимается_за_пределами_вольта(vault):
-    """Раздел 9 ТЗ: пропажа папки вольта не должна утащить с собой копии."""
+def test_backup_копия_снимается_за_пределами_стора(vault):
+    """Раздел 9 ТЗ: пропажа папки стора не должна утащить с собой копии."""
     task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
     r = run(engine.cmd_backup, dest=None, keep=None)
 
@@ -1996,7 +1996,7 @@ def test_restore_несуществующего_файла_понятная_ош
     assert "нет.zip" in r["errors"][0]["error"] or "не открывается" in r["errors"][0]["error"]
 
 
-def test_restore_возвращает_вольт_к_состоянию_копии(vault):
+def test_restore_возвращает_стор_к_состоянию_копии(vault):
     """Ядро требования R25: снял копию → изменил → восстановил → получил то,
     что было на момент копии, а не то, что стало после."""
     путь = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
@@ -2026,8 +2026,8 @@ def test_export_json_создаёт_валидный_json(vault):
     assert [t["name"] for t in данные["tasks"]] == ["Грант"]
 
 
-def test_export_json_путь_по_умолчанию_тоже_за_пределами_вольта(vault):
-    """Без явного --to движок сам не должен класть выгрузку внутрь вольта —
+def test_export_json_путь_по_умолчанию_тоже_за_пределами_стора(vault):
+    """Без явного --to движок сам не должен класть выгрузку внутрь стора —
     та же логика, что и у копий."""
     task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
     r = run(engine.cmd_export_json, to=None)
@@ -2107,7 +2107,7 @@ def test_work_битый_файл_настроек_не_роняет_ленту(
     assert work["start"].strftime("%H:%M") == "09:00"
 
 
-# --- перенос тега по всем задачам вольта ------------------------------------
+# --- перенос тега по всем задачам стора ------------------------------------
 #
 # settings.rename_tag/merge_tags меняют только справочник (цвет, закрепление):
 # сами задачи им не видны, об этом прямо сказано в докстроке merge_tags.
@@ -2300,7 +2300,7 @@ def test_миграция_доращивает_старую_базу(tmp_path, m
     """База, созданная кодом до групп (нет parent_id/mode), открывается и
     работает: колонки добавляются, данные не трогаются. Ровно это случится
     на ноутбуке заказчика при первом запуске после git pull."""
-    db = tmp_path / "вольт.db"
+    db = tmp_path / "стор.db"
     conn = sqlite3.connect(str(db))
     conn.executescript("""
         CREATE TABLE tasks (
@@ -2359,7 +2359,7 @@ def test_счётчик_переносов_карточка_берёт_у_дви
 
 def test_бэкап_берёт_папку_и_число_копий_из_настроек(vault, tmp_path):
     """`backup.folder` и `backup.keep_count` лежали в файле мёртвым грузом:
-    `cmd_backup` брал папку рядом с вольтом и константу `KEEP_DEFAULT`."""
+    `cmd_backup` брал папку рядом с стором и константу `KEEP_DEFAULT`."""
     своя = tmp_path / "своя-папка-копий"
     данные = cfg.defaults()
     данные["backup"]["folder"] = str(своя)
@@ -2440,7 +2440,7 @@ def test_происхождение_не_дублируется_в_extra(vault):
                 "recurrence": {"anchor": "2026-06-05", "freq": "monthly",
                                "bymonthday": [5]}})
     run(engine.cmd_recur, today=date(2026, 6, 5), name=None, limit=None)
-    conn = sqlite3.connect(str(vault / "вольт.db"))
+    conn = sqlite3.connect(str(vault / "стор.db"))
     extra = conn.execute("SELECT extra FROM tasks").fetchone()[0]
     conn.close()
     assert extra is None or "template_name" not in extra
@@ -2454,7 +2454,7 @@ def test_происхождение_не_дублируется_в_extra(vault):
 # лемм и заводился.
 
 @pytest.fixture
-def вольт_для_поиска(vault):
+def стор_для_поиска(vault):
     run(engine.cmd_create, json=json.dumps({
         "title": "Подать заявку на грант ФПГ",
         "body": "Созвониться с Василием про декларацию",
@@ -2474,13 +2474,13 @@ def вольт_для_поиска(vault):
     ("Василия", "Подать заявку на грант ФПГ"),       # имя в другом падеже
     ("налог", "Налоги за третий квартал"),
 ])
-def test_поиск_находит_в_любом_падеже(вольт_для_поиска, запрос, ожидание):
+def test_поиск_находит_в_любом_падеже(стор_для_поиска, запрос, ожидание):
     r = run(engine.cmd_search, text=запрос, kind=None, limit=None)
     assert r["ok"], r
     assert [н["title"] for н in r["results"]] == [ожидание]
 
 
-def test_два_слова_ищутся_вместе_а_не_по_отдельности(вольт_для_поиска):
+def test_два_слова_ищутся_вместе_а_не_по_отдельности(стор_для_поиска):
     """Человек, набравший два слова, ищет то, где есть оба."""
     assert run(engine.cmd_search, text="заявка грант",
                kind=None, limit=None)["count"] == 1
@@ -2488,7 +2488,7 @@ def test_два_слова_ищутся_вместе_а_не_по_отдельн
                kind=None, limit=None)["count"] == 0
 
 
-def test_новая_задача_ищется_сразу(вольт_для_поиска):
+def test_новая_задача_ищется_сразу(стор_для_поиска):
     """Индекс поддерживается при записи, а не только командой `reindex`:
     иначе заказчик заведёт задачу и не найдёт её."""
     run(engine.cmd_create, json=json.dumps({
@@ -2496,7 +2496,7 @@ def test_новая_задача_ищется_сразу(вольт_для_по�
     assert run(engine.cmd_search, text="субсидии", kind=None, limit=None)["count"] == 1
 
 
-def test_удалённая_задача_уходит_из_поиска(вольт_для_поиска):
+def test_удалённая_задача_уходит_из_поиска(стор_для_поиска):
     """Иначе она находится и ведёт в никуда."""
     run(engine.cmd_delete, task="Налоги за третий квартал")
     assert run(engine.cmd_search, text="налог", kind=None, limit=None)["count"] == 0
@@ -2516,7 +2516,7 @@ def test_переименованная_не_находится_по_старо�
     assert run(engine.cmd_search, text="декларация", kind=None, limit=None)["count"] == 1
 
 
-def test_мусорный_запрос_не_роняет_поиск(вольт_для_поиска):
+def test_мусорный_запрос_не_роняет_поиск(стор_для_поиска):
     """В строку поиска набирают что угодно, включая скобки и кавычки, на
     которых FTS5 ругается синтаксической ошибкой. Пустая выдача честнее
     исключения, вылетевшего в морду."""
@@ -2525,7 +2525,7 @@ def test_мусорный_запрос_не_роняет_поиск(вольт_�
         assert r["count"] == 0 if r.get("ok") else r["errors"]
 
 
-def test_reindex_собирает_индекс_заново(вольт_для_поиска):
+def test_reindex_собирает_индекс_заново(стор_для_поиска):
     """Способ починить разошедшийся индекс: чинится он только так."""
     engine.get_store().search_clear()
     assert run(engine.cmd_search, text="грант", kind=None, limit=None)["count"] == 0
@@ -2545,7 +2545,7 @@ def test_записи_базы_знаний_тоже_ищутся(vault):
 # --- архив: история и свёртка циклов (R24, Q24) ------------------------------
 
 @pytest.fixture
-def вольт_с_архивом(vault):
+def стор_с_архивом(vault):
     склад = tpl.JsonStore(vault)
     склад.save({"name": "Налоги", "steps": [{"title": "Подать", "offset_days": 0}],
                 "recurrence": {"anchor": "2026-06-05", "freq": "monthly",
@@ -2570,14 +2570,14 @@ def вольт_с_архивом(vault):
     return vault
 
 
-def test_архив_не_показывает_открытые_задачи(вольт_с_архивом):
+def test_архив_не_показывает_открытые_задачи(стор_с_архивом):
     r = run(engine.cmd_archive, tag=None, since=None, until=None)
     имена = {i["task"] for i in r["items"] if i["kind"] == "task"}
     assert "Ещё живая" not in имена
     assert r["count"] == 5  # 3 цикла + разовая + отменённая
 
 
-def test_циклы_повторения_сворачиваются_в_группу(вольт_с_архивом):
+def test_циклы_повторения_сворачиваются_в_группу(стор_с_архивом):
     r = run(engine.cmd_archive, tag=None, since=None, until=None)
     группы = [i for i in r["items"] if i["kind"] == "cycle_group"]
     assert len(группы) == 1
@@ -2588,19 +2588,19 @@ def test_циклы_повторения_сворачиваются_в_груп�
         ["2026-08-05", "2026-07-05", "2026-06-05"]  # свежее выше
 
 
-def test_отменённая_и_разовая_не_группируются(вольт_с_архивом):
+def test_отменённая_и_разовая_не_группируются(стор_с_архивом):
     r = run(engine.cmd_archive, tag=None, since=None, until=None)
     одиночные = {i["task"] for i in r["items"] if i["kind"] == "task"}
     assert одиночные == {"Разовая закрытая", "Отменённая"}
 
 
-def test_фильтр_по_тегу(вольт_с_архивом):
+def test_фильтр_по_тегу(стор_с_архивом):
     r = run(engine.cmd_archive, tag="личное", since=None, until=None)
     assert r["count"] == 1
     assert r["items"][0]["task"] == "Разовая закрытая"
 
 
-def test_фильтр_по_периоду_разбивает_группу(вольт_с_архивом):
+def test_фильтр_по_периоду_разбивает_группу(стор_с_архивом):
     """Один цикл прошёл фильтр, два отсеялись — группе сворачивать больше
     нечего, она обязана превратиться в одиночную строку."""
     r = run(engine.cmd_archive, tag=None, since=None, until="2026-07-01")
@@ -2610,9 +2610,9 @@ def test_фильтр_по_периоду_разбивает_группу(вол
     assert циклы[0]["task"] == "Налоги — 05.06.2026"
 
 
-def test_период_фильтрует_отменённую_по_дате_начала(вольт_с_архивом):
+def test_период_фильтрует_отменённую_по_дате_начала(стор_с_архивом):
     """У отменённой задачи может не быть completed_date вовсе — фильтровать её
-    неоткуда, кроме даты начала (2026-08-01 в этом вольте)."""
+    неоткуда, кроме даты начала (2026-08-01 в этом сторе)."""
     r = run(engine.cmd_archive, tag=None, since="2026-08-01", until="2026-08-01")
     имена = {i["task"] for i in r["items"] if i["kind"] == "task"}
     assert имена == {"Отменённая"}

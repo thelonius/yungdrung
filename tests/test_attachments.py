@@ -2,8 +2,8 @@
 """Тесты вложений: файловый слой (attachments.py), хранилище (store.py) и
 команды движка (cmd_attach/cmd_attachments/cmd_attachment_delete).
 
-Решение записано в ПЛАН.md («Вложения», обсуждение 2026-08-22): байты на
-диске под sha256, метаданные в вольт.db, владелец — задача или шаг.
+Решение записано в PLAN.md («Вложения», обсуждение 2026-08-22): байты на
+диске под sha256, метаданные в стор.db, владелец — задача или шаг.
 """
 import sys
 from datetime import date
@@ -45,7 +45,7 @@ def task(vault, name, steps=(), **fields):
     start_date = fields.pop("start_date", created)
     assert not fields
     import sqlite3
-    conn = sqlite3.connect(str(vault / "вольт.db"))
+    conn = sqlite3.connect(str(vault / "стор.db"))
     store.migrate_schema(conn)
     cur = conn.execute(
         "INSERT INTO tasks (title, schema, created, start_date, cancelled, body) "
@@ -129,7 +129,7 @@ def test_content_disposition_экранирует_переносы_строк():
 # --- store.py: метаданные ----------------------------------------------------
 
 def test_store_add_list_delete(tmp_path):
-    s = store.Store(tmp_path / "вольт.db")
+    s = store.Store(tmp_path / "стор.db")
     aid = s.add_attachment("task", "Грант", "abc", "план.png", "image/png",
                            123, "план участка", TODAY)
     [row] = s.list_attachments("task", "Грант")

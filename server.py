@@ -4,12 +4,12 @@
   python3 server.py            поднять на 127.0.0.1:8765 и открыть браузер
   python3 server.py --port 9000 --no-open
 
-Сервер ничего не пишет в вольт сам: он зовёт функции движка. Правило единственного
+Сервер ничего не пишет в стор сам: он зовёт функции движка. Правило единственного
 писателя остаётся в силе, а валидация живёт в одном месте — иначе форма и CLI
-разойдутся, и в вольт попадёт то, что движок потом не прочитает.
+разойдутся, и в стор попадёт то, что движок потом не прочитает.
 
 Слушает только петлевой адрес. Наружу этот сервис смотреть не должен: он пишет
-файлы в вольт и не имеет никакой аутентификации.
+файлы в стор и не имеет никакой аутентификации.
 """
 import argparse
 import base64
@@ -304,7 +304,7 @@ class Handler(BaseHTTPRequestHandler):
     def _settings_path(self):
         # Тот же приём, что в engine._work: путь считаем от engine.VAULT, а не
         # от settings.cfg.VAULT — второй вычислен независимо при импорте и не
-        # видит подмену вольта (тесты, --vault, что угодно другое).
+        # видит подмену стора (тесты, --vault, что угодно другое).
         return cfg.settings_path(engine.VAULT)
 
     def _settings_load(self):
@@ -528,7 +528,7 @@ class Handler(BaseHTTPRequestHandler):
     def _create(self, payload):
         # Раньше здесь дублировалась логика engine.cmd_create (свой сбор пути,
         # свой вызов save()) — два места, которые обязаны были совпадать и
-        # рано или поздно разошлись бы. КОНТРАКТ.md прямо запрещает оболочке
+        # рано или поздно разошлись бы. CONTRACT.md прямо запрещает оболочке
         # писать данные в обход ядра; зовём ту же команду, что и CLI.
         return engine.cmd_create(_args(json=json.dumps(payload)), date.today())
 
@@ -540,12 +540,12 @@ def main():
     args = ap.parse_args()
 
     if not engine.VAULT.is_dir():
-        sys.exit(f"нет папки вольта: {engine.VAULT}")
+        sys.exit(f"нет папки стора: {engine.VAULT}")
 
     адрес = f"http://127.0.0.1:{args.port}/"
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"Форма ввода задач: {адрес}")
-    print(f"Вольт: {engine.VAULT}")
+    print(f"Стор: {engine.VAULT}")
     print("Остановить — Ctrl+C")
     if not args.no_open:
         threading.Timer(0.5, webbrowser.open, [адрес]).start()

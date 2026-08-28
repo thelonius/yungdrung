@@ -612,7 +612,7 @@ def link_identity(record):
 def _atomic_write(path, payload):
     """Запись через временный файл с заменой.
 
-    Файл лежит в вольте, а вольт синхронизируется OneDrive и открыт в Obsidian.
+    Файл лежит в сторе, а стор синхронизируется OneDrive и открыт в Obsidian.
     Дописывание на месте при обрыве даёт обрезанный файл, то есть потерю всех ссылок
     разом, а не одной.
 
@@ -728,7 +728,7 @@ class MemoryLinkStore(LinkStore):
 
 
 class JsonLinkStore(LinkStore):
-    """Хранение ссылок в одном JSON-файле вольта.
+    """Хранение ссылок в одном JSON-файле стора.
 
     JSON, а не заметка с frontmatter: файл целиком пишет программа, свободного текста,
     ради которого заказчик открыл бы его в Obsidian, в нём нет. Плоский список
@@ -813,14 +813,14 @@ class MemoryExclusionStore(ExclusionStore):
 
 
 class JsonExclusionStore(ExclusionStore):
-    """Хранение отказов в файле вольта.
+    """Хранение отказов в файле стора.
 
     Кортеж в JSON не выживает, поэтому ключ пишется словарём с именами полей:
     `{"kb_entry_id": ..., "text": ...}`, где `null` в первом поле означает «слово
     целиком, у любой записи». Читать такой файл глазами можно — а это тот самый файл,
     который заказчик откроет, когда случайно отклонит нужное совпадение.
 
-    Список сортируется при записи: иначе файл в вольте меняется целиком при каждом
+    Список сортируется при записи: иначе файл в сторе меняется целиком при каждом
     сохранении, и OneDrive гоняет его туда-обратно на ровном месте.
     """
 
@@ -858,7 +858,7 @@ class JsonExclusionStore(ExclusionStore):
 # знает, — так что цикла тут не возникает, вопрос только в цене импорта.
 
 class SqliteLinkStore(LinkStore):
-    """Ссылки в `вольт.db`, таблица `kb_links`.
+    """Ссылки в `стор.db`, таблица `kb_links`.
 
     Отличие от JSON-предшественника одно и важное: `kb_entry_id` здесь число,
     внешний ключ на `kb_notes`, а не имя файла. Висячих ссылок на исчезнувшую
@@ -871,7 +871,7 @@ class SqliteLinkStore(LinkStore):
 
     def _склад(self):
         import store
-        return store.Store(self.vault / "вольт.db")
+        return store.Store(self.vault / "стор.db")
 
     def _load(self):
         return self._склад().load_kb_links()
@@ -881,7 +881,7 @@ class SqliteLinkStore(LinkStore):
 
 
 class SqliteExclusionStore(ExclusionStore):
-    """Отказы в `вольт.db`, таблица `kb_exclusions`.
+    """Отказы в `стор.db`, таблица `kb_exclusions`.
 
     Наружу отдаётся то же множество пар `(kb_entry_id, написание)`, что и у
     файлового склада: `None` в первом поле означает «слово целиком, у любой
@@ -893,7 +893,7 @@ class SqliteExclusionStore(ExclusionStore):
 
     def _склад(self):
         import store
-        return store.Store(self.vault / "вольт.db")
+        return store.Store(self.vault / "стор.db")
 
     def _load(self):
         return {(и["kb_entry_id"], и["text"]) for и in self._склад().load_kb_exclusions()}

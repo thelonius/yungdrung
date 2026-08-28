@@ -3,7 +3,7 @@
 
 Тот же приём изоляции, что в test_engine.py: подменяем VAULT через monkeypatch,
 зовём функции движка напрямую в обход argparse. Хранилище задач — SQLite
-(`вольт.db`), `task()` пишет строки в БД напрямую, в обход движка.
+(`стор.db`), `task()` пишет строки в БД напрямую, в обход движка.
 
 Отдельным блоком — тесты на `resolve_steps`: этот путь ловил настоящий баг
 при разработке. Перестановка шагов пересчитывает дефолт даты начала по новому
@@ -37,7 +37,7 @@ def vault(tmp_path, monkeypatch):
 
 
 def task(vault, name, steps, *, body="Тело заметки.\n", **fields):
-    """Кладёт задачу прямо в вольт.db, в обход движка. См. test_engine.py —
+    """Кладёт задачу прямо в стор.db, в обход движка. См. test_engine.py —
     та же функция, тот же принцип независимой затравки данных."""
     created = fields.pop("created", date(2026, 8, 1))
     start_date = fields.pop("start_date", created)
@@ -46,7 +46,7 @@ def task(vault, name, steps, *, body="Тело заметки.\n", **fields):
     cancelled_reason = fields.pop("cancelled_reason", None)
     assert not fields, f"task(): неизвестные поля {list(fields)}"
 
-    conn = sqlite3.connect(str(vault / "вольт.db"))
+    conn = sqlite3.connect(str(vault / "стор.db"))
     store.migrate_schema(conn)
     cur = conn.execute(
         "INSERT INTO tasks (title, schema, created, start_date, cancelled, "

@@ -154,7 +154,7 @@ def test_опасные_символы_в_названии_экранируют�
         "Иванов &amp; Ко &lt;&quot;тест&quot;&gt;"
 
 
-# --- remind.py: настройки вольта доходят до напоминаний ----------------------
+# --- remind.py: настройки стора доходят до напоминаний ----------------------
 #
 # У `remind.py` не было ни одного теста, и обе найденные при сверке ошибки
 # жили именно там: рабочие часы и повтор брались из констант, а не из файла
@@ -166,19 +166,19 @@ import remind  # noqa: E402
 
 
 @pytest.fixture
-def вольт(tmp_path, monkeypatch):
+def стор(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "VAULT", tmp_path)
     monkeypatch.setattr(cfg, "VAULT", tmp_path)
     return tmp_path
 
 
-def test_рабочие_часы_напоминаний_берутся_из_настроек(вольт):
+def test_рабочие_часы_напоминаний_берутся_из_настроек(стор):
     """`remind.py` жил на зашитых 09:00–21:00: заказчик ставил конец дня в
     18:00, лента и завал его слушались, а тосты шли до девяти вечера."""
     данные = cfg.defaults()
     данные["notifications"]["start"] = "10:00"
     данные["notifications"]["end"] = "18:00"
-    cfg.save(данные, cfg.settings_path(вольт))
+    cfg.save(данные, cfg.settings_path(стор))
 
     work = engine._work(None)
     assert (work["start"].hour, work["end"].hour) == (10, 18)
@@ -188,23 +188,23 @@ def test_рабочие_часы_напоминаний_берутся_из_на
     assert (work["start"], work["end"]) != (зашитые["start"], зашитые["end"])
 
 
-def test_повтор_берётся_из_настроек_а_аргумент_его_перекрывает(вольт):
+def test_повтор_берётся_из_настроек_а_аргумент_его_перекрывает(стор):
     """`repeat_minutes` лежал в файле мёртвым ключом: аргумент `--repeat` имел
     значение по умолчанию, поэтому «никто не просил» было неотличимо от
     «человек попросил 15», и файл не спрашивали никогда."""
     данные = cfg.defaults()
     данные["notifications"]["repeat_minutes"] = 45
-    cfg.save(данные, cfg.settings_path(вольт))
+    cfg.save(данные, cfg.settings_path(стор))
 
     from types import SimpleNamespace
     assert remind.повтор_минут(SimpleNamespace(repeat=None)) == 45
     assert remind.повтор_минут(SimpleNamespace(repeat=5)) == 5
 
 
-def test_битый_файл_настроек_не_отменяет_напоминание(вольт):
+def test_битый_файл_настроек_не_отменяет_напоминание(стор):
     """Молчать вместо напоминания из-за испорченного JSON нельзя: почему файл
     битый, разбирается в настройках-интерфейсе."""
-    cfg.settings_path(вольт).write_text("{ не json", encoding="utf-8")
+    cfg.settings_path(стор).write_text("{ не json", encoding="utf-8")
     from types import SimpleNamespace
     assert remind.повтор_минут(SimpleNamespace(repeat=None)) == notify.ПОВТОР_МИНУТ
 
@@ -233,37 +233,37 @@ def test_тост_без_звука_несёт_silent_audio(monkeypatch):
     assert '<audio silent="true"/>' not in захвачено["script"]
 
 
-def test_автобэкап_снимает_копию_когда_пора(вольт):
-    (вольт / "Задачи").mkdir()
+def test_автобэкап_снимает_копию_когда_пора(стор):
+    (стор / "Задачи").mkdir()
     данные = cfg.defaults()
     данные["backup"]["frequency_hours"] = 24
-    данные["backup"]["folder"] = str(вольт / "копии")
-    cfg.save(данные, cfg.settings_path(вольт))
+    данные["backup"]["folder"] = str(стор / "копии")
+    cfg.save(данные, cfg.settings_path(стор))
 
     remind.автобэкап(date(2026, 8, 24))
-    копии = list((вольт / "копии").glob("*.zip"))
+    копии = list((стор / "копии").glob("*.zip"))
     assert len(копии) == 1
 
 
-def test_автобэкап_на_битом_файле_настроек_падает_на_дефолт(вольт):
+def test_автобэкап_на_битом_файле_настроек_падает_на_дефолт(стор):
     """`_backup_settings` ловит `SettingsError` и подставляет дефолты (частота
     24 часа) — автобэкап не должен упасть из-за испорченного JSON, он же не
     виноват в том, что файл настроек сломан руками."""
-    (вольт / "Задачи").mkdir()
-    cfg.settings_path(вольт).write_text("{ не json", encoding="utf-8")
+    (стор / "Задачи").mkdir()
+    cfg.settings_path(стор).write_text("{ не json", encoding="utf-8")
 
     remind.автобэкап(date(2026, 8, 24))
     копии = list(engine.default_backup_dir().glob("*.zip"))
     assert len(копии) == 1
 
 
-def test_автобэкап_не_снимает_вторую_копию_раньше_срока(вольт):
-    (вольт / "Задачи").mkdir()
-    dest = вольт / "копии"
+def test_автобэкап_не_снимает_вторую_копию_раньше_срока(стор):
+    (стор / "Задачи").mkdir()
+    dest = стор / "копии"
     данные = cfg.defaults()
     данные["backup"]["frequency_hours"] = 24
     данные["backup"]["folder"] = str(dest)
-    cfg.save(данные, cfg.settings_path(вольт))
+    cfg.save(данные, cfg.settings_path(стор))
 
     remind.автобэкап(date(2026, 8, 24))
     remind.автобэкап(date(2026, 8, 24))

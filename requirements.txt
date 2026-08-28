@@ -1,4 +1,4 @@
-# Чтение и запись frontmatter вольта
+# Чтение и запись frontmatter стора
 pyyaml>=6.0
 
 # Выгрузка в Excel (R8)
