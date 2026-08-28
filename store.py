@@ -201,6 +201,20 @@ class DuplicateTitle(Exception):
     `path.exists()`, только источник истины теперь UNIQUE(title) в БД."""
 
 
+class StepConflict(Exception):
+    """Шаг изменился между чтением и записью — параллельная отметка того же
+    шага (второй браузер, двойной клик) выиграла гонку первой.
+
+    `save_task(..., expected_step=(id, снимок))` поднимает это вместо тихой
+    перезаписи, когда шаг в базе разошёлся со снимком, который вызывающий
+    видел при чтении. `actual_status` — статус шага сейчас, тем же текстом,
+    каким движок уже сообщает про закрытый шаг (`уже {status}`)."""
+
+    def __init__(self, actual_status):
+        self.actual_status = actual_status
+        super().__init__(f"шаг изменился конкурентно: теперь {actual_status}")
+
+
 def migrate_schema(conn):
     """Создать недостающее и дорастить старый файл до текущей SCHEMA.
 
@@ -361,7 +375,7 @@ class Store:
                 ids.append(row["id"])
         return ids
 
-    def save_task(self, task, today):
+    def save_task(self, task, today, expected_step=None):
         """Создать или переписать задачу целиком — один путь для обоих,
         различаются только по наличию `task["path"].id`.
 
@@ -370,6 +384,27 @@ class Store:
         входящий список из `steps_of(task)` уже полный и авторитетный (его же
         `apply_task_edit`/`build_task` строят целиком), и рассинхронизация от
         частичного апдейта опаснее, чем цена пересоздания нескольких строк.
+
+        `expected_step` — необязательная пара `(step_id, снимок)`, где «снимок» —
+        словарь `{status, control_date, completed_date, note}`, каким вызывающий
+        видел шаг при чтении. Команды над одним шагом (done/notdone/defer/fail/
+        skip) читают шаг, проверяют его в Python и только потом сюда приходят —
+        а между чтением и этим вызовом соединение никем не держится, поэтому
+        второй одновременный вызов может пройти ту же проверку над той же
+        устаревшей копией и переписать шаг поверх первого, ничего не сообщив
+        (issue #11). Проверять один статус мало: `notdone` статус не трогает
+        вовсе (двигает только `control_date` и журнал), и конкурентный `done`,
+        читавший шаг до этого переноса, проверку «статус тот же» всё равно
+        пройдёт — а на записи затрёт перенос своей более старой копией. Поэтому
+        сверяются все поля, которые эта пятёрка команд вообще меняет.
+
+        Guard закрывает разрыв атомарно: `UPDATE ... WHERE <снимок совпадает>` —
+        одно SQL-выражение, которое либо видит шаг ровно таким, как вызывающий
+        его читал, и проходит, либо не находит строку (её опередила чужая
+        запись) и валит всю запись `StepConflict`-ом до того, как её результат
+        тронет базу. Второй одновременный вызов, значит, либо ещё не начал
+        писать (и тогда просто ждёт лока на этом UPDATE — busy_timeout), либо
+        уже проиграл гонку за лок и обязан получить именно эту ошибку.
         """
         meta = task["meta"]
         ref = task["path"]
@@ -378,6 +413,24 @@ class Store:
 
         with self._connect() as conn:
             try:
+                if expected_step is not None and ref is not None and ref.id is not None:
+                    exp_step_id, snapshot = expected_step
+                    ожидаемое = {
+                        "status": snapshot.get("status"),
+                        "control_date": _iso(snapshot.get("control_date")),
+                        "completed_date": _iso(snapshot.get("completed_date")),
+                        "note": snapshot.get("note"),
+                    }
+                    условие = " AND ".join(f"{col} IS ?" for col in ожидаемое)
+                    guard = conn.execute(
+                        f"UPDATE steps SET status = status "
+                        f"WHERE task_id=? AND step_id=? AND {условие}",
+                        (ref.id, exp_step_id, *ожидаемое.values()))
+                    if guard.rowcount == 0:
+                        row = conn.execute(
+                            "SELECT status FROM steps WHERE task_id=? AND step_id=?",
+                            (ref.id, exp_step_id)).fetchone()
+                        raise StepConflict(row["status"] if row else None)
                 if ref is None or ref.id is None:
                     cur = conn.execute(
                         "INSERT INTO tasks (title, schema, created, start_date, "
