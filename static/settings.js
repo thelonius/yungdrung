@@ -116,6 +116,12 @@ function открытьПодтверждение(c) {
 
 $('#cr-no').addEventListener('click', () => confirmDlg.close());
 
+// Клик по подложке — то же самое, что «Отмена»: target === confirmDlg только
+// у клика вне карточки, содержимое диалога событие до этого не пропускает.
+confirmDlg.addEventListener('click', (e) => {
+  if (e.target === confirmDlg) confirmDlg.close();
+});
+
 $('#cr-yes').addEventListener('click', async () => {
   if (!восстановитьЦель) return;
   const btn = $('#cr-yes');
