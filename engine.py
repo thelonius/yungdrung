@@ -1687,6 +1687,23 @@ def cmd_save_template(args, today):
     return {"ok": True, "template": шаблон["name"], "steps": len(шаблон.get("steps") or [])}
 
 
+def cmd_template_delete(args, today):
+    """Удалить шаблон насовсем. Подтверждение — дело интерфейса, не движка,
+    как и у `cmd_delete` для задач.
+
+    Файлы вложений шаблона на диске не трогаем: они адресованы своим sha256
+    (`attachments.py`), и `cmd_delete` для задач строки в `attachments` тоже
+    не чистит — тот же приём здесь для единообразия. Ссылка на исчезнувший
+    шаблон никого не ломает: её читают только по source_type/source_id
+    конкретной задачи или шаблона, а не перечислением всех строк подряд.
+    """
+    склад = tpl.JsonStore(VAULT)
+    if not склад.delete(args.name):
+        return {"ok": False, "errors": [{"field": "name",
+                                         "error": f"нет шаблона «{args.name}»"}]}
+    return {"ok": True, "template": args.name, "deleted": True}
+
+
 def _create_task_from_data(данные, today, existing=None):
     """Общий путь записи новой задачи — из формы, из шаблона, из повторения.
 
@@ -3131,6 +3148,10 @@ def main():
     st = sub.add_parser("save-template", help="создать шаблон с нуля или переписать существующий")
     st.add_argument("json", help='JSON шаблона или "-" для чтения из stdin, форма как у cmd_create')
     st.set_defaults(func=cmd_save_template)
+
+    td = sub.add_parser("template-delete", help="удалить шаблон насовсем")
+    td.add_argument("name")
+    td.set_defaults(func=cmd_template_delete)
 
     tp = sub.add_parser("template-preview", help="какие даты дадут шаги ещё не сохранённого шаблона")
     tp.add_argument("json", help='JSON шаблона или "-" для чтения из stdin')
