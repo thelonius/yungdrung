@@ -8,8 +8,10 @@
 
 const $ = (s, r = document) => r.querySelector(s);
 const confirmDlg = $('#confirm-restore');
+const tagDlg = $('#tag-action');
 
 let восстановитьЦель = null; // копия, которую подтверждаем в диалоге
+let тегДействие = null; // {mode: 'rename'|'merge', tag} — на что отвечает tag-action
 
 async function get(url) {
   const r = await fetch(url);
@@ -185,6 +187,7 @@ async function загрузитьНастройки() {
   $('#work-end').value = n.end;
   $('#work-weekends').checked = !!n.weekends;
   отрисоватьПричины(текущиеНастройки.reasons);
+  отрисоватьТеги(текущиеНастройки.tags);
 }
 
 $('#work-save').addEventListener('click', async () => {
@@ -259,6 +262,133 @@ $('#reason-add').addEventListener('click', async () => {
 
 $('#reason-new').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); $('#reason-add').click(); }
+});
+
+// --- теги --------------------------------------------------------------
+//
+// Тег заводится сам при сохранении задачи с новым тегом (engine.py,
+// Issue #7) — этот раздел про то, что нельзя автоматом: закрепление,
+// переименование и объединение задач с одним тегом на другой.
+
+function отрисоватьТеги(tags) {
+  $('#tags-list').replaceChildren(...(tags || []).map(тегСтрокой));
+}
+
+function тегСтрокой(t) {
+  const li = document.createElement('li');
+  li.className = 'reason-row';
+
+  const swatch = document.createElement('span');
+  swatch.className = 'tag-swatch';
+  swatch.style.background = t.color;
+
+  const name = document.createElement('span');
+  name.className = 'reason-name';
+  name.textContent = t.name;
+
+  const pin = document.createElement('button');
+  pin.type = 'button';
+  pin.className = 'ghost small';
+  pin.textContent = t.pinned ? 'Закреплён' : 'Закрепить';
+  pin.addEventListener('click', async () => {
+    const r = await post('/api/tags-toggle-pinned', { name: t.name });
+    if (!r.ok) return всплывашка((r.errors || []).map((e) => e.error).join('; '));
+    текущиеНастройки.tags = r.result;
+    отрисоватьТеги(r.result);
+  });
+
+  const rename = document.createElement('button');
+  rename.type = 'button';
+  rename.className = 'ghost small';
+  rename.textContent = 'Переименовать';
+  rename.addEventListener('click', () => открытьДействиеТега('rename', t));
+
+  const merge = document.createElement('button');
+  merge.type = 'button';
+  merge.className = 'ghost small';
+  merge.textContent = 'Объединить';
+  merge.disabled = (текущиеНастройки.tags || []).length < 2;
+  merge.addEventListener('click', () => открытьДействиеТега('merge', t));
+
+  li.append(swatch, name, pin, rename, merge);
+  return li;
+}
+
+function открытьДействиеТега(mode, t) {
+  тегДействие = { mode, tag: t };
+  $('#ta-err').hidden = true;
+  if (mode === 'rename') {
+    $('#ta-title').textContent = `Переименовать «${t.name}»`;
+    $('#ta-text').textContent = 'Название изменится и в справочнике, и на всех задачах с этим тегом.';
+    $('#ta-rename-field').hidden = false;
+    $('#ta-merge-field').hidden = true;
+    $('#ta-new-name').value = t.name;
+  } else {
+    $('#ta-title').textContent = `Объединить «${t.name}» с другим тегом`;
+    $('#ta-text').textContent = 'Все задачи с этим тегом получат целевой тег, исходный пропадёт из справочника.';
+    $('#ta-rename-field').hidden = true;
+    $('#ta-merge-field').hidden = false;
+    const select = $('#ta-target');
+    select.replaceChildren(...(текущиеНастройки.tags || [])
+      .filter((x) => x.name !== t.name)
+      .map((x) => {
+        const opt = document.createElement('option');
+        opt.value = x.name;
+        opt.textContent = x.name;
+        return opt;
+      }));
+  }
+  tagDlg.showModal();
+}
+
+$('#ta-no').addEventListener('click', () => tagDlg.close());
+
+$('#ta-yes').addEventListener('click', async () => {
+  if (!тегДействие) return;
+  const btn = $('#ta-yes');
+  btn.disabled = true;
+  try {
+    const { mode, tag } = тегДействие;
+    const route = mode === 'rename' ? '/api/tags-rename' : '/api/tags-merge';
+    const body = mode === 'rename'
+      ? { old_name: tag.name, new_name: $('#ta-new-name').value.trim() }
+      : { source: tag.name, target: $('#ta-target').value };
+    const r = await post(route, body);
+    if (!r.ok) {
+      $('#ta-err').textContent = (r.errors || []).map((e) => e.error).join('; ') || 'не вышло';
+      $('#ta-err').hidden = false;
+      return;
+    }
+    tagDlg.close();
+    текущиеНастройки.tags = r.result;
+    отрисоватьТеги(r.result);
+    всплывашка(mode === 'rename' ? 'Тег переименован'
+      : `Тег объединён, задач затронуто: ${r.tasks_updated}`);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('#tag-add').addEventListener('click', async () => {
+  const input = $('#tag-new');
+  const имя = input.value.trim();
+  $('#tags-err').hidden = true;
+  if (!имя) return;
+  const r = await post('/api/tags-add', {
+    name: имя, color: $('#tag-new-color').value, pinned: false,
+  });
+  if (!r.ok) {
+    $('#tags-err').textContent = (r.errors || []).map((e) => e.error).join('; ') || 'не вышло';
+    $('#tags-err').hidden = false;
+    return;
+  }
+  input.value = '';
+  текущиеНастройки.tags = r.result;
+  отрисоватьТеги(r.result);
+});
+
+$('#tag-new').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); $('#tag-add').click(); }
 });
 
 загрузитьКопии();
