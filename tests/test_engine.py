@@ -631,6 +631,46 @@ def test_current_step_is_first_open_one(vault):
     assert tasks[0]["steps_done"] == 2 and tasks[0]["steps_total"] == 4
 
 
+def test_list_status_filter_is_computed_by_engine(vault):
+    """Issue #4: бакет «ждут» был виден только числом в счётчике ленты. Фильтр
+    в `cmd_list` — тот же ключ, что уже даёт `task_status`, оболочка ничего не
+    пересчитывает, только просит нужный срез."""
+    status_set(vault)
+    ждут = run(engine.cmd_list, status="waiting")["tasks"]
+    assert [t["task"] for t in ждут] == ["Ждёт"]
+
+    без_даты = run(engine.cmd_list, status="no_date")["tasks"]
+    assert [t["task"] for t in без_даты] == ["Без даты"]
+
+    просрочены = run(engine.cmd_list, status="overdue")["tasks"]
+    assert [t["task"] for t in просрочены] == ["Просрочена"]
+
+    без_фильтра = run(engine.cmd_list, status=None)["tasks"]
+    assert len(без_фильтра) == 6
+
+
+def test_list_carries_control_date_and_russian_status_text(vault):
+    """Карточка списка не должна сама переводить статус или решать, есть ли
+    дата — оба поля уже готовы у ядра (see КОНТРАКТ.md)."""
+    status_set(vault)
+    by_task = {t["task"]: t for t in run(engine.cmd_list)["tasks"]}
+    assert by_task["Ждёт"]["control_date"] == "2026-08-20"
+    assert by_task["Ждёт"]["status_text"] == "ждёт"
+    assert by_task["Без даты"]["control_date"] is None
+    assert by_task["Без даты"]["status_text"] == "без даты"
+    assert by_task["Без даты"]["status"] == "no_date"  # не путается с "waiting"
+
+
+def test_list_sorted_by_control_date_dateless_last(vault):
+    """Минимальная планка issue #4: «ждёт неделю» и «нет даты вовсе» — разные
+    ситуации, дальний срок должен идти раньше пустой даты, а не вперемешку."""
+    task(vault, "Через неделю", [step(1, "Шаг", control_date=date(2026, 8, 22))])
+    task(vault, "Завтра", [step(1, "Шаг", control_date=date(2026, 8, 16))])
+    task(vault, "Совсем без даты", [step(1, "Шаг")])
+    tasks = run(engine.cmd_list)["tasks"]
+    assert [t["task"] for t in tasks] == ["Завтра", "Через неделю", "Совсем без даты"]
+
+
 def test_build_includes_only_what_needs_attention(vault):
     """`waiting` и `done` в утренней сборке не нужны, `no_date` — нужен."""
     status_set(vault)

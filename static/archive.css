@@ -50,6 +50,11 @@
 }
 
 .archive-status.is-cancelled { color: var(--danger); border-color: var(--danger); }
+.archive-status.is-overdue { color: var(--danger); border-color: var(--danger); }
+.archive-status.is-due { color: var(--accent); border-color: var(--accent); }
+/* Бездатная задача — не то же самое, что «ждёт неделю»: issue #4, минимальная
+   планка требует отдельно её выделять, а не смешивать с обычным ожиданием. */
+.archive-status.is-no-date { color: var(--danger); border-color: var(--line-strong); }
 
 .archive-group-head {
   width: 100%;

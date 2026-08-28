@@ -2156,18 +2156,38 @@ def cmd_archive(args, today):
 
 
 def cmd_list(args, today):
+    """Все задачи — старый CLI `list`, он же список для веб-морды (issue #4:
+    без него бакет «ждут» и бездатные задачи были видны только числом в счётчике
+    ленты, ни разу строкой).
+
+    Фильтр по статусу — на стороне ядра: те же ключи, что даёт `task_status`
+    (`overdue`/`due`/`waiting`/`no_date`/`done`/`cancelled`/`empty`), а не
+    текст, который оболочке пришлось бы держать в синхроне с движком.
+    Сортировка по дате контроля тоже здесь: «ждёт неделю» и «нет даты вовсе» —
+    разные ситуации (`no_date` — свой статус), но подряд в списке бездатные
+    задачи всё равно должны быть видны отдельной группой, а не перемешаны.
+    """
+    статус_фильтр = getattr(args, "status", None) if args else None
     out = []
     for task in load_tasks():
+        status = task_status(task, today)
+        if статус_фильтр and status != статус_фильтр:
+            continue
         листья = leaves_of(task)
         step = current_step(task)
+        активные = current_steps(task)
+        контроли = sorted(as_date(s["control_date"]) for s in активные if s.get("control_date"))
         out.append({
             "task": task["path"].stem,
-            "status": task_status(task, today),
+            "status": status,
+            "status_text": STATUS_RU[status],
             "category": task["meta"].get("tags") or [],
             "steps_done": sum(1 for s in листья if s.get("status") in (DONE, SKIPPED)),
             "steps_total": len(листья),
             "current": step.get("title") if step else None,
+            "control_date": контроли[0].isoformat() if контроли else None,
         })
+    out.sort(key=lambda t: (t["control_date"] is None, t["control_date"] or "", t["task"]))
     return {"today": today.isoformat(), "tasks": out, "broken": list(BROKEN)}
 
 
@@ -3197,7 +3217,10 @@ def main():
     bb.add_argument("--to", help="новая дата для defer, формат 2026-08-24 или "
                                  "2026-08-24 15:00 — уже разобранная, не «+3»")
     bb.set_defaults(func=cmd_backlog_bulk)
-    sub.add_parser("list", help="все задачи").set_defaults(func=cmd_list)
+    ls = sub.add_parser("list", help="все задачи")
+    ls.add_argument("--status", help="только с этим статусом: overdue/due/waiting/"
+                                      "no_date/done/cancelled/empty")
+    ls.set_defaults(func=cmd_list)
     r = sub.add_parser("refresh", help="пересчитать сводку во всех задачах (перед сборкой)")
     r.add_argument("--force", action="store_true",
                    help="переписать все файлы, даже если сводка не изменилась — "
