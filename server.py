@@ -135,6 +135,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._attachment_bytes(route[len("/вложение/"):])
         if route == "/api/settings":
             return self._json(200, self._settings_load())
+        if route == "/api/kb/exclusions":
+            return self._json(200, engine.cmd_kb_exclusions(_args(), date.today()))
         self._json(404, {"error": "нет такого адреса"})
 
     def _attachment_bytes(self, id_text):
@@ -237,6 +239,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, engine.cmd_kb_reject(
                 _args(mention=payload.get("mention"),
                       mute=bool(payload.get("mute"))), date.today()))
+        if route == "/api/kb/forget":
+            return self._json(200, engine.cmd_kb_forget(
+                _args(key=payload.get("key")), date.today()))
         if route == "/api/backup":
             return self._json(200, engine.cmd_backup(
                 _args(dest=payload.get("dest"), keep=payload.get("keep"),

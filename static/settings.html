@@ -60,6 +60,16 @@
   </section>
 
   <section class="settings-section">
+    <h2>Отклонённые совпадения базы знаний</h2>
+    <p class="hint">Кнопка «нет» на предложенной ссылке и «заглушить слово» пишутся сюда
+      навсегда — без отмены случайный клик снимает слово с распознавания на всю базу.
+      «Слово целиком» — отказ у любой записи, «запись» — только у неё.</p>
+    <ul class="tpl-list" id="kb-exclusions-list"></ul>
+    <p class="empty" id="kb-exclusions-empty" hidden>Отказов пока нет.</p>
+    <p class="err" id="kb-exclusions-err" hidden></p>
+  </section>
+
+  <section class="settings-section">
     <div class="settings-head">
       <h2>Резервные копии</h2>
       <button type="button" class="primary small" id="backup-now">Сделать копию сейчас</button>
