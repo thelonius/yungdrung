@@ -104,11 +104,15 @@ async function обновить() {
   const d = await get('/api/feed');
 
   $('#counters').replaceChildren(...[
-    ['просрочено', d.counts.overdue, true],
-    ['сегодня', d.counts.today, false],
-    ['ждут', d.counts.waiting, false],
-  ].map(([имя, n, горячий]) => {
-    const s = document.createElement('span');
+    ['просрочено', d.counts.overdue, true, null],
+    ['сегодня', d.counts.today, false, null],
+    // «ждут» — единственный след всего бакета до issue #4: без ссылки сюда
+    // задачи вроде «Нанять прораба...» (status waiting, дата контроля через
+    // неделю) были видны только числом, дальше — только через поиск.
+    ['ждут', d.counts.waiting, false, '/задачи'],
+  ].map(([имя, n, горячий, ссылка]) => {
+    const s = document.createElement(ссылка ? 'a' : 'span');
+    if (ссылка) s.href = ссылка;
     if (горячий && n > 0) s.className = 'hot';
     s.innerHTML = `${имя} <b>${n}</b>`;
     return s;

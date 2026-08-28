@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Все задачи — Yungdrung</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/feed.css">
+<link rel="stylesheet" href="/archive.css">
+</head>
+<body>
+
+<main class="wrap">
+
+  <header class="head">
+    <div class="head-row">
+      <h1>Все задачи</h1>
+      <div class="head-links">
+        <a class="ghost small" href="/">К ленте</a>
+        <a class="ghost small" href="/архив">Архив</a>
+      </div>
+    </div>
+    <p class="hint">
+      Задачи, которые не просрочены и не ждут сегодняшнего контроля, на ленте не
+      видны — этот список закрывает пробел (issue #4). Даты и статус считает
+      движок, здесь только показ.
+    </p>
+  </header>
+
+  <div class="tabs" id="tabs" role="tablist">
+    <button type="button" class="tab" data-status="" role="tab">Все</button>
+    <button type="button" class="tab" data-status="overdue" role="tab">Просрочено</button>
+    <button type="button" class="tab" data-status="due" role="tab">Сегодня</button>
+    <button type="button" class="tab on" data-status="waiting" role="tab" aria-selected="true">Ждут</button>
+    <button type="button" class="tab" data-status="no_date" role="tab">Без даты</button>
+    <button type="button" class="tab" data-status="done" role="tab">Закрыто</button>
+    <button type="button" class="tab" data-status="cancelled" role="tab">Отменено</button>
+  </div>
+
+  <p class="note" id="count"></p>
+  <ol class="archive-list" id="list"></ol>
+  <p class="empty" id="empty" hidden>Ничего не нашлось</p>
+
+</main>
+
+<script src="/list.js"></script>
+</body>
+</html>
