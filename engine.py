@@ -517,6 +517,26 @@ def task_summary(task, today):
     }
 
 
+def _sync_tags_to_catalog(tags):
+    """Тег, вписанный в карточку задачи (свободное поле «через запятую»),
+    обязан появиться в справочнике settings.py — иначе tags-rename/tags-merge
+    (Issue #7) не находят теги, которые реально стоят на задачах: справочник
+    заполнялся только явным tags-add и расходился с тем, что видно в ленте.
+
+    add_tag на уже существующем имени — SettingsError (дубликат в `_tags_add`),
+    это штатный повтор, а не сбой сохранения задачи, поэтому глотаем любую
+    SettingsError целиком: карточка не должна не сохраниться из-за того, что
+    её тег не прошёл валидацию справочника (например, цвет по умолчанию тут
+    ни при чём, но лучше не ронять запись задачи ради строки в другом файле).
+    """
+    path = cfg.settings_path(VAULT)
+    for имя in tags:
+        try:
+            cfg.add_tag(имя, "gray", pinned=False, path=path)
+        except cfg.SettingsError:
+            pass
+
+
 def save(task, today):
     """Статус и сводка пересчитываются при каждой записи, руками их никто не ставит.
 
@@ -529,6 +549,7 @@ def save(task, today):
     meta = task["meta"]
     meta["schema"] = SCHEMA
     meta.update(task_summary(task, today))
+    _sync_tags_to_catalog(meta.get("tags") or [])
     склад = get_store()
     склад.save_task(task, today)
     _index_task(склад, task)

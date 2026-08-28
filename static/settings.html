@@ -70,6 +70,30 @@
   </section>
 
   <section class="settings-section">
+    <h2>Теги</h2>
+    <p class="hint">Справочник тегов, которые реально стоят на задачах. Цвет и
+      закрепление видны на карточках; «Объединить» переносит все задачи с исходного
+      тега на целевой и убирает исходный из справочника.</p>
+    <ul class="tpl-list" id="tags-list"></ul>
+    <div class="settings-actions">
+      <input type="text" id="tag-new" autocomplete="off" placeholder="Новый тег">
+      <select id="tag-new-color">
+        <option value="gray">серый</option>
+        <option value="red">красный</option>
+        <option value="orange">оранжевый</option>
+        <option value="yellow">жёлтый</option>
+        <option value="green">зелёный</option>
+        <option value="cyan">голубой</option>
+        <option value="blue">синий</option>
+        <option value="purple">фиолетовый</option>
+        <option value="pink">розовый</option>
+      </select>
+      <button type="button" class="ghost small" id="tag-add">Добавить</button>
+    </div>
+    <p class="err" id="tags-err" hidden></p>
+  </section>
+
+  <section class="settings-section">
     <div class="settings-head">
       <h2>Резервные копии</h2>
       <button type="button" class="primary small" id="backup-now">Сделать копию сейчас</button>
@@ -105,6 +129,29 @@
     <div class="control-actions">
       <button type="button" class="primary" id="cr-yes">Да, восстановить</button>
       <button type="button" class="ghost" id="cr-no">Отмена</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Переименование и объединение тега — общий диалог на оба действия. -->
+<dialog id="tag-action">
+  <form method="dialog" class="control-card">
+    <header class="control-head">
+      <h2 class="control-step" id="ta-title"></h2>
+      <p class="control-meta" id="ta-text"></p>
+    </header>
+    <div class="field" id="ta-rename-field">
+      <label for="ta-new-name">Новое название</label>
+      <input type="text" id="ta-new-name" autocomplete="off">
+    </div>
+    <div class="field" id="ta-merge-field" hidden>
+      <label for="ta-target">Слить в тег</label>
+      <select id="ta-target"></select>
+    </div>
+    <p class="err" id="ta-err" hidden></p>
+    <div class="control-actions">
+      <button type="button" class="primary" id="ta-yes">Сохранить</button>
+      <button type="button" class="ghost" id="ta-no">Отмена</button>
     </div>
   </form>
 </dialog>

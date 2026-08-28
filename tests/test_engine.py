@@ -1180,6 +1180,38 @@ def test_create_заводит_задачу_с_разобранными_дата
     assert "Заметка" in body
 
 
+def test_create_регистрирует_новый_тег_в_справочнике_настроек(vault):
+    """Issue #7: тег из свободного поля карточки должен попасть в справочник
+    settings.py, иначе tags-rename/tags-merge не находят теги, которые реально
+    стоят на задачах (справочник заполнялся только явным tags-add)."""
+    result = run(engine.cmd_create, json=json.dumps({
+        "title": "Продлить страховку",
+        "tags": ["быт"],
+        "steps": [{"title": "Собрать документы", "control_date": "завтра"}],
+    }))
+    assert result["ok"]
+
+    теги = cfg.list_tags(cfg.settings_path(vault))
+    assert [t["name"] for t in теги] == ["быт"]
+
+
+def test_create_повторный_тег_не_дублируется_в_справочнике(vault):
+    """Тег, уже заведённый в справочнике (в том числе с другим цветом или
+    закреплением), не должен ни упасть, ни размножиться при повторном
+    использовании на новой задаче."""
+    cfg.add_tag("быт", "blue", pinned=True, path=cfg.settings_path(vault))
+    result = run(engine.cmd_create, json=json.dumps({
+        "title": "Продлить страховку",
+        "tags": ["быт"],
+        "steps": [{"title": "Собрать документы", "control_date": "завтра"}],
+    }))
+    assert result["ok"]
+
+    теги = cfg.list_tags(cfg.settings_path(vault))
+    assert len(теги) == 1
+    assert теги[0] == {"name": "быт", "color": "blue", "pinned": True}
+
+
 def test_create_собирает_все_ошибки_разом(vault):
     """Форме надо подсветить все проблемные поля сразу, а не гонять по кругу."""
     result = run(engine.cmd_create, json=json.dumps({

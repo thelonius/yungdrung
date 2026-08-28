@@ -71,6 +71,15 @@
 
 .reason-name { flex: 1 1 auto; }
 
+.tag-swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  flex: 0 0 auto;
+}
+
 @media (max-width: 640px) {
   .card-fields { grid-template-columns: 1fr; }
 }
