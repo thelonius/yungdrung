@@ -267,5 +267,62 @@ $('#reason-new').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); $('#reason-add').click(); }
 });
 
+// --- отклонённые совпадения базы знаний ------------------------------------
+//
+// Список того, на что заказчик ответил «нет» или «заглушить» (kb.py,
+// ExclusionStore). Без отмены заглушённое слово молча пропадает из
+// распознавания навсегда — карточка отдаёт ключ ровно в том виде, в каком
+// его вернул /api/kb/exclusions, и передаёт его в /api/kb/forget как есть,
+// без пересборки: у файлового и БД-склада разный тип kb_entry_id.
+
+function отказСтрокой(и) {
+  const li = document.createElement('li');
+  li.className = 'reason-row';
+
+  const name = document.createElement('span');
+  name.className = 'reason-name';
+  const метка = и.scope === 'word' ? 'слово целиком' : (и.title || 'запись удалена');
+  name.textContent = `«${и.text}» — ${метка}`;
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ghost small';
+  btn.textContent = 'Вернуть';
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    $('#kb-exclusions-err').hidden = true;
+    try {
+      const r = await post('/api/kb/forget', {
+        key: { kb_entry_id: и.kb_entry_id, text: и.text },
+      });
+      if (!r.ok) {
+        $('#kb-exclusions-err').textContent =
+          (r.errors || []).map((e) => e.error).join('; ') || 'не вышло';
+        $('#kb-exclusions-err').hidden = false;
+        return;
+      }
+      await загрузитьОтказыБазы();
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  li.append(name, btn);
+  return li;
+}
+
+async function загрузитьОтказыБазы() {
+  const d = await get('/api/kb/exclusions');
+  if (!d.ok) {
+    $('#kb-exclusions-err').textContent =
+      (d.errors || []).map((e) => e.error).join('; ') || 'не загрузилось';
+    $('#kb-exclusions-err').hidden = false;
+    return;
+  }
+  $('#kb-exclusions-list').replaceChildren(...d.exclusions.map(отказСтрокой));
+  $('#kb-exclusions-empty').hidden = d.exclusions.length > 0;
+}
+
 загрузитьКопии();
 загрузитьНастройки();
+загрузитьОтказыБазы();

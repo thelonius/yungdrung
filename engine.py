@@ -2750,7 +2750,10 @@ def cmd_kb_reject(args, today):
 
     `mute=True` — слово никогда не считается ссылкой ни у одной записи
     («Грант» у заказчика чаще сумма денег, чем запись базы). `mute=False` —
-    отказ только от этой конкретной гипотезы у этой записи.
+    отказ только от этой конкретной гипотезы у этой записи БАЗЫ ЗНАНИЙ: ключ
+    исключения — пара (запись, написание), источник (задача, из которой пришёл
+    ответ) в него не входит, и отказ, поставленный на одной задаче, гасит
+    гипотезу и на всех остальных.
     """
     try:
         гипотеза = _read_json_arg(args.mention)
@@ -2763,6 +2766,51 @@ def cmd_kb_reject(args, today):
     else:
         склад.reject(гипотеза)
     return {"ok": True}
+
+
+def cmd_kb_exclusions(args, today):
+    """Список отказов автораспознавания — раздел 7.1 ТЗ, отмена «нет»/«заглушить».
+
+    Без списка отказ, поставленный по ошибке, не видно: `--mute` гасит слово у
+    всех записей разом (`kb.word_key`), и один случайный клик молча снимает
+    слово с распознавания навсегда. Возвращает записи в том же виде, в каком
+    их принимает `cmd_kb_forget` (эхо-пара `kb_entry_id`/`text`), плюс
+    `scope` («word» для отказа по слову целиком, «entry» для отказа по
+    конкретной записи) и `title` записи, если она ещё существует в базе —
+    без заголовка список выглядел бы набором нечитаемых написаний.
+    """
+    _, склад = _kb_stores()
+    записи = {str(з["id"]): з for з in load_kb_entries()}
+    исключения = []
+    for entry_id, написание in склад.keys():
+        запись = записи.get(str(entry_id)) if entry_id is not None else None
+        исключения.append({
+            "kb_entry_id": entry_id,
+            "text": написание,
+            "scope": "word" if entry_id is None else "entry",
+            "title": запись["title"] if запись else None,
+        })
+    исключения.sort(key=lambda и: (и["scope"], и["title"] or "", и["text"]))
+    return {"ok": True, "exclusions": исключения}
+
+
+def cmd_kb_forget(args, today):
+    """Отмена отказа — «передумал», раздел 7.1 ТЗ. Без неё `--mute` необратим.
+
+    `key` — та же пара `kb_entry_id`/`text`, что вернул `cmd_kb_exclusions`
+    (или сама отклонённая гипотеза с теми же полями): эхо-приём, как у
+    `kb-confirm` с гипотезами `kb-scan`, а не отдельный набор аргументов —
+    типы `kb_entry_id` разные у файлового и БД-склада (имя записи и число), и
+    гадать его на командной строке ненадёжно.
+    """
+    try:
+        ключ = _read_json_arg(args.key)
+    except json.JSONDecodeError as e:
+        return {"ok": False, "errors": [{"field": "key", "error": f"битый JSON: {e}"}]}
+
+    _, склад = _kb_stores()
+    снято = склад.forget((ключ.get("kb_entry_id"), ключ.get("text")))
+    return {"ok": True, "removed": снято}
 
 
 # --- выгрузка в Excel ------------------------------------------------------
@@ -3293,6 +3341,16 @@ def main():
     kr.add_argument("--mention", required=True, help='JSON гипотезы или "-" для stdin')
     kr.add_argument("--mute", action="store_true", help="слово никогда не ссылка, у любой записи")
     kr.set_defaults(func=cmd_kb_reject)
+
+    ke = sub.add_parser("kb-exclusions",
+                        help="список отклонённых и заглушенных совпадений базы знаний")
+    ke.set_defaults(func=cmd_kb_exclusions)
+
+    kf = sub.add_parser("kb-forget", help="снять отказ — совпадение снова начнёт предлагаться")
+    kf.add_argument("--key", required=True,
+                    help='JSON {"kb_entry_id": ..., "text": ...} (эхо kb-exclusions) '
+                         'или "-" для stdin')
+    kf.set_defaults(func=cmd_kb_forget)
 
     x = sub.add_parser("export", help="выгрузить весь вольт в Excel")
     x.add_argument("--to", help="куда писать; по умолчанию — «Выгрузка <дата>.xlsx» "

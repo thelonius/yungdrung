@@ -690,6 +690,7 @@ def test_название_без_зацепок_попадает_в_skipped():
 # перецепить, подчёркивания просто исчезнут.
 
 import json  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
 import engine  # noqa: E402
 import store as store_mod  # noqa: E402
 
@@ -795,3 +796,85 @@ def test_склад_ссылок_в_бд_каскадно_чистится_пр�
     assert len(склад.for_entry(номер)) == 1
     s.delete_kb_note(номер)
     assert склад.all() == []
+
+
+# --- issue #6: отказ обратим — список отказов и его отмена через движок -----
+#
+# `ExclusionStore.forget` в kb.py существовал и был покрыт тестами выше
+# (`test_снятый_отказ_возвращает_совпадение`), но нигде не вызывался: ни из
+# командной строки, ни из HTTP, ни из формы. `--mute` гасит слово у всех
+# записей разом, и без отмены случайный клик по «заглушить» ломает
+# распознавание навсегда без единого способа узнать об этом или откатить.
+# Тесты ниже — на новую обвязку в engine.py (`cmd_kb_exclusions`,
+# `cmd_kb_forget`), а не на сам склад.
+
+def _args(**kwargs):
+    return SimpleNamespace(**kwargs)
+
+
+def test_cmd_kb_exclusions_пуст_пока_отказов_нет(вольт_с_базой):
+    assert engine.cmd_kb_exclusions(_args(), None) == {"ok": True, "exclusions": []}
+
+
+def test_cmd_kb_forget_отменяет_отказ_по_записи(вольт_с_базой):
+    """Отклонённая гипотеза пропадает из скана, попадает в список отказов с
+    названием записи, а после `kb-forget` — предлагается снова."""
+    текст = "Отдать Василию Говнову деньги"
+    гипотеза = engine.cmd_kb_scan(_args(text=текст), None)["hypotheses"][0]
+
+    engine.cmd_kb_reject(_args(mention=гипотеза, mute=False), None)
+    assert engine.cmd_kb_scan(_args(text=текст), None)["hypotheses"] == []
+
+    список = engine.cmd_kb_exclusions(_args(), None)
+    assert список["ok"] and len(список["exclusions"]) == 1
+    отказ = список["exclusions"][0]
+    assert отказ["scope"] == "entry"
+    assert отказ["title"] == "Василий Говнов"
+    assert отказ["kb_entry_id"] == "Василий Говнов"
+    assert отказ["text"] == kb.normalize(гипотеза["matched"])
+
+    итог = engine.cmd_kb_forget(_args(key=отказ), None)
+    assert итог == {"ok": True, "removed": True}
+
+    assert engine.cmd_kb_exclusions(_args(), None)["exclusions"] == []
+    гипотезы_снова = engine.cmd_kb_scan(_args(text=текст), None)["hypotheses"]
+    assert гипотезы_снова and гипотезы_снова[0]["entry_id"] == "Василий Говнов"
+
+
+def test_cmd_kb_forget_отменяет_заглушённое_слово(вольт_с_базой):
+    """`--mute` гасит слово у любой записи (`kb_entry_id: null` в списке) — и
+    ровно это должно быть видно в `kb-exclusions` и отменяемо `kb-forget`,
+    иначе слово потеряно для распознавания навсегда. Тот же пример, что и в
+    докстринге `find_mentions`: «отдать Говнову денег» про «Василия Говнова» —
+    гипотеза на одно слово (`source: part`), а не на всё название."""
+    текст = "Отдать Говнову деньги"
+    гипотеза = engine.cmd_kb_scan(_args(text=текст), None)["hypotheses"][0]
+    assert гипотеза["source"] == "part"
+
+    engine.cmd_kb_reject(_args(mention=гипотеза, mute=True), None)
+    assert engine.cmd_kb_scan(_args(text=текст), None)["hypotheses"] == []
+
+    отказ = engine.cmd_kb_exclusions(_args(), None)["exclusions"][0]
+    assert отказ["scope"] == "word"
+    assert отказ["kb_entry_id"] is None
+    assert отказ["title"] is None
+    assert отказ["text"] == kb.normalize(гипотеза["matched"])
+
+    итог = engine.cmd_kb_forget(_args(key=отказ), None)
+    assert итог == {"ok": True, "removed": True}
+    assert engine.cmd_kb_exclusions(_args(), None)["exclusions"] == []
+    assert engine.cmd_kb_scan(_args(text=текст), None)["hypotheses"] != []
+
+
+def test_cmd_kb_forget_повтор_не_ошибка(вольт_с_базой):
+    """Кнопку «вернуть» жмут дважды чаще, чем кажется — второй раз не должен
+    падать, просто нечего снимать."""
+    итог = engine.cmd_kb_forget(
+        _args(key={"kb_entry_id": "Никого-нет", "text": "призрак"}), None)
+    assert итог == {"ok": True, "removed": False}
+
+
+def test_cmd_kb_forget_битый_json_возвращает_ошибку_поля(вольт_с_базой):
+    r = engine.cmd_kb_forget(_args(key="{сломано"), None)
+    assert r["ok"] is False
+    assert r["errors"][0]["field"] == "key"
