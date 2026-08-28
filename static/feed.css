@@ -10,11 +10,12 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 16px;
+  flex-wrap: wrap;
 }
 
 .small { padding: 5px 11px; font-size: 13px; }
 
-.head-links { display: flex; gap: 8px; flex-shrink: 0; }
+.head-links { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .counters {
   display: flex;
