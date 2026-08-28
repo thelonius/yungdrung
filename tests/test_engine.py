@@ -1462,6 +1462,27 @@ def test_recur_несколько_шаблонов_независимы(vault):
     assert all(t["created"] for t in r["templates"])
 
 
+def test_recur_name_ограничивает_одним_шаблоном(vault):
+    """`--name` обещан справкой как «только один шаблон» (R8 issue): без фильтра
+    в цикле по складу обрабатывались все шаблоны с активным повторением,
+    независимо от переданного имени."""
+    месячный_шаблон(vault, day=5)
+    tpl.JsonStore(vault).save({
+        "name": "Полить цветы",
+        "steps": [{"title": "Полить", "offset_days": 0}],
+        "recurrence": {"anchor": "2026-11-01", "freq": "weekly", "byweekday": [0]},
+    })
+    r = run(engine.cmd_recur, today=date(2026, 11, 20), name="Полить цветы", limit=None)
+    assert [t["template"] for t in r["templates"]] == ["Полить цветы"]
+
+
+def test_recur_name_несуществующего_шаблона_ничего_не_делает(vault):
+    месячный_шаблон(vault, day=5)
+    r = run(engine.cmd_recur, today=date(2026, 11, 20), name="Нет такого", limit=None)
+    assert r["templates"] == []
+    assert r["created"] == 0
+
+
 # --- база знаний: подключение kb.py (R17, разделы 5.7/5.8/7 ТЗ) ------------
 #
 # Сама морфология и защита от мусора уже проверены в test_kb.py на голом

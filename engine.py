@@ -1828,6 +1828,8 @@ def cmd_recur(args, today):
         if not правило:
             continue
         имя = шаблон["name"]
+        if getattr(args, "name", None) and имя != args.name:
+            continue
         запись = state.get(имя) or {}
         предыдущий = None
         if запись.get("previous"):
