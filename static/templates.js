@@ -60,15 +60,28 @@ function карточка(t) {
   recurBtn.textContent = t.recurrence ? 'Повторение' : 'Настроить повтор';
   recurBtn.addEventListener('click', () => открытьПовторение(t));
 
+  const delBtn = document.createElement('button');
+  delBtn.type = 'button';
+  delBtn.className = 'ghost small danger-hover';
+  delBtn.textContent = 'Удалить';
+  delBtn.addEventListener('click', () => удалить(t.name));
+
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = 'primary small';
   btn.textContent = 'Завести задачу';
   btn.addEventListener('click', () => открыть(t.name));
 
-  actions.append(filesBtn, recurBtn, btn);
+  actions.append(filesBtn, recurBtn, delBtn, btn);
   li.append(info, actions);
   return li;
+}
+
+async function удалить(name) {
+  if (!confirm(`Удалить шаблон «${name}» насовсем? Это нельзя отменить.`)) return;
+  const r = await post('/api/template-delete', { name });
+  if (r.ok) await загрузить();
+  else alert((r.errors || [{}])[0].error || 'не получилось');
 }
 
 async function загрузить() {

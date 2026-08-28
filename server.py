@@ -188,6 +188,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/template-create":
             return self._json(200, engine.cmd_save_template(
                 _args(json=json.dumps(payload)), date.today()))
+        if route == "/api/template-delete":
+            return self._json(200, engine.cmd_template_delete(
+                _args(name=payload.get("name")), date.today()))
         if route == "/api/template-preview":
             шаблон = {k: v for k, v in payload.items() if k != "start"}
             return self._json(200, engine.cmd_template_preview(

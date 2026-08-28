@@ -29,6 +29,8 @@
 
 .tpl-actions { display: flex; gap: 8px; flex-shrink: 0; }
 
+.danger-hover:hover { color: var(--danger); border-color: var(--danger); }
+
 .weekdays {
   display: flex;
   gap: 10px;

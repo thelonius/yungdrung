@@ -1251,6 +1251,32 @@ def test_save_template_битый_json(vault):
     assert result["errors"][0]["field"] is None
 
 
+# --- шаблоны: удаление -------------------------------------------------------
+#
+# Issue #9: `templates.drop`/`Store.delete` уже умели удалять шаблон из списка,
+# но до CLI, HTTP и страницы эта возможность не доходила — завести шаблон
+# можно было, а убрать нет.
+
+def test_template_delete_убирает_шаблон_из_склада(vault):
+    run(engine.cmd_save_template, json=json.dumps({
+        "name": "тест",
+        "steps": [{"title": "шаг", "offset_days": 0}],
+    }))
+    result = run(engine.cmd_template_delete, name="тест")
+    assert result["ok"]
+    assert result["template"] == "тест"
+
+    склад = tpl.JsonStore(vault)
+    assert склад.get("тест") is None
+    assert склад.all() == []
+
+
+def test_template_delete_несуществующего_шаблона_не_падает(vault):
+    result = run(engine.cmd_template_delete, name="Нет такого")
+    assert not result["ok"]
+    assert result["errors"][0]["field"] == "name"
+
+
 def test_template_preview_считает_даты_до_сохранения(vault):
     """Форма показывает даты, пока человек ещё набирает сдвиги, — иначе «+10»
     выглядит правдоподобно ровно до попадания на праздники."""
