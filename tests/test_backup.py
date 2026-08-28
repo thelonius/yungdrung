@@ -259,6 +259,18 @@ def test_вложения_не_попадают_в_архив(vault, копии)
     assert итог["files"] == 3  # те же три файла, что и без папки вложений
 
 
+@pytest.mark.parametrize("папка", ["venv", ".venv"])
+def test_venv_в_вольте_в_копию_не_идёт(vault, копии, папка):
+    """Системный pip на маке заблокирован PEP 668, и разработчик часто заводит
+    окружение прямо внутри вольта. Копия — снимок задач заказчика, а не чужих
+    site-packages весом в гигабайты (issue #3)."""
+    (vault / папка / "lib").mkdir(parents=True)
+    (vault / папка / "lib" / "site.py").write_text("мусор", encoding="utf-8")
+    итог = backup.create(vault, копии, now=datetime(2026, 8, 18, 14, 30, 5))
+    assert not any(имя.startswith(папка + "/") for имя in имена_в_архиве(итог["file"]))
+    assert итог["files"] == 3  # те же три файла, что и без venv
+
+
 def test_зеркало_вложений_докапывает_недостающее(vault, копии):
     (vault / "вложения").mkdir()
     (vault / "вложения" / "a.png").write_bytes(b"one")
