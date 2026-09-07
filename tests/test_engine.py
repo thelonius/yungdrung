@@ -681,6 +681,98 @@ def test_build_includes_only_what_needs_attention(vault):
     assert build["due"][0]["overdue_days"] == 5
 
 
+# --- 8b. Лента читает только текущую работу ---------------------------------
+#
+# `collect_open` отбирает задачи запросом (`store.tasks_with_open_steps`), а не
+# проходом по всему стору: объём текущей работы не зависит от размера архива, а
+# время до этого зависело линейно. Отбор в SQL держится на двух вещах, и обе
+# ниже под тестом: на том, что «закрыт» в SQL и в Python значат одно и то же, и
+# на том, что частичный индекс действительно применяется.
+
+def test_отменённая_задача_не_попадает_в_ленту_и_завал(vault):
+    """Шаги отменённой задачи остаются открытыми — по ним просто больше не
+    работают. Без явного условия она всплывала бы просроченной каждый день.
+
+    Инвариант был записан комментарием в `collect_open` и не проверялся ничем;
+    при переносе отбора в SQL сломать его было бы нечем поймать.
+    """
+    task(vault, "Живая", [step(1, "Собрать", control_date=date(2026, 8, 10))])
+    task(vault, "Отменённая", [step(1, "Собрать", control_date=date(2026, 8, 10))],
+         cancelled=True, cancelled_reason="не актуально")
+
+    лента = run(engine.cmd_feed)
+    завал = run(engine.cmd_backlog)
+
+    названия = {i["task"] for i in лента["feed"]} | {i["task"] for i in завал["backlog"]}
+    assert "Живая" in названия
+    assert "Отменённая" not in названия
+    assert лента["counts"]["waiting"] == 0, "и в «ждут» ей тоже места нет"
+
+
+def test_закрытые_статусы_совпадают_с_движком():
+    """`store.CLOSED_STATUSES` дублирует знание из `engine.is_closed`, потому
+    что фильтр по статусу теперь есть и в SQL, а импортировать engine в store
+    нельзя — вышло бы кольцо. Значит, расхождение возможно, и вот сторож.
+
+    Разойдись они — задача с шагом в статусе, который SQL считает закрытым, а
+    Python открытым, просто перестала бы приходить в ленту. Молча.
+    """
+    assert set(store.CLOSED_STATUSES) == {engine.DONE, engine.SKIPPED, engine.FAILED}
+    for статус in store.CLOSED_STATUSES:
+        assert engine.is_closed({"status": статус}), статус
+    for статус in (engine.OPEN, "сделан", "", "непонятно"):
+        assert not engine.is_closed({"status": статус}), статус
+
+
+def test_лента_ищет_открытые_шаги_по_частичному_индексу(vault):
+    """Частичный индекс применяется, а не лежит без дела.
+
+    SQLite берёт частичный индекс только когда условие запроса совпадает с
+    условием индекса. Разъедься они — всё останется правильным и станет опять
+    линейным по размеру архива, а ни один тест на поведение этого не заметит.
+    """
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    conn = sqlite3.connect(str(vault / "стор.db"))
+    store.migrate_schema(conn)
+    план = " ".join(r[3] for r in conn.execute(
+        "EXPLAIN QUERY PLAN SELECT t.* FROM tasks t WHERE EXISTS ("
+        "  SELECT 1 FROM steps s WHERE s.task_id = t.id "
+        f"   AND s.mode IS NULL AND s.status NOT IN {store.CLOSED_STATUSES}"
+        ") AND t.cancelled = 0 ORDER BY t.title"))
+    conn.close()
+    assert "idx_steps_open" in план, план
+
+
+def test_отметка_шага_не_читает_архив(vault):
+    """`find_task` собирала весь стор, чтобы сверить кусок строки с названиями,
+    — поэтому отметка шага стоила столько же, сколько лента. Теперь названия
+    приходят одной колонкой, а шаги и журнал собираются у одной задачи.
+
+    Проверяется свойством, а не временем: сколько бы закрытых задач ни лежало
+    рядом, ни одна из них не должна быть собрана.
+    """
+    for i in range(5):
+        task(vault, f"Архивная {i}", [
+            step(1, "Было", status="done", completed_date=date(2026, 8, 1))])
+    цель = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+
+    собранные = []
+    подлинный = store.Store._assemble_task
+
+    def учёт(self, conn, row):
+        собранные.append(row["title"])
+        return подлинный(self, conn, row)
+
+    store.Store._assemble_task = учёт
+    try:
+        r = run(engine.cmd_done, task=цель.stem, step="1")
+    finally:
+        store.Store._assemble_task = подлинный
+
+    assert r["ok"]
+    assert собранные == ["Грант"], f"собрано лишнее: {собранные}"
+
+
 # --- 9. refresh ------------------------------------------------------------
 #
 # `refresh` — чистое чтение: он отдаёт сводку на указанный день и не пишет

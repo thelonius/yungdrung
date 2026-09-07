@@ -34,6 +34,14 @@ SCHEMA = 3
 
 DEFAULT_TAG_COLOR = "#999999"
 
+# Статусы, означающие «шаг закрыт». Дубль знания из `engine.is_closed`, и это
+# осознанно: запросы ниже фильтруют по статусу в SQL, а тянуть сюда engine
+# нельзя — он импортирует store, получилось бы кольцо. Авторитет остаётся за
+# `engine.is_closed` (в частности, незнакомый статус он считает открытым, и
+# `NOT IN` ниже ведёт себя так же), а согласованность сторожит тест
+# `test_закрытые_статусы_совпадают_с_движком`.
+CLOSED_STATUSES = ("done", "skipped", "failed")
+
 # Поля задачи, которые движок вычисляет заново при каждом save() (статус,
 # текущий шаг, дата контроля, буксование, прогресс) сюда не идут — колонок под
 # них нет — source of truth остаётся в шагах, сводка вычисляется при save().
@@ -250,6 +258,17 @@ def migrate_schema(conn):
     # git pull. Ровно это и поймал тест про доращивание старой базы.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_cycle "
                  "ON tasks(template_name, cycle_key)")
+    # Частичный индекс: в нём лежат только открытые листья, то есть 150–450
+    # строк независимо от того, насколько вырос архив закрытых задач. Обычный
+    # индекс по status здесь не помог бы — 95% строк в нём было бы 'done', и
+    # `NOT IN` всё равно свёлся бы к перебору. Условие обязано совпадать с
+    # запросом в `tasks_with_open_steps` дословно, иначе SQLite индекс не
+    # применит. Тоже после ALTER TABLE, а не в SCHEMA_SQL: ссылается на `mode`,
+    # колонку версии 2, и на базе, заведённой до неё, упал бы на «no such
+    # column» при первом же открытии после git pull.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_steps_open ON steps(task_id) "
+        f"WHERE mode IS NULL AND status NOT IN {CLOSED_STATUSES}")
 
 
 def _iso(value):
@@ -285,9 +304,61 @@ class Store:
     # --- чтение --------------------------------------------------------
 
     def load_tasks(self):
+        """Весь стор целиком, со шагами и журналом.
+
+        Дорого и растёт линейно вместе с архивом: на пяти тысячах закрытых
+        задач это ~22 тысячи запросов и 180 мс. Оставлено для тех, кому правда
+        нужны все задачи — миграции, выгрузки, `reindex`, «все задачи»
+        списком. Всё, что смотрит только на текущую работу или на одну задачу,
+        обязано брать один из запросов ниже.
+        """
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM tasks ORDER BY title").fetchall()
             return [self._assemble_task(conn, row) for row in rows]
+
+    def tasks_with_open_steps(self, include_cancelled=False):
+        """Только задачи, в которых есть хоть один открытый лист.
+
+        Форма ответа — та же, что у `load_tasks`, поэтому вызывающий код и
+        доменные функции (`current_steps`, `stall_count`) не меняются: разница
+        в том, что закрытый хвост не читается вовсе. Лента, завал и `next`
+        смотрят ровно на текущую работу, и её объём от роста архива не зависит.
+
+        Отменённая задача исключается по умолчанию. Шаги в ней остаются
+        открытыми — по ним просто больше не работают, — поэтому без явного
+        условия она всплывала бы просроченной каждый день, хотя
+        `engine.task_status` считает её отменённой первым же правилом. Заодно
+        это снимает напоминания: `remind.py` ходит за списком туда же.
+
+        Условие по шагам совпадает с частичным индексом `idx_steps_open`
+        дословно — см. `migrate_schema`.
+        """
+        сроки = "AND t.cancelled = 0 " if not include_cancelled else ""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT t.* FROM tasks t WHERE EXISTS ("
+                "  SELECT 1 FROM steps s WHERE s.task_id = t.id "
+                f"   AND s.mode IS NULL AND s.status NOT IN {CLOSED_STATUSES}"
+                f") {сроки}ORDER BY t.title").fetchall()
+            return [self._assemble_task(conn, row) for row in rows]
+
+    def titles(self):
+        """Пары (id, название) по всем задачам — без шагов, тегов и журнала.
+
+        Для поиска задачи по куску названия. Сравнение остаётся в Python
+        намеренно: `lower()` и `LIKE` в SQLite работают только по ASCII, и
+        «ГРАНТ» не нашёл бы «грант». Одна колонка на пять тысяч строк читается
+        за микросекунды — дорого было именно собирать при этом шаги и журнал.
+        """
+        with self._connect() as conn:
+            return [(r["id"], r["title"])
+                    for r in conn.execute("SELECT id, title FROM tasks ORDER BY title")]
+
+    def task_by_id(self, task_id):
+        """Одна задача целиком по id, или None."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            return self._assemble_task(conn, row) if row else None
 
     def _assemble_task(self, conn, row):
         steps = conn.execute(
