@@ -416,6 +416,9 @@ class Handler(BaseHTTPRequestHandler):
         "defer": (engine.cmd_defer, True),
         "fail": (engine.cmd_fail, True),
         "skip": (engine.cmd_skip, False),
+        # Отмена промаха. Причины не требует по определению: человек не
+        # объясняет, почему нажал не туда.
+        "undo": (engine.cmd_undo, False),
     }
 
     @staticmethod

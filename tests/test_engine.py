@@ -455,6 +455,143 @@ def test_defer_can_go_backwards(vault):
     assert meta["status"] == "просрочена"
 
 
+# --- 7c. undo: отмена промаха ------------------------------------------------
+#
+# Запись из журнала удаляется, а не гасится обратной: промах — не событие,
+# которое случилось, и оставлять его строкой значило бы навсегда испортить
+# счётчик буксования, а тот здесь сигнал «нужен другой ход», а не украшение.
+# Только последнее действие и только сегодняшнее — это отмена промаха, а не
+# правка истории. См. докстринг `cmd_undo`.
+
+def test_undo_возвращает_сделанный_шаг_в_работу(vault):
+    путь = task(vault, "Грант", [
+        step(1, "Собрать", control_date=TODAY),
+        step(2, "Отправить"),
+    ])
+    run(engine.cmd_done, task="Грант", step="1")
+
+    r = run(engine.cmd_undo, task="Грант", step="1")
+
+    assert r["ok"] and r["undone"] == "done" and r["status"] == "pending"
+    шаг = read(путь)[0]["steps"][0]
+    assert шаг["status"] == "pending"
+    assert шаг["completed_date"] is None
+    assert шаг["log"] == [], "запись удалена, а не погашена обратной"
+
+
+def test_undo_снимает_перенос_и_возвращает_прежнюю_дату(vault):
+    путь = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    run(engine.cmd_notdone, task="Грант", step="1", reason="не было времени")
+    assert read(путь)[0]["steps"][0]["control_date"] == TOMORROW
+
+    r = run(engine.cmd_undo, task="Грант", step="1")
+
+    assert r["ok"] and r["undone"] == "not_done"
+    assert read(путь)[0]["steps"][0]["control_date"] == TODAY
+
+
+def test_undo_возвращает_счётчик_буксования(vault):
+    """Главный смысл удаления записи, а не гашения: случайный клик не должен
+    оставлять шаг буксующим."""
+    путь = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY, log=[
+        {"date": date(2026, 8, 1), "event": "not_done", "reason": "некогда"},
+        {"date": date(2026, 8, 8), "event": "not_done", "reason": "некогда"},
+    ])])
+    третий = run(engine.cmd_notdone, task="Грант", step="1", reason="не было времени")
+    assert третий["stalled"] == 3 and третий["hint"]
+
+    r = run(engine.cmd_undo, task="Грант", step="1")
+
+    assert r["stalled"] == 2
+    assert engine.stall_count(read(путь)[0]["steps"][0]) == 2
+
+
+def test_undo_возвращает_снятый_и_проваленный_шаг(vault):
+    for имя, команда, событие in (("Снятая", engine.cmd_skip, "skipped"),
+                                  ("Провальная", engine.cmd_fail, "failed")):
+        путь = task(vault, имя, [step(1, "Собрать", control_date=TODAY)])
+        run(команда, task=имя, step="1", reason="не было времени")
+
+        r = run(engine.cmd_undo, task=имя, step="1")
+
+        assert r["ok"] and r["undone"] == событие, имя
+        assert read(путь)[0]["steps"][0]["status"] == "pending", имя
+
+
+def test_undo_подряд_разбирает_цепочку_сегодняшних_промахов(vault):
+    путь = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    run(engine.cmd_notdone, task="Грант", step="1", reason="не было времени")
+    run(engine.cmd_notdone, task="Грант", step="1", reason="не было времени")
+
+    assert run(engine.cmd_undo, task="Грант", step="1")["ok"]
+    assert run(engine.cmd_undo, task="Грант", step="1")["ok"]
+
+    шаг = read(путь)[0]["steps"][0]
+    assert шаг["log"] == [] and шаг["control_date"] == TODAY
+
+
+def test_undo_не_трогает_вчерашнее(vault):
+    """Отмена промаха, а не правка истории задним числом."""
+    путь = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY, log=[
+        {"date": date(2026, 8, 14), "event": "not_done", "reason": "некогда"}])])
+
+    r = run(engine.cmd_undo, task="Грант", step="1")
+
+    assert r["ok"] is False
+    assert "сегодняшнее" in r["errors"][0]["error"]
+    assert len(read(путь)[0]["steps"][0]["log"]) == 1
+
+
+def test_undo_по_пустому_журналу_отвечает_ошибкой_а_не_падает(vault):
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+
+    r = run(engine.cmd_undo, task="Грант", step="1")
+
+    assert r["ok"] is False and "нечего отменять" in r["errors"][0]["error"]
+
+
+def test_undo_не_отменяет_переоткрытие(vault):
+    """`reopened` в откат не входит: это осознанное действие человека из
+    карточки задачи, а не промах на ленте."""
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    run(engine.cmd_done, task="Грант", step="1")
+    run(engine.cmd_reopen, task="Грант", step="1")
+
+    r = run(engine.cmd_undo, task="Грант", step="1")
+
+    assert r["ok"] is False and "reopened" in r["errors"][0]["error"]
+
+
+def test_undo_оставляет_дату_доставшуюся_следующему_шагу(vault):
+    """Оговорка, зафиксированная нарочно, а не забытая.
+
+    `done` ставит дату контроля шагам, которые от него открылись и своей даты
+    не имели. Откат их не снимает: в журнале не записано, каким шагам они
+    достались, а угадывать по совпадению даты значило бы иногда затирать дату,
+    поставленную руками. В интерфейсе это не видно — отменённый шаг снова
+    открыт, значит следующие не активны и в ленту не идут; тест сторожит именно
+    это следствие, чтобы поведение не считалось багом при следующем чтении.
+    """
+    путь = task(vault, "Грант", [
+        step(1, "Собрать", control_date=TODAY),
+        step(2, "Отправить"),
+    ])
+    run(engine.cmd_done, task="Грант", step="1")
+    assert read(путь)[0]["steps"][1]["control_date"] == TODAY
+
+    run(engine.cmd_undo, task="Грант", step="1")
+
+    assert read(путь)[0]["steps"][1]["control_date"] == TODAY, "дата остаётся"
+
+    # Проверяется прямо по активности, а не по ленте: попадание в ленту зависит
+    # ещё и от рабочих часов, а TODAY в этом наборе — суббота, и при выходных по
+    # умолчанию нерабочих строка уехала бы в «ждут». К отмене это отношения не
+    # имеет.
+    задача = engine._find_task_by_stem("Грант")
+    assert [s["id"] for s in engine.current_steps(задача)] == [1], \
+        "активен снова первый шаг, второй ждёт, несмотря на доставшуюся дату"
+
+
 # --- 7b. Массовые действия в разборе завала (R20) ---------------------------
 
 def test_bulk_defer_increases_counter_and_writes_distinct_log_entry(vault):
