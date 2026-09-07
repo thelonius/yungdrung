@@ -2930,3 +2930,121 @@ def test_close_с_параллельной_группой_закрывает_в�
     r = run(engine.cmd_close, task=т.stem)
     assert r["ok"] and r["closed_steps"] == 2
     assert r["task_status"] == "done"
+
+
+# --- записи базы знаний: список, карточка, правка ---------------------------
+#
+# Записи живут в `kb_notes`, идентификатор числовой. Тесты идут через команды
+# движка, а не через store напрямую: страницы `/база` и `/база/запись` зовут
+# ровно их, и проверять надо тот же путь, каким ходит интерфейс.
+
+
+def создать_запись(title, **поля):
+    return run(engine.cmd_kb_note_create, json=json.dumps({"title": title, **поля}))
+
+
+def test_kb_create_заводит_запись_и_она_видна_в_списке(vault):
+    r = создать_запись("Василий Говнов", aliases=["Вася"], body="Директор Экодора")
+    assert r["ok"] and isinstance(r["note"], int)
+
+    записи = run(engine.cmd_kb_note_list)["notes"]
+    assert [(з["title"], з["aliases"], з["body"]) for з in записи] == \
+        [("Василий Говнов", ["Вася"], "Директор Экодора")]
+
+
+def test_kb_create_без_названия_ошибка_с_указанием_поля(vault):
+    r = создать_запись("   ")
+    assert r["ok"] is False
+    assert r["errors"] == [{"field": "title", "error": "Название обязательно"}]
+    assert run(engine.cmd_kb_note_list)["notes"] == []
+
+
+@pytest.mark.parametrize("второе", ["Экодор", "экодор", "  ЭКОДОР  "])
+def test_kb_create_дубль_названия_отклоняется_в_любом_регистре(второе, vault):
+    """Автораспознавание строит индекс по названиям: два одинаковых дали бы на
+    одно слово два совпадения, между которыми заказчику нечем выбрать."""
+    создать_запись("Экодор")
+    r = создать_запись(второе)
+    assert r["ok"] is False
+    assert r["errors"][0]["field"] == "title"
+    assert len(run(engine.cmd_kb_note_list)["notes"]) == 1
+
+
+def test_kb_update_меняет_название_а_id_остаётся_прежним(vault):
+    """Отличие от прежней markdown-версии: там переименование значило новый
+    файл и удаление старого, то есть смену идентификатора. В базе id живёт
+    отдельно от названия, и подтверждённые ссылки правку названия переживают."""
+    id_ = создать_запись("Экодор")["note"]
+    r = run(engine.cmd_kb_note_update, id=id_, json=json.dumps({"title": "Экодор ООО"}))
+    assert r["ok"] and r["note"] == id_
+
+    записи = run(engine.cmd_kb_note_list)["notes"]
+    assert [(з["id"], з["title"]) for з in записи] == [(id_, "Экодор ООО")]
+
+
+def test_kb_update_не_стирает_поля_которых_нет_в_запросе(vault):
+    id_ = создать_запись("Экодор", aliases=["ЭКД"], body="перевозки по МСК")["note"]
+    run(engine.cmd_kb_note_update, id=id_, json=json.dumps({"title": "Экодор ООО"}))
+
+    з = run(engine.cmd_kb_note_show, id=id_)
+    assert з["aliases"] == ["ЭКД"] and з["body"] == "перевозки по МСК"
+
+
+def test_kb_update_дубль_названия_отклоняется_а_себя_дублем_не_считает(vault):
+    создать_запись("Экодор")
+    id_ = создать_запись("Отпуск Екатерина")["note"]
+
+    занято = run(engine.cmd_kb_note_update, id=id_, json=json.dumps({"title": "Экодор"}))
+    assert занято["ok"] is False and занято["errors"][0]["field"] == "title"
+
+    своё = run(engine.cmd_kb_note_update, id=id_,
+               json=json.dumps({"title": "Отпуск Екатерина", "body": "с 16.09"}))
+    assert своё["ok"] and run(engine.cmd_kb_note_show, id=id_)["body"] == "с 16.09"
+
+
+@pytest.mark.parametrize("команда", ["show", "update", "delete"])
+def test_kb_команды_на_несуществующей_записи_дают_ошибку_а_не_падают(команда, vault):
+    вызовы = {
+        "show": lambda: run(engine.cmd_kb_note_show, id=404),
+        "update": lambda: run(engine.cmd_kb_note_update, id=404,
+                              json=json.dumps({"title": "Нечто"})),
+        "delete": lambda: run(engine.cmd_kb_note_delete, id=404),
+    }
+    r = вызовы[команда]()
+    assert r["ok"] is False and r["errors"][0]["field"] == "id"
+
+
+def test_kb_delete_убирает_запись(vault):
+    id_ = создать_запись("Экодор")["note"]
+    r = run(engine.cmd_kb_note_delete, id=id_)
+    assert r["ok"] and r["deleted"] is True
+    assert run(engine.cmd_kb_note_list)["notes"] == []
+
+
+def test_kb_созданная_запись_сразу_ищется_и_после_удаления_перестаёт(vault):
+    """Индекс поддерживается по одной записи на каждую правку — как у задач в
+    `_index_task`. Без этого запись нашлась бы только после `reindex`."""
+    id_ = создать_запись("Экодор", body="перевозка растаможенного груза")["note"]
+
+    найдено = run(engine.cmd_search, text="Экодор", kind=None, limit=None)
+    assert [(р["source_type"], р["source_id"]) for р in найдено["results"]] == \
+        [("kb_note", str(id_))]
+
+    run(engine.cmd_kb_note_delete, id=id_)
+    assert run(engine.cmd_search, text="Экодор", kind=None, limit=None)["results"] == []
+
+
+def test_kb_переименование_переписывает_строку_индекса_а_не_добавляет_вторую(vault):
+    id_ = создать_запись("Экодор")["note"]
+    run(engine.cmd_kb_note_update, id=id_, json=json.dumps({"title": "Экодор ООО"}))
+
+    найдено = run(engine.cmd_search, text="Экодор", kind=None, limit=None)
+    assert [р["title"] for р in найдено["results"]] == ["Экодор ООО"]
+
+
+def test_kb_заведённая_из_интерфейса_запись_узнаётся_в_тексте_задачи(vault):
+    """Главное, ради чего запись вообще заводят: страница пишет в ту же
+    таблицу, из которой `kb-scan` берёт состав для автораспознавания."""
+    id_ = создать_запись("Экодор", aliases=["ЭКД"])["note"]
+    r = run(engine.cmd_kb_scan, text="позвонить в Экодор про груз")
+    assert [(г["entry_id"], г["title"]) for г in r["hypotheses"]] == [(id_, "Экодор")]

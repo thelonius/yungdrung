@@ -87,7 +87,8 @@ class Handler(BaseHTTPRequestHandler):
         СТРАНИЦЫ = {"/": "feed.html", "/лента": "feed.html", "/новая": "index.html",
                     "/шаблоны": "templates.html", "/задача": "task.html",
                     "/настройки": "settings.html", "/архив": "archive.html",
-                    "/задачи": "list.html"}
+                    "/задачи": "list.html", "/база": "kb.html",
+                    "/база/запись": "kb-note.html"}
         if route in СТРАНИЦЫ:
             return self._static(СТРАНИЦЫ[route], "text/html; charset=utf-8")
         if route.endswith(".css"):
@@ -135,6 +136,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(404, {"error": str(e)})
         if route.startswith("/вложение/"):
             return self._attachment_bytes(route[len("/вложение/"):])
+        if route == "/api/kb/notes":
+            return self._json(200, engine.cmd_kb_note_list(_args(), date.today()))
+        if route == "/api/kb/note":
+            return self._json(200, engine.cmd_kb_note_show(
+                _args(id=_param(self.path, "id")), date.today()))
         if route == "/api/settings":
             return self._json(200, self._settings_load())
         if route == "/api/kb/exclusions":
@@ -275,6 +281,18 @@ class Handler(BaseHTTPRequestHandler):
                 cfg.rename_tag, payload.get("old_name"), payload.get("new_name")))
         if route == "/api/tags-toggle-pinned":
             return self._json(200, self._settings_op(cfg.toggle_tag_pinned, payload.get("name")))
+        if route == "/api/kb/note-create":
+            return self._json(200, engine.cmd_kb_note_create(
+                _args(json=json.dumps(payload)), date.today()))
+        if route == "/api/kb/note-update":
+            # id записи — в теле, не в query-строке: он при правке не меняется
+            # (в отличие от прежнего slug'а, который был заодно именем файла),
+            # и различать «чем запись была» и «чем становится» больше не нужно.
+            return self._json(200, engine.cmd_kb_note_update(
+                _args(id=payload.get("id"), json=json.dumps(payload)), date.today()))
+        if route == "/api/kb/note-delete":
+            return self._json(200, engine.cmd_kb_note_delete(
+                _args(id=payload.get("id")), date.today()))
         if route == "/api/tags-merge":
             return self._json(200, self._tag_rewrite(
                 cfg.merge_tags, payload.get("source"), payload.get("target")))

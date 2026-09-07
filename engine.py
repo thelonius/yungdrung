@@ -2900,6 +2900,172 @@ def cmd_kb_forget(args, today):
     return {"ok": True, "removed": снято}
 
 
+# --- записи базы знаний ----------------------------------------------------
+#
+# Идентификатор записи здесь числовой: после этапа (b) записи живут в таблице
+# `kb_notes`, а не файлами `База/*.md`, где им служило именем имя файла. Оттого
+# и никакого slug'а в этих командах нет — переименование записи больше не
+# значит «написать новый файл и убрать старый», id при правке названия не
+# меняется, и различать «под каким именем лежит» и «во что переименовываем»
+# стало нечего.
+#
+# Markdown после переезда остаётся на диске нетронутым (данные заказчика), но
+# источником правды быть перестаёт — см. `load_kb_entries`. Писать правку ещё и
+# в файл значило бы завести второй источник, поэтому команды ниже трогают
+# только базу. Пока таблица пуста, они честно показывают пусто: перенести
+# markdown нужно один раз командой `migrate-kb`.
+
+
+def _kb_note_id(value):
+    """Числовой id записи из чего пришло: из HTTP приходит строкой, из CLI
+    строкой, из тестов числом. None — если это вообще не число."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _kb_note_by_id(склад, value):
+    note_id = _kb_note_id(value)
+    if note_id is None:
+        return None
+    for з in склад.load_kb_notes():
+        if з["id"] == note_id:
+            return з
+    return None
+
+
+def _index_kb_note(склад, note):
+    """Обновить поисковый индекс по одной записи — тем же выражением, каким
+    `reindex_search` собирает сразу все. Причины те же, что у `_index_task`:
+    пересобирать весь индекс на каждую правку записи дорого, а сбой
+    лемматизации не должен ронять саму запись — индекс чинится командой
+    `reindex`, запись ничем."""
+    try:
+        склад.search_replace(
+            "kb_note", note["id"], note["title"],
+            (note.get("body") or "").strip()[:200],
+            kb.lemmatize_text(" ".join([note["title"], *(note.get("aliases") or []),
+                                        note.get("body") or ""])))
+    except Exception:
+        pass
+
+
+def _kb_note_clean(data, было=None):
+    """Поля записи из присланного JSON, поверх текущих значений.
+
+    Правка частичная: поле, которого в JSON нет, остаётся как было. Отдельного
+    способа сказать «поле удалено» у формы нет, поэтому «не прислано» и
+    «очистить» не различить, и трактуем как первое — тот же выбор, что был у
+    этих команд до переезда на БД.
+    """
+    было = было or {"title": "", "aliases": [], "body": ""}
+    брать = lambda имя: data.get(имя) if имя in data else было.get(имя)
+    return {
+        "title": (брать("title") or "").strip(),
+        "aliases": [a.strip() for a in (брать("aliases") or []) if a and a.strip()],
+        "body": (брать("body") or "").strip(),
+    }
+
+
+def _kb_note_errors(склад, поля, кроме=None):
+    """Проверки записи. Дубль названия — ошибка, а не мелочь: автораспознавание
+    строит индекс по названиям и синонимам (`kb.build_index`), и две записи с
+    одинаковым названием дали бы на одно и то же слово два совпадения, между
+    которыми заказчику нечем выбрать. `кроме` — id правимой записи: собственное
+    название дублем себе не считается."""
+    if not поля["title"]:
+        return [{"field": "title", "error": "Название обязательно"}]
+    занято = поля["title"].casefold()
+    for з in склад.load_kb_notes():
+        if з["id"] != кроме and (з["title"] or "").strip().casefold() == занято:
+            return [{"field": "title", "error": "Запись с таким названием уже есть"}]
+    return []
+
+
+def cmd_kb_note_list(args, today):
+    """Все записи базы знаний целиком — id, название, синонимы, тело.
+
+    Страницы интерфейса читают этим, а не `load_kb_entries`: тому нужен только
+    состав для поиска упоминаний, здесь — весь текст для списка и карточки."""
+    return {"notes": get_store().load_kb_notes()}
+
+
+def cmd_kb_note_show(args, today):
+    """Одна запись по id — плоским словарём, каким её отдаёт склад."""
+    note = _kb_note_by_id(get_store(), getattr(args, "id", None))
+    if note is None:
+        return {"ok": False,
+                "errors": [{"field": "id",
+                            "error": f"нет записи «{getattr(args, 'id', None)}»"}]}
+    return note
+
+
+def cmd_kb_note_create(args, today):
+    """Завести запись базы знаний из JSON: {"title", "aliases", "body"}."""
+    try:
+        data = _read_json_arg(args.json)
+    except json.JSONDecodeError as e:
+        return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
+
+    склад = get_store()
+    поля = _kb_note_clean(data)
+    ошибки = _kb_note_errors(склад, поля)
+    if ошибки:
+        return {"ok": False, "errors": ошибки}
+
+    note_id = склад.add_kb_note(поля["title"], поля["aliases"], поля["body"])
+    _index_kb_note(склад, {**поля, "id": note_id})
+    return {"ok": True, "note": note_id, "title": поля["title"]}
+
+
+def cmd_kb_note_update(args, today):
+    """Править запись: название, синонимы, тело. Запись ищется по `args.id`,
+    и он же остаётся у неё после правки — переименование здесь обычная смена
+    поля, а не смена идентификатора."""
+    try:
+        data = _read_json_arg(args.json)
+    except json.JSONDecodeError as e:
+        return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
+
+    склад = get_store()
+    было = _kb_note_by_id(склад, getattr(args, "id", None))
+    if было is None:
+        return {"ok": False,
+                "errors": [{"field": "id",
+                            "error": f"нет записи «{getattr(args, 'id', None)}»"}]}
+
+    поля = _kb_note_clean(data, было)
+    ошибки = _kb_note_errors(склад, поля, кроме=было["id"])
+    if ошибки:
+        return {"ok": False, "errors": ошибки}
+
+    склад.update_kb_note(было["id"], поля["title"], поля["aliases"], поля["body"])
+    _index_kb_note(склад, {**поля, "id": было["id"]})
+    return {"ok": True, "note": было["id"], "title": поля["title"]}
+
+
+def cmd_kb_note_delete(args, today):
+    """Удалить запись насовсем. Подтверждение — дело интерфейса, не движка, как
+    и у `cmd_delete` для задач.
+
+    Вместе с записью уходят её подтверждённые ссылки и отказы: у обеих таблиц
+    ON DELETE CASCADE (см. `store.delete_kb_note`). Текст `[[Название]]`,
+    который движок когда-то вписал в тело задачи, при этом остаётся — он часть
+    заметки заказчика, и вычищать её за него мы не будем."""
+    склад = get_store()
+    note = _kb_note_by_id(склад, getattr(args, "id", None))
+    if note is None:
+        return {"ok": False,
+                "errors": [{"field": "id",
+                            "error": f"нет записи «{getattr(args, 'id', None)}»"}]}
+    склад.delete_kb_note(note["id"])
+    try:
+        склад.search_forget("kb_note", note["id"])
+    except Exception:
+        pass
+    return {"ok": True, "note": note["id"], "deleted": True}
+
 # --- выгрузка в Excel ------------------------------------------------------
 
 # Предел Excel на длину текста в ячейке. Тело заметки пишет заказчик, и упереться
@@ -3441,6 +3607,26 @@ def main():
                     help='JSON {"kb_entry_id": ..., "text": ...} (эхо kb-exclusions) '
                          'или "-" для stdin')
     kf.set_defaults(func=cmd_kb_forget)
+
+    kbl = sub.add_parser("kb-list", help="все записи базы знаний целиком")
+    kbl.set_defaults(func=cmd_kb_note_list)
+
+    kbs = sub.add_parser("kb-show", help="одна запись базы знаний по id")
+    kbs.add_argument("id")
+    kbs.set_defaults(func=cmd_kb_note_show)
+
+    kbn = sub.add_parser("kb-create", help="завести запись базы знаний")
+    kbn.add_argument("json", help='JSON {"title", "aliases", "body"} или "-" для stdin')
+    kbn.set_defaults(func=cmd_kb_note_create)
+
+    kbu = sub.add_parser("kb-update", help="править запись базы знаний")
+    kbu.add_argument("id")
+    kbu.add_argument("json", help='JSON с изменёнными полями или "-" для stdin')
+    kbu.set_defaults(func=cmd_kb_note_update)
+
+    kbx = sub.add_parser("kb-delete", help="удалить запись базы знаний насовсем")
+    kbx.add_argument("id")
+    kbx.set_defaults(func=cmd_kb_note_delete)
 
     x = sub.add_parser("export", help="выгрузить весь стор в Excel")
     x.add_argument("--to", help="куда писать; по умолчанию — «Выгрузка <дата>.xlsx» "
