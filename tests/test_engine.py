@@ -683,41 +683,68 @@ def test_build_includes_only_what_needs_attention(vault):
 
 # --- 9. refresh ------------------------------------------------------------
 #
-# Раньше второй прогон в тот же день не трогал ни одного файла: сводка
-# сравнивалась с тем, что уже лежало на диске (экономило запись и не
-# экономило лишнюю запись на диск). В БД сравнивать не с
-# чем — сводка нигде не хранится, поэтому refresh честно пересчитывает и
-# отдаёт всё заново при каждом вызове; см. docstring cmd_refresh в engine.py.
+# `refresh` — чистое чтение: он отдаёт сводку на указанный день и не пишет
+# ничего. Раньше он звал `save()` на каждую задачу и тем перезаписывал весь
+# стор строками, равными прежним (сводка в БД не хранится, колонок под неё
+# нет). Стоило это 71 секунду на целевом объёме, а `remind.py` звал команду
+# каждые пять минут; см. докстринг `cmd_refresh` и запись в PROTOCOL.md от
+# 2026-09-07.
 
-def test_refresh_repeated_call_keeps_data_identical(vault):
-    """Второй прогон подряд отчитывается по всем задачам (сравнивать не с
-    чем), но содержимое БД от этого не меняется."""
+def dump_db(vault):
+    """Полный дамп базы **вместе с** autoincrement-идентификаторами.
+
+    Отличается от `snapshot_db` именно этим: та намеренно выкидывает
+    `step_log.id`, потому что при пересохранении с тем же содержимым он
+    меняется. Здесь сравнение строгое — команда, которая не пишет, не имеет
+    права поменять даже id.
+    """
+    conn = sqlite3.connect(str(vault / "стор.db"))
+    дамп = "\n".join(conn.iterdump())
+    conn.close()
+    return дамп
+
+
+def test_refresh_ничего_не_пишет(vault):
+    """Главное свойство команды: ни одной изменённой строки, включая
+    autoincrement журнала.
+
+    Сторож против возврата к `save()` в цикле: та версия проходила все прежние
+    тесты, потому что `snapshot_db` не смотрит на `step_log.id`, а сводку
+    тесты считают сами через `read()`. Единственное, что её выдавало, — время.
+    """
+    status_set(vault)
+    before = dump_db(vault)
+
+    result = run(engine.cmd_refresh)
+
+    assert result["count"] == 6
+    assert dump_db(vault) == before, "refresh изменил базу, а обязан только читать"
+
+
+def test_refresh_отдаёт_статус_по_каждой_задаче(vault):
+    """Форма ответа: задача и её статус на указанный день, без поля «изменено» —
+    менять больше нечего."""
     status_set(vault)
 
-    first = run(engine.cmd_refresh)
-    assert first["count"] == 6
-    assert all(t["changed"] for t in first["written"])
+    result = run(engine.cmd_refresh)
 
-    before = snapshot_db(vault)
-    second = run(engine.cmd_refresh)
-
-    assert second["count"] == 6
-    assert snapshot_db(vault) == before
+    assert result["count"] == 6
+    assert len(result["tasks"]) == 6
+    assert all(set(t) == {"task", "status"} for t in result["tasks"])
+    assert all(t["status"] for t in result["tasks"])
 
 
-def test_refresh_force_rewrites_everything(vault):
-    """`--force` раньше отличался от обычного прогона тем, что переписывал
-    файлы, даже когда сводка не поменялась. В БД оба прогона и так переписывают
-    всё каждый раз — `force` остался в контракте ответа ради обратной
-    совместимости, а не потому что меняет запись."""
+def test_refresh_force_ничего_не_меняет(vault):
+    """`--force` отличался тем, что переписывал файлы, даже когда сводка не
+    поменялась. Писать больше нечего, значит нечего и форсировать: флаг остался
+    в ответе ради обратной совместимости и на поведение не влияет."""
     status_set(vault)
-    run(engine.cmd_refresh)
-    before = snapshot_db(vault)
+    before = dump_db(vault)
 
     result = run(engine.cmd_refresh, force=True)
 
     assert result["forced"] is True and result["count"] == 6
-    assert snapshot_db(vault) == before
+    assert dump_db(vault) == before
 
 
 def test_refresh_idempotent_with_control_time_too(vault):
@@ -730,9 +757,9 @@ def test_refresh_idempotent_with_control_time_too(vault):
     assert read(path)[0]["status"] == "ждёт"
     assert isinstance(read(path)[0]["steps"][0]["control_date"], datetime)
 
-    before = snapshot_db(vault)
+    before = dump_db(vault)
     assert run(engine.cmd_refresh)["count"] == 1
-    assert snapshot_db(vault) == before
+    assert dump_db(vault) == before
 
 
 def test_refresh_sets_summary_from_scratch(vault):

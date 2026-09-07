@@ -126,7 +126,7 @@ python engine.py list
 | `notdone` | `python engine.py notdone подшипник 2 --reason "..."` | Не сделан, спросит завтра |
 | `defer` | `python engine.py defer грант 2 --to 2026-08-20` | Перенести на дату |
 | `skip` | `python engine.py skip грант 3 --reason "..."` | Снять шаг |
-| `refresh` | `python engine.py refresh` | Пересчитать статусы |
+| `refresh` | `python engine.py refresh` | Показать сводку по всем задачам (только чтение) |
 | `export` | `python engine.py export --to выгрузка.xlsx` | Excel-выгрузка |
 
 `--reason` попадает в историю шага. Флаг `--today` подставляет другую дату для
