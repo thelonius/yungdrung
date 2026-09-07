@@ -1,42 +1,32 @@
 'use strict';
 
+const { $, get, post, toast, shortDate, dateField } = Yd;
+
 // Карточка задачи — раздел 6.3 ТЗ. Страница не считает ничего сама: статус,
 // просрочку, дефолт даты начала и порядок шагов пересчитывает ядро при каждом
 // сохранении. Здесь только сбор того, что человек поменял, и показ ответа.
 
-const $ = (s, r = document) => r.querySelector(s);
 const dlg = $('#control');
 const tpl = $('#step-tpl');
 const checklist = $('#checklist');
 
 const имя = new URLSearchParams(location.search).get('name') || '';
-let шаги = [];          // рабочая копия шагов — сюда же попадают ещё не сохранённые
+let шаги = [];
 let причины = [];
-let текущийШаг = null;  // для окна контроля
+let текущийШаг = null;
 let режим = null;
 let перетаскиваемый = null;
 
-async function get(url) {
-  const r = await fetch(url);
-  return r.json();
-}
+const startDateField = dateField({
+  text: '#start-date',
+  preview: '#start-preview',
+});
 
-async function post(url, body) {
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return r.json();
-}
-
-function всплывашка(текст) {
-  const el = document.createElement('div');
-  el.className = 'toast';
-  el.textContent = текст;
-  document.body.append(el);
-  setTimeout(() => el.remove(), 3500);
-}
+const cDateField = dateField({
+  text: '#c-date',
+  preview: '#c-date-preview',
+  presets: '#c-presets',
+});
 
 // --- вложения ----------------------------------------------------------------
 //
@@ -101,7 +91,7 @@ function строкаВложения(a, onDelete) {
   убрать.addEventListener('click', async () => {
     const r = await post('/api/attachments-delete', { id: a.id });
     if (r.ok) onDelete();
-    else всплывашка((r.errors || [{}])[0].error || 'не получилось');
+    else toast((r.errors || [{}])[0].error || 'не получилось');
   });
 
   li.append(ссылка, размер, убрать);
@@ -122,7 +112,7 @@ async function прикрепитьФайл(file, owner, listEl, errEl) {
   try {
     data = await файлВBase64(file);
   } catch {
-    всплывашка('Не удалось прочитать файл');
+    toast('Не удалось прочитать файл');
     return;
   }
   const payload = { task: owner.task, filename: file.name, data };
@@ -131,19 +121,12 @@ async function прикрепитьФайл(file, owner, listEl, errEl) {
   if (!r.ok) {
     const текст = (r.errors || [{}])[0].error || 'не получилось';
     if (errEl) { errEl.textContent = текст; errEl.hidden = false; }
-    else всплывашка(текст);
+    else toast(текст);
     return;
   }
   await загрузитьВложения(listEl, owner);
 }
 
-function короткаяДата(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  const есть_время = iso.length > 10;
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' }) +
-    (есть_время ? ', ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '');
-}
 
 // --- загрузка и отрисовка ---------------------------------------------------
 
@@ -172,7 +155,7 @@ function отрисовать(d) {
      d.status === 'cancelled' ? ' is-cancelled' : '');
 
   $('#due-line').textContent = meta.control_date
-    ? 'срок: ' + короткаяДата(meta.control_date) : 'срок не вычислен';
+    ? 'срок: ' + shortDate(meta.control_date) : 'срок не вычислен';
 
   const [сделано, всего] = (meta.progress || '0/0').split('/').map(Number);
   $('#progress-fill').style.width = всего ? `${100 * сделано / всего}%` : '0%';
@@ -284,7 +267,7 @@ function строкаШага(s, индекс) {
   $('.checkline-title', li).textContent = s.title;
   $('.checkline-date', li).textContent = группа
     ? (s.mode === 'seq' ? 'подшаги по очереди' : 'подшаги в любом порядке')
-    : (s.control_date ? короткаяДата(s.control_date) : '—');
+    : (s.control_date ? shortDate(s.control_date) : '—');
 
   const счётчик = $('.checkline-postponed', li);
   // Считает движок (`stall_count`), карточка показывает. Раньше считала сама и
@@ -355,7 +338,7 @@ function заполнитьРедактор(li, s, закрыт) {
   $('.make-group', li).addEventListener('click', () => {
     // Новый шаг без id разбивать нельзя: подшагу нужен parent, а id раздаёт
     // движок при сохранении. Сначала сохранить, потом разбивать.
-    if (s.id == null) { всплывашка('Сначала сохрани задачу, потом разбивай шаг'); return; }
+    if (s.id == null) { toast('Сначала сохрани задачу, потом разбивай шаг'); return; }
     const индекс = Number(li.dataset.index);
     s.mode = 'par';
     s.start_date = null;
@@ -405,32 +388,21 @@ function заполнитьРедактор(li, s, закрыт) {
     };
     $('.checkline-title', li).textContent = шаги[индекс].title;
     $('.checkline-date', li).textContent =
-      шаги[индекс].control_date ? короткаяДата(шаги[индекс].control_date) : '—';
+      шаги[индекс].control_date ? shortDate(шаги[индекс].control_date) : '—';
     $('.checkline-note-icon', li).hidden = !шаги[индекс].note;
   };
   $('.edit-title', li).addEventListener('input', сохранить);
   $('.edit-note', li).addEventListener('input', сохранить);
 
-  предпросмотрДаты($('.edit-start', li), $('.edit-start-preview', li), сохранить);
-  предпросмотрДаты($('.edit-control', li), $('.edit-control-preview', li), сохранить);
-}
-
-let таймерыПредпросмотра = new WeakMap();
-function предпросмотрДаты(input, out, доп) {
-  input.addEventListener('input', () => {
-    clearTimeout(таймерыПредпросмотра.get(input));
-    таймерыПредпросмотра.set(input, setTimeout(async () => {
-      const текст = input.value.trim();
-      доп();
-      if (!текст) { out.textContent = ''; }
-      else {
-        const r = await post('/api/parse-date', { text: текст });
-        out.textContent = r.ok ? (r.label || '') : 'не понял дату';
-      }
-      // Порядок дат проверяем при любой правке — не только при сохранении.
-      // Значение уже разобрано и лежит в шагах через доп(), можно спрашивать сразу.
-      проверитьПорядок();
-    }, 220));
+  dateField({
+    text: $('.edit-start', li),
+    preview: $('.edit-start-preview', li),
+    onChange: () => { сохранить(); проверитьПорядок(); },
+  });
+  dateField({
+    text: $('.edit-control', li),
+    preview: $('.edit-control-preview', li),
+    onChange: () => { сохранить(); проверитьПорядок(); },
   });
 }
 
@@ -581,7 +553,7 @@ document.addEventListener('paste', async (e) => {
           .replace(/[:T]/g, '-')}.png`, { type: file.type });
     await прикрепитьФайл(своё, { task: имя }, $('#task-attachments'), $('#err-attach'));
   }
-  всплывашка(files.length === 1 ? 'Картинка прикреплена' : `Прикреплено файлов: ${files.length}`);
+  toast(files.length === 1 ? 'Картинка прикреплена' : `Прикреплено файлов: ${files.length}`);
 });
 
 function очиститьОшибки() {
@@ -658,9 +630,9 @@ async function сохранить(force = false) {
   if (!r.ok) return показатьОшибки(r.errors || [], !force);
 
   const переименовано = r.task !== имя;
-  всплывашка(переименовано ? `Сохранено, переименовано в «${r.task}»` : 'Сохранено');
+  toast(переименовано ? `Сохранено, переименовано в «${r.task}»` : 'Сохранено');
   if (warnings && warnings.length) {
-    всплывашка(warnings.map((w) => w.warning).join(' · '));
+    toast(warnings.map((w) => w.warning).join(' · '));
   }
   if (переименовано) {
     history.replaceState(null, '', '/задача?name=' + encodeURIComponent(r.task));
@@ -675,35 +647,35 @@ $('#save-card').addEventListener('click', () => сохранить(false));
 $('#close-task').addEventListener('click', async () => {
   if (!confirm('Закрыть задачу? Оставшиеся шаги отметятся сделанными разом, без отдельной отметки по каждому.')) return;
   const r = await post('/api/task-close', { task: имя });
-  if (r.ok) { всплывашка(`Задача закрыта · шагов сразу: ${r.closed_steps}`); загрузить(); }
-  else всплывашка((r.errors || [{}])[0].error || 'не получилось');
+  if (r.ok) { toast(`Задача закрыта · шагов сразу: ${r.closed_steps}`); загрузить(); }
+  else toast((r.errors || [{}])[0].error || 'не получилось');
 });
 
 $('#cancel-task').addEventListener('click', async () => {
   if (!confirm('Отменить задачу целиком?')) return;
   const r = await post('/api/task-cancel', { task: имя });
-  if (r.ok) { всплывашка('Задача отменена'); загрузить(); }
-  else всплывашка((r.errors || [{}])[0].error || 'не получилось');
+  if (r.ok) { toast('Задача отменена'); загрузить(); }
+  else toast((r.errors || [{}])[0].error || 'не получилось');
 });
 
 $('#delete-task').addEventListener('click', async () => {
   if (!confirm(`Удалить «${имя}» насовсем? Это нельзя отменить.`)) return;
   const r = await post('/api/task-delete', { task: имя });
   if (r.ok) location.href = '/';
-  else всплывашка((r.errors || [{}])[0].error || 'не получилось');
+  else toast((r.errors || [{}])[0].error || 'не получилось');
 });
 
 $('#save-template').addEventListener('click', async () => {
   const r = await post('/api/template-from-task', { task: имя });
-  всплывашка(r.ok ? `Сохранено как шаблон «${r.template}»` : 'Не вышло');
+  toast(r.ok ? `Сохранено как шаблон «${r.template}»` : 'Не вышло');
 });
 
 // --- переоткрытие -------------------------------------------------------------
 
 async function переоткрыть(s) {
   const r = await post('/api/task-reopen', { task: имя, step: s.id });
-  if (r.ok) { всплывашка('Шаг переоткрыт'); загрузить(); }
-  else всплывашка((r.errors || [{}])[0].error || 'не получилось');
+  if (r.ok) { toast('Шаг переоткрыт'); загрузить(); }
+  else toast((r.errors || [{}])[0].error || 'не получилось');
 }
 
 // --- окно контроля (done/notdone/defer/fail) — то же, что на ленте -----------
@@ -716,7 +688,7 @@ function окно(s) {
   const note = $('#c-note');
   note.hidden = !s.note;
   note.textContent = s.note || '';
-  $('#c-meta').textContent = s.control_date ? 'контроль ' + короткаяДата(s.control_date) : '';
+  $('#c-meta').textContent = s.control_date ? 'контроль ' + shortDate(s.control_date) : '';
   формаОкна(false);
   dlg.showModal();
 }
@@ -730,9 +702,7 @@ function формаОкна(показать) {
   $('#c-err').hidden = true;
   $('#c-reason').classList.remove('invalid');
   if (показать) {
-    $('#c-date').value = '';
-    $('#c-date-preview').textContent = '';
-    $('#c-presets').querySelectorAll('button').forEach((b) => b.classList.remove('on'));
+    cDateField.clear();
     $('#c-date-field').hidden = режим === 'fail';
     $('#c-reason').focus();
   }
@@ -742,13 +712,13 @@ async function действие(op, s, extra = {}) {
   const r = await post('/api/action', { op, task: имя, step: s.id, ...extra });
   if (!r.ok) {
     const текст = (r.errors || []).map((e) => e.error).join('; ') || 'не получилось';
-    if ($('#c-form').hidden) return всплывашка(текст);
+    if ($('#c-form').hidden) return toast(текст);
     $('#c-err').textContent = текст;
     $('#c-err').hidden = false;
     return;
   }
   dlg.close();
-  всплывашка('Готово');
+  toast('Готово');
   загрузить();
 }
 
@@ -762,26 +732,6 @@ for (const b of document.querySelectorAll('[data-op]')) {
 }
 
 $('#c-back').addEventListener('click', () => формаОкна(false));
-
-let таймерОкна;
-$('#c-date').addEventListener('input', () => {
-  clearTimeout(таймерОкна);
-  таймерОкна = setTimeout(async () => {
-    const текст = $('#c-date').value.trim();
-    if (!текст) return ($('#c-date-preview').textContent = '');
-    const r = await post('/api/parse-date', { text: текст });
-    $('#c-date-preview').textContent = r.ok ? (r.label || '') : 'не понял дату';
-  }, 220);
-});
-
-for (const b of $('#c-presets').querySelectorAll('button')) {
-  b.addEventListener('click', () => {
-    $('#c-presets').querySelectorAll('button').forEach((x) => x.classList.remove('on'));
-    b.classList.add('on');
-    $('#c-date').value = b.dataset.when;
-    $('#c-date').dispatchEvent(new Event('input'));
-  });
-}
 
 $('#c-save').addEventListener('click', () => {
   const причина = $('#c-reason').value;
@@ -798,8 +748,16 @@ dlg.addEventListener('close', () => { текущийШаг = null; режим = 
 
 // --- старт ---------------------------------------------------------------
 
-предпросмотрДаты($('#start-date'), $('#start-preview'), () => {});
-
+  dateField({
+    text: $('.edit-start', li),
+    preview: $('.edit-start-preview', li),
+    onChange: () => { сохранить(); проверитьПорядок(); },
+  });
+  dateField({
+    text: $('.edit-control', li),
+    preview: $('.edit-control-preview', li),
+    onChange: () => { сохранить(); проверитьПорядок(); },
+  });
 (async function старт() {
   if (!имя) {
     $('#load-err').textContent = 'Не указана задача — открой карточку из ленты.';

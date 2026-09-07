@@ -1,9 +1,10 @@
 'use strict';
 
+const { $, $$, get, post, toast, shortDate, dateField } = Yd;
+
 // Форма ввода задачи. Даты разбирает сервер, а не браузер: правила должны жить в
 // одном месте, иначе форма примет то, что движок потом не поймёт.
 
-const $ = (sel, root = document) => root.querySelector(sel);
 const steps = $('#steps');
 const tpl = $('#step-tpl');
 
@@ -33,18 +34,12 @@ function renumber() {
 }
 
 function wireDate(li) {
-  const dateInput = $('.step-date', li);
-  let timer;
-  const preview = () => {
-    clearTimeout(timer);
-    // Сперва разбор даты (что тут написано), потом порядок (согласуется ли с
-    // соседними шагами) — по очереди, не одновременно: два независимых запроса
-    // могут ответить в любом порядке, и ошибка порядка рисковала бы затереться
-    // безобидным превью, если бы оно пришло позже.
-    timer = setTimeout(async () => { await showDate(li); await проверитьПорядок(); }, 220);
-  };
-  dateInput.addEventListener('input', preview);
-  dateInput.addEventListener('blur', () => showDate(li));
+  li._dateField = dateField({
+    text: $('.step-date', li),
+    preview: $('.date-preview', li),
+    error: $('.step-err-date', li),
+    onChange: async () => { await проверитьПорядок(); },
+  });
 }
 
 function addSubstep(groupLi, after = null, focus = true) {
@@ -155,33 +150,6 @@ function addStep(after = null, focus = true) {
   return li;
 }
 
-async function showDate(li) {
-  const input = $('.step-date', li);
-  const out = $('.date-preview', li);
-  const err = $('.step-err-date', li);
-  const text = input.value.trim();
-
-  input.classList.remove('invalid');
-  err.hidden = true;
-  if (!text) { out.textContent = ''; out.classList.remove('past'); return; }
-
-  try {
-    const r = await post('/api/parse-date', { text });
-    if (r.ok) {
-      out.textContent = r.label || '';
-      out.classList.toggle('past', !!r.past);
-    } else {
-      out.textContent = '';
-      out.classList.remove('past');
-      input.classList.add('invalid');
-      err.textContent = 'Не понял дату. Можно: 18.08 · 15 марта · завтра · +3 · пн · полдесятого';
-      err.hidden = false;
-    }
-  } catch {
-    out.textContent = '';
-  }
-}
-
 // Порядок дат — сразу по мере ввода, а не только при нажатии «Создать»: даты
 // разбирает и проверяет сервер, страница только подсвечивает, что он вернул.
 // То же правило, что при сохранении, отдельным лёгким запросом без записи.
@@ -194,9 +162,13 @@ async function проверитьПорядок() {
     if (!li) continue;
     // Порядок дат важнее, чем «вот как я понял дату»: перекрывает обычное
     // превью, которое showDate() уже успел поставить строчкой выше.
-    const out = $('.date-preview', li);
-    out.textContent = e.error;
-    out.classList.add('past');
+    const field = li._dateField;
+    if (field) field.setPreview(e.error, { past: true });
+    else {
+      const out = $('.date-preview', li);
+      out.textContent = e.error;
+      out.classList.add('past');
+    }
   }
 }
 
@@ -242,7 +214,7 @@ const kbList = $('#kb-list');
 let отмеченные = new Map(); // ключ гипотезы -> сама гипотеза, кто получил «Да»
 
 function ключГипотезы(m) {
-  return `${m.entry_id} ${m.offset_start} ${m.offset_end}`;
+  return `${m.entry_id}\u0000${m.offset_start}\u0000${m.offset_end}`;
 }
 
 function отрисоватьГипотезы(hypotheses) {
@@ -321,14 +293,6 @@ $('#body').addEventListener('input', () => {
 
 // --- отправка --------------------------------------------------------------
 
-async function post(url, body) {
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return r.json();
-}
 
 function collect() {
   return {

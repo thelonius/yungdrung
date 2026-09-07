@@ -207,6 +207,37 @@ input.invalid {
 
 .date-preview.past { color: var(--danger); }
 
+.date-field-pickers {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.date-picker-native {
+  font: inherit;
+  font-size: 14px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  max-width: 150px;
+}
+
+.date-picker-native:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.date-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+
 /* --- подшаги: группа внутри шага --- */
 
 .substeps-block {

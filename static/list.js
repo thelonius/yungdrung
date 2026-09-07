@@ -1,24 +1,15 @@
 'use strict';
 
+const { $, $$, get, post, toast, shortDate, dateField } = Yd;
+
 // Все задачи — issue #4: бакет «ждут» (и бездатные задачи внутри него) не был
 // достижим ни с ленты, ни с архива, только числом в счётчике. Страница зовёт
 // `/api/tasks`, который уже был готов на сервере (cmd_list), но им никто не
 // пользовался — сюда ничего не добавлено, кроме фильтра по статусу, который
 // считает движок (см. КОНТРАКТ.md: оболочка не решает, что просрочено).
 
-const $ = (s, r = document) => r.querySelector(s);
-const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 
-async function get(url) {
-  const r = await fetch(url);
-  return r.json();
-}
 
-function короткаяДата(iso) {
-  if (!iso) return '';
-  const [y, m, d] = iso.split('-');
-  return `${d}.${m}.${y}`;
-}
 
 function строкаЗадачи(item) {
   const li = document.createElement('li');
@@ -52,7 +43,7 @@ function строкаЗадачи(item) {
 
   const дата = document.createElement('span');
   дата.className = 'archive-row-date';
-  дата.textContent = item.control_date ? короткаяДата(item.control_date) : 'без даты';
+  дата.textContent = item.control_date ? shortDate(item.control_date) : 'без даты';
 
   право.append(статус, дата);
   a.append(info, право);

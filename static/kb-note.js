@@ -1,5 +1,7 @@
 'use strict';
 
+const { $, $$, get, post, toast, shortDate, dateField } = Yd;
+
 // Карточка записи базы знаний. Режим определяется query-параметром "id": он
 // есть — правим существующую запись (GET /api/kb/note?id=...), его нет —
 // пустая форма создания. Страница не считает ничего сама: собирает введённое
@@ -9,33 +11,12 @@
 // название. Поэтому «под каким id запись лежит» и «во что её переименовывают»
 // здесь не расходятся, и id уезжает в тело запроса вместе с остальными полями.
 
-const $ = (s, r = document) => r.querySelector(s);
 
 const idИзURL = new URLSearchParams(location.search).get('id') || '';
 let режим = idИзURL ? 'edit' : 'create';
 let idЗаписи = idИзURL;
 
-async function get(url) {
-  const r = await fetch(url);
-  return r.json();
-}
 
-async function post(url, body) {
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return r.json();
-}
-
-function всплывашка(текст) {
-  const el = document.createElement('div');
-  el.className = 'toast';
-  el.textContent = текст;
-  document.body.append(el);
-  setTimeout(() => el.remove(), 3500);
-}
 
 // --- загрузка и отрисовка ---------------------------------------------------
 
@@ -117,7 +98,7 @@ async function сохранить() {
     const r = await post(url, данные);
     if (!r.ok) return показатьОшибки(r.errors || [{ field: null, error: 'не сохранилось' }]);
 
-    всплывашка('Сохранено');
+    toast('Сохранено');
     режим = 'edit';
     idЗаписи = String(r.note);
     history.replaceState(null, '', '/база/запись?id=' + encodeURIComponent(idЗаписи));
@@ -136,7 +117,7 @@ $('#delete-note').addEventListener('click', async () => {
   if (!confirm(`Удалить «${заголовок}» насовсем? Это нельзя отменить.`)) return;
   const r = await post('/api/kb/note-delete', { id: idЗаписи });
   if (r.ok) location.href = '/база';
-  else всплывашка((r.errors || [{}])[0].error || 'не получилось');
+  else toast((r.errors || [{}])[0].error || 'не получилось');
 });
 
 // --- старт ------------------------------------------------------------------
