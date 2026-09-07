@@ -46,14 +46,17 @@ try:
 except ImportError:
     sys.exit("нужен pyyaml: pip install pyyaml")
 
-import attachments
-import backup
-import kb
-import recurrence as rec
-import settings as cfg
-import store
-import templates as tpl
-import worktime
+# Импорты ниже — после настройки кодировки потоков и после проверки pyyaml:
+# понятная строка «нужен pyyaml» полезнее ImportError из середины модуля.
+# Отсюда E402 по всему блоку, тот же приём, что в server.py.
+import attachments  # noqa: E402
+import backup  # noqa: E402
+import kb  # noqa: E402
+import recurrence as rec  # noqa: E402
+import settings as cfg  # noqa: E402
+import store  # noqa: E402
+import templates as tpl  # noqa: E402
+import worktime  # noqa: E402
 
 SCHEMA = 1
 VAULT = Path(os.environ.get("YUNGDRUNG_VAULT", Path(__file__).resolve().parent))
@@ -647,7 +650,8 @@ def collect_open(now, work):
                 лента.append(item)
             else:
                 ждут.append(item)
-    ключ = lambda i: (i["show_at"] or "9999", i["task"], i["step"] or 0)
+    def ключ(i):
+        return (i["show_at"] or "9999", i["task"], i["step"] or 0)
     return sorted(лента, key=ключ), sorted(завал, key=ключ), sorted(ждут, key=ключ)
 
 
@@ -1086,7 +1090,8 @@ def _parse_optional_date(raw, today, поле, errors):
         return parse_date_input(raw, today)
     except (ValueError, TypeError):
         errors.append({"field": поле,
-                       "error": "Дату не понял. Можно: 18.08 · 15 марта · завтра · +3 · пн · полдесятого"})
+                       "error": "Дату не понял. Можно: 18.08 · 15 марта · "
+                                "завтра · +3 · пн · полдесятого"})
         return None
 
 
@@ -1325,7 +1330,8 @@ def cmd_create(args, today):
     try:
         save(task, today)
     except store.DuplicateTitle:
-        return {"ok": False, "errors": [{"field": "title", "error": "Задача с таким названием уже есть"}]}
+        return {"ok": False, "errors": [
+            {"field": "title", "error": "Задача с таким названием уже есть"}]}
     return {"ok": True, "task": task["path"].stem,
             "steps": len(meta["steps"]), "status": task["meta"]["status"]}
 
@@ -1469,7 +1475,8 @@ def cmd_update(args, today):
     try:
         save(task, today)
     except store.DuplicateTitle:
-        return {"ok": False, "errors": [{"field": "title", "error": "Задача с таким названием уже есть"}]}
+        return {"ok": False, "errors": [
+            {"field": "title", "error": "Задача с таким названием уже есть"}]}
 
     # Строку индекса адресует название, поэтому переименованная задача оставила
     # бы позади себя старую: она находилась бы по прежнему слову и вела в
@@ -2954,7 +2961,8 @@ def _kb_note_clean(data, было=None):
     этих команд до переезда на БД.
     """
     было = было or {"title": "", "aliases": [], "body": ""}
-    брать = lambda имя: data.get(имя) if имя in data else было.get(имя)
+    def брать(имя):
+        return data.get(имя) if имя in data else было.get(имя)
     return {
         "title": (брать("title") or "").strip(),
         "aliases": [a.strip() for a in (брать("aliases") or []) if a and a.strip()],
@@ -3412,7 +3420,8 @@ def main():
 
     sub.add_parser("next", help="что требует внимания").set_defaults(func=cmd_next)
     sub.add_parser("feed", help="лента «Что сегодня»").set_defaults(func=cmd_feed)
-    sub.add_parser("backlog", help="всё просроченное — разбор завала").set_defaults(func=cmd_backlog)
+    sub.add_parser("backlog", help="всё просроченное — разбор завала").set_defaults(
+        func=cmd_backlog)
 
     bb = sub.add_parser("backlog-bulk",
                         help="массовые действия из разбора завала, вкладка «Списком» (R20)")
@@ -3439,7 +3448,8 @@ def main():
 
     sr = sub.add_parser("set-recurrence", help="прикрепить или снять повторение у шаблона")
     sr.add_argument("name")
-    sr.add_argument("--rule", help='JSON правила с anchor, например {"anchor":"2026-09-01","freq":"monthly","bymonthday":[5]}')
+    sr.add_argument("--rule", help='JSON правила с anchor, например '
+                                   '{"anchor":"2026-09-01","freq":"monthly","bymonthday":[5]}')
     sr.add_argument("--clear", action="store_true", help="снять повторение")
     sr.set_defaults(func=cmd_set_recurrence)
 
@@ -3451,7 +3461,8 @@ def main():
     td.add_argument("name")
     td.set_defaults(func=cmd_template_delete)
 
-    tp = sub.add_parser("template-preview", help="какие даты дадут шаги ещё не сохранённого шаблона")
+    tp = sub.add_parser("template-preview",
+                        help="какие даты дадут шаги ещё не сохранённого шаблона")
     tp.add_argument("json", help='JSON шаблона или "-" для чтения из stdin')
     tp.add_argument("--start", help="дата старта для примера, по умолчанию сегодня")
     tp.set_defaults(func=cmd_template_preview)

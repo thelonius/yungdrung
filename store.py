@@ -600,9 +600,9 @@ class Store:
                 "INSERT OR IGNORE INTO kb_links (kb_entry_id, source_type, source_id,"
                 " offset_start, offset_end, confirmed_at, matched)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [(l["kb_entry_id"], l["source_type"], str(l["source_id"]),
-                  l["offset_start"], l["offset_end"], str(l["confirmed_at"]),
-                  l["matched"]) for l in links])
+                [(s["kb_entry_id"], s["source_type"], str(s["source_id"]),
+                  s["offset_start"], s["offset_end"], str(s["confirmed_at"]),
+                  s["matched"]) for s in links])
 
     def load_kb_exclusions(self):
         with self._connect() as conn:

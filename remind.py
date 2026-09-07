@@ -17,7 +17,7 @@
 """
 import argparse
 import sys
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 

@@ -94,7 +94,8 @@ def test_битый_формат_времени_даёт_ошибку_по_по�
     data["notifications"]["start"] = "10 утра"
     result = settings.validate(data)
     assert result["errors"] == [
-        {"field": "notifications.start", "error": "неверный формат времени: '10 утра', ожидается ЧЧ:ММ"}]
+        {"field": "notifications.start",
+         "error": "неверный формат времени: '10 утра', ожидается ЧЧ:ММ"}]
 
 
 # --- валидация: числовые границы ---------------------------------------------

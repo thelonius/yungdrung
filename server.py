@@ -440,12 +440,15 @@ class Handler(BaseHTTPRequestHandler):
             # к началу дня `today`.
             return engine.parse_date_input(сырая, today, now=datetime.now()), None
         except (ValueError, TypeError):
-            return None, {"field": "to", "error": "Дату не понял. Можно: 18.08 · 15 марта · завтра · +3 · пн · полдесятого · через час"}
+            return None, {"field": "to",
+                          "error": "Дату не понял. Можно: 18.08 · 15 марта · завтра · "
+                                   "+3 · пн · полдесятого · через час"}
 
     def _action(self, payload):
         op = payload.get("op")
         if op not in self.ДЕЙСТВИЯ:
-            return {"ok": False, "errors": [{"field": "op", "error": f"неизвестное действие: {op}"}]}
+            return {"ok": False,
+                    "errors": [{"field": "op", "error": f"неизвестное действие: {op}"}]}
         команда, нужна_причина = self.ДЕЙСТВИЯ[op]
 
         ошибки = []

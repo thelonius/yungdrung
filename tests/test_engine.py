@@ -386,7 +386,8 @@ def test_three_marks_in_a_row_is_stalling(vault):
     path = task(vault, "Подшипник", [
         step(1, "Снять колесо", control_date=TODAY, log=[
             {"date": date(2026, 8, 1), "event": "not_done", "reason": "не было времени"},
-            {"date": date(2026, 8, 8), "event": "not_done", "reason": "жду ответа от другого человека"},
+            {"date": date(2026, 8, 8), "event": "not_done",
+             "reason": "жду ответа от другого человека"},
         ]),
     ])
     result = run(engine.cmd_notdone, task="Подшипник", step="1",
@@ -527,7 +528,7 @@ def test_bulk_fail_marks_step_failed_and_opens_next(vault):
 def test_bulk_batch_with_one_closed_step_does_not_abort_others(vault):
     """Один плохой элемент (шаг уже закрыт кем-то другим за это время) не
     роняет пачку — остальные элементы обрабатываются, ошибка структурная."""
-    a = task(vault, "Грант", [step(1, "Собрать", status="done",
+    task(vault, "Грант", [step(1, "Собрать", status="done",
                                    completed_date=date(2026, 8, 1))])
     b = task(vault, "Договор", [step(1, "Подписать", control_date=date(2026, 8, 12))])
 
@@ -2694,7 +2695,8 @@ def test_defer_сохраняет_время_а_не_только_дату(vault
     «перенести на конкретный час», а тем более пресет «через час», был
     в принципе недостижим."""
     т = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
-    r = run(engine.cmd_defer, task=т.stem, step="1", to="2026-08-25 15:00", reason="не было времени")
+    r = run(engine.cmd_defer, task=т.stem, step="1", to="2026-08-25 15:00",
+            reason="не было времени")
     assert r["ok"], r
     assert r["next_check"] == "2026-08-25 15:00"
     meta, _ = read(т)
@@ -2703,7 +2705,8 @@ def test_defer_сохраняет_время_а_не_только_дату(vault
 
 def test_notdone_с_явной_датой_сохраняет_время(vault):
     т = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
-    r = run(engine.cmd_notdone, task=т.stem, step="1", to="2026-08-25 09:30", reason="не было времени")
+    r = run(engine.cmd_notdone, task=т.stem, step="1", to="2026-08-25 09:30",
+            reason="не было времени")
     assert r["ok"], r
     assert r["next_check"] == "2026-08-25 09:30"
 
