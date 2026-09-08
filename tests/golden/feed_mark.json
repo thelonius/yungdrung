@@ -1,0 +1,315 @@
+[
+ {
+  "op": "feed",
+  "result": {
+   "now": "2026-09-08T11:00:00",
+   "feed": [
+    {
+     "task": "Сделка по складу",
+     "step": 2,
+     "title": "Подпись арендодателя",
+     "group": "Подписи",
+     "note": null,
+     "control_at": "2026-09-08",
+     "show_at": "2026-09-08T09:00:00",
+     "state": "due",
+     "postponed": 0,
+     "stalled": false,
+     "tags": [],
+     "last_reason": null,
+     "actions": [
+      "done",
+      "notdone",
+      "defer",
+      "skip"
+     ]
+    },
+    {
+     "task": "Позвонить Василию",
+     "step": 1,
+     "title": "Договориться о встрече",
+     "group": null,
+     "note": null,
+     "control_at": "2026-09-08 10:00:00",
+     "show_at": "2026-09-08T10:00:00",
+     "state": "due",
+     "postponed": 0,
+     "stalled": false,
+     "tags": [
+      "люди",
+      "стройка"
+     ],
+     "last_reason": null,
+     "actions": [
+      "done",
+      "notdone",
+      "defer",
+      "skip"
+     ]
+    }
+   ],
+   "overdue_count": 1,
+   "counts": {
+    "overdue": 1,
+    "today": 2,
+    "waiting": 3
+   },
+   "next_ahead": {
+    "task": "Сделка по складу",
+    "step": 3,
+    "title": "Подпись банка",
+    "group": "Подписи",
+    "note": null,
+    "control_at": "2026-09-09",
+    "show_at": "2026-09-09T09:00:00",
+    "state": "waiting",
+    "postponed": 0,
+    "stalled": false,
+    "tags": [],
+    "last_reason": null,
+    "actions": [
+     "done",
+     "notdone",
+     "defer",
+     "skip"
+    ]
+   },
+   "stalled_count": 0,
+   "broken": []
+  }
+ },
+ {
+  "op": "backlog",
+  "result": {
+   "now": "2026-09-08T11:00:00",
+   "backlog": [
+    {
+     "task": "Оплатить налоги за третий квартал",
+     "step": 2,
+     "title": "Отправить платёжку",
+     "group": null,
+     "note": null,
+     "control_at": "2026-09-04",
+     "show_at": "2026-09-04T09:00:00",
+     "state": "overdue",
+     "postponed": 2,
+     "stalled": false,
+     "tags": [
+      "финансы"
+     ],
+     "last_reason": "не было денег",
+     "actions": [
+      "done",
+      "notdone",
+      "defer",
+      "skip"
+     ]
+    }
+   ],
+   "count": 1,
+   "broken": []
+  }
+ },
+ {
+  "op": "done",
+  "result": {
+   "ok": true,
+   "task": "Позвонить Василию",
+   "step": "1",
+   "status": "done",
+   "next_step": "Съездить на объект",
+   "date_assigned_to_step": null,
+   "dates_assigned": [],
+   "task_status": "waiting"
+  }
+ },
+ {
+  "op": "notdone",
+  "result": {
+   "ok": true,
+   "task": "Оплатить налоги за третий квартал",
+   "step": "2",
+   "status": "pending",
+   "next_check": "2026-09-09",
+   "stalled": 3,
+   "hint": "шаг буксует, нужен другой ход"
+  }
+ },
+ {
+  "op": "notdone_bad_reason",
+  "result": {
+   "ok": false,
+   "errors": [
+    {
+     "field": "reason",
+     "error": "Причина «такой причины нет» не из справочника"
+    }
+   ]
+  }
+ },
+ {
+  "op": "defer",
+  "result": {
+   "ok": true,
+   "task": "Сделка по складу",
+   "step": "2",
+   "next_check": "2026-09-10 15:00"
+  }
+ },
+ {
+  "op": "fail",
+  "result": {
+   "ok": true,
+   "task": "Сделка по складу",
+   "step": "3",
+   "status": "failed",
+   "next_step": 2,
+   "task_status": "waiting"
+  }
+ },
+ {
+  "op": "skip",
+  "result": {
+   "ok": true,
+   "task": "Продлить страховку",
+   "step": "1",
+   "status": "skipped",
+   "task_status": "done"
+  }
+ },
+ {
+  "op": "done_on_group",
+  "result": {
+   "exit": "шаг 1 — группа, отмечаются её подшаги"
+  }
+ },
+ {
+  "op": "done_twice",
+  "result": {
+   "exit": "шаг 1 уже done"
+  }
+ },
+ {
+  "op": "done_unknown_task",
+  "result": {
+   "exit": "нет задачи по «нет такой»"
+  }
+ },
+ {
+  "op": "undo_notdone",
+  "result": {
+   "ok": true,
+   "task": "Оплатить налоги за третий квартал",
+   "step": "2",
+   "undone": "not_done",
+   "status": "pending",
+   "control_date": "2026-09-04",
+   "stalled": 2,
+   "task_status": "overdue"
+  }
+ },
+ {
+  "op": "undo_skip",
+  "result": {
+   "ok": true,
+   "task": "Продлить страховку",
+   "step": "1",
+   "undone": "skipped",
+   "status": "pending",
+   "control_date": "2026-09-15",
+   "stalled": 0,
+   "task_status": "waiting"
+  }
+ },
+ {
+  "op": "undo_yesterday",
+  "result": {
+   "ok": false,
+   "errors": [
+    {
+     "field": null,
+     "error": "отменить можно только сегодняшнее действие"
+    }
+   ]
+  }
+ },
+ {
+  "op": "undo_empty_log",
+  "result": {
+   "ok": false,
+   "errors": [
+    {
+     "field": null,
+     "error": "по этому шагу нечего отменять"
+    }
+   ]
+  }
+ },
+ {
+  "op": "feed_after",
+  "result": {
+   "now": "2026-09-08T11:00:00",
+   "feed": [],
+   "overdue_count": 1,
+   "counts": {
+    "overdue": 1,
+    "today": 0,
+    "waiting": 4
+   },
+   "next_ahead": {
+    "task": "Сделка по складу",
+    "step": 2,
+    "title": "Подпись арендодателя",
+    "group": "Подписи",
+    "note": null,
+    "control_at": "2026-09-10 15:00:00",
+    "show_at": "2026-09-10T15:00:00",
+    "state": "waiting",
+    "postponed": 0,
+    "stalled": false,
+    "tags": [],
+    "last_reason": "жду ответа от другого человека",
+    "actions": [
+     "done",
+     "notdone",
+     "defer",
+     "skip"
+    ]
+   },
+   "stalled_count": 0,
+   "broken": []
+  }
+ },
+ {
+  "op": "backlog_after",
+  "result": {
+   "now": "2026-09-08T11:00:00",
+   "backlog": [
+    {
+     "task": "Оплатить налоги за третий квартал",
+     "step": 2,
+     "title": "Отправить платёжку",
+     "group": null,
+     "note": null,
+     "control_at": "2026-09-04",
+     "show_at": "2026-09-04T09:00:00",
+     "state": "overdue",
+     "postponed": 2,
+     "stalled": false,
+     "tags": [
+      "финансы"
+     ],
+     "last_reason": "не было денег",
+     "actions": [
+      "done",
+      "notdone",
+      "defer",
+      "skip"
+     ]
+    }
+   ],
+   "count": 1,
+   "broken": []
+  }
+ }
+]
