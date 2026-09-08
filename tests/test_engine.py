@@ -25,7 +25,6 @@
 """
 import json
 import os
-import re
 import sqlite3
 import subprocess
 import sys
@@ -206,28 +205,6 @@ def test_customer_text_in_body_untouched(vault):
     path = task(vault, "Грант", [step(1, "Позвонить", control_date=TODAY)], body=body)
     run(engine.cmd_done, task="Грант", step="1")
     assert read(path)[1] == body
-
-
-# --- 2. Якоря YAML ----------------------------------------------------------
-#
-# PlainDumper/write_file больше не пишет задачи — писали frontmatter-файл под
-# markdown-экспорт, теперь задачи в БД. Модуль остался (заметки базы знаний пока
-# markdown, см. kb_note() ниже), тест на сам дампер — прямая проверка класса,
-# без похода через сохранение задачи.
-
-def test_custom_dumper_not_luck(vault):
-    """Проверка, что предыдущий тест не пустой: обычный SafeDumper на тех же
-    данных якоря как раз ставит, их убирает именно PlainDumper движка."""
-    one_date = date(2026, 8, 15)
-    meta = {"control_date": one_date,
-            "steps": [{"id": 1, "control_date": one_date,
-                       "log": [{"date": one_date, "event": "done"}]}]}
-
-    standard = yaml.dump(meta, Dumper=yaml.SafeDumper, sort_keys=False)
-    ours = yaml.dump(meta, Dumper=engine.PlainDumper, sort_keys=False)
-
-    assert re.search(r"[&*]id\d+", standard), "SafeDumper перестал ставить якоря"
-    assert re.search(r"[&*]id\d+", ours) is None
 
 
 # --- 3. Даты — датами, не строками -----------------------------------------

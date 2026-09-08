@@ -161,7 +161,6 @@ python engine.py list
 окружения `YUNGDRUNG_VAULT`.
 
 Демо-данные: `python demo.py` (тег «демо»), убрать: `python demo.py --clean`.
-Примеры старого markdown-формата — в `examples/`, только для справки.
 
 ---
 

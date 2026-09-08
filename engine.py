@@ -18,7 +18,7 @@
   python3 engine.py show <задача>               одна задача целиком
   python3 engine.py export --to выгрузка.xlsx   весь стор в Excel
 
-Задача указывается частью имени файла: "грант" найдёт «Заявка на грант ФПГ».
+Задача указывается куском названия: "грант" найдёт «Заявка на грант ФПГ».
 """
 import argparse
 import json
@@ -26,7 +26,6 @@ import os
 import re
 import sys
 import tempfile
-import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -144,41 +143,6 @@ def parse_file(path):
     return yaml.safe_load(fm) or {}, body.lstrip("\n")
 
 
-class PlainDumper(yaml.SafeDumper):
-    """Без якорей и ссылок: одна и та же дата в нескольких полях — обычное дело,
-    а YAML-якоря `&id001`/`*id001` ломают парсинг в сторонних редакторах."""
-
-    def ignore_aliases(self, data):
-        return True
-
-
-def write_file(path, meta, body):
-    """Атомарно: файл могут держать открытым OneDrive или индексатор — дописывать на месте нельзя.
-
-    На Windows os.replace может ненадолго упасть с PermissionError, если файл в
-    этот момент держит антивирус или синхронизатор — на маке
-    так почти не бывает. Несколько коротких повторов дешевле, чем терять запись.
-    """
-    fm = yaml.dump(meta, Dumper=PlainDumper, allow_unicode=True, sort_keys=False,
-                   default_flow_style=False)
-    content = f"---\n{fm}---\n\n{body}"
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        for attempt in range(5):
-            try:
-                os.replace(tmp, path)
-                break
-            except PermissionError:
-                if attempt == 4:
-                    raise
-                time.sleep(0.2 * (attempt + 1))
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
-
-
 # Задачи теперь читает store.py — SQLite не оставляет полуразобранных строк
 # так, как правленный руками YAML оставлял полуразобранные файлы. Список остаётся
 # (всегда пустой) ради стабильности формы ответа: `cmd_feed`/`cmd_backlog`/
@@ -282,63 +246,6 @@ _step_snapshot = core_mark.step_snapshot
 STEPS_START = "<!-- шаги: пишет движок, править руками не нужно -->"
 STEPS_END = "<!-- /шаги -->"
 
-# Маркеры статуса шага в теле заметки (legacy markdown). Галочки-чекбоксы намеренно
-# не используем: при ручном клике в редакторе движок затёр бы отметку при следующей
-# записи — два писателя одного поля.
-MARK = {DONE: "✓", SKIPPED: "×", FAILED: "✗", OPEN: "•"}
-
-
-def render_steps(task, today):
-    """Шаги человеческим списком — в тело заметки (legacy markdown-экспорт).
-
-    Раньше нужно было для читаемого списка в стороннем редакторе и для вики-ссылок
-    `[[...]]` в названиях шагов. Задачи теперь в БД; функция остаётся для миграции.
-    """
-    lines = [STEPS_START, "**Шаги**", ""]
-    for step in steps_of(task):
-        status = step.get("status", OPEN)
-        tail = []
-        due = as_date(step.get("control_date"))
-        if status == DONE:
-            completed = as_date(step.get("completed_date"))
-            tail.append(f"сделан {completed:%d.%m.%Y}" if completed else "сделан")
-        elif status == SKIPPED:
-            tail.append("снят")
-        elif status == FAILED:
-            tail.append("не будет сделан")
-        elif due:
-            tail.append(f"контроль {due:%d.%m.%Y}")
-            if due < today:
-                tail.append(f"просрочен на {(today - due).days} дн.")
-        else:
-            tail.append("дата не назначена")
-
-        stalled = stall_count(step)
-        if stalled >= 3 and status == OPEN:
-            reason = next((e.get("reason") for e in reversed(step.get("log") or [])
-                            if e.get("reason")), None)
-            tail.append(f"буксует, отметок «не сделан»: {stalled}"
-                         + (f" ({reason})" if reason else ""))
-
-        lines.append(f"{MARK.get(status, '•')} **{step.get('id')}.** "
-                      f"{step.get('title', '')} — {' · '.join(tail)}")
-    lines += ["", STEPS_END]
-    return "\n".join(lines)
-
-
-def put_steps_into_body(body, block):
-    """Блок шагов переписываем, всё остальное в теле не трогаем.
-
-    Тело принадлежит заказчику: там его заметки по задаче. Движок владеет только
-    участком между маркерами. Если маркеров нет — вставляем блок сверху, текст
-    заказчика уезжает под него.
-    """
-    start = body.find(STEPS_START)
-    end = body.find(STEPS_END)
-    if start != -1 and end != -1 and end > start:
-        tail = body[end + len(STEPS_END):]
-        return body[:start] + block + tail
-    return block + "\n\n" + body.lstrip("\n") if body.strip() else block + "\n"
 
 
 def _sync_tags_to_catalog(tags):
