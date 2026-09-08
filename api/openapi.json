@@ -442,6 +442,27 @@
      }
     }
    }
+  },
+  "/api/v1/reasons": {
+   "get": {
+    "tags": [
+     "v1"
+    ],
+    "summary": "Reasons",
+    "operationId": "reasons_api_v1_reasons_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ReasonsResult"
+        }
+       }
+      }
+     }
+    }
+   }
   }
  },
  "components": {
@@ -927,6 +948,23 @@
     ],
     "title": "MarkResult",
     "description": "Ответ на отметку шага. Несёт новое состояние — обновлённую строку ленты\n(`row`, None если шаг из ленты и завала ушёл) и счётчики, — чтобы клиенту\nне нужен был второй круг до сервера. Это контрактно чистая версия\nоптимистичного интерфейса: оболочка по-прежнему ничего не вычисляет."
+   },
+   "ReasonsResult": {
+    "properties": {
+     "reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Reasons"
+     }
+    },
+    "type": "object",
+    "required": [
+     "reasons"
+    ],
+    "title": "ReasonsResult",
+    "description": "Справочник причин переноса и провала (раздел 5.4 ТЗ). Только активные:\nархивная причина для новой записи не годится, а в истории остаётся."
    },
    "SearchResult": {
     "properties": {

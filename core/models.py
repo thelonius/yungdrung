@@ -109,3 +109,10 @@ class SearchResult(BaseModel):
     query: str
     count: int
     results: list[dict]
+
+
+class ReasonsResult(BaseModel):
+    """Справочник причин переноса и провала (раздел 5.4 ТЗ). Только активные:
+    архивная причина для новой записи не годится, а в истории остаётся."""
+
+    reasons: list[str]

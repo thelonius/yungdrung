@@ -3,7 +3,7 @@
 
 PY := python3
 
-.PHONY: check test lint typecheck bench install-dev openapi types
+.PHONY: check test lint typecheck bench install-dev openapi types web-check web-build e2e
 
 check: lint test          ## всё, что должно быть зелёным перед коммитом
 
@@ -28,3 +28,12 @@ openapi:                  ## снимок схемы в api/openapi.json (тес
 types: openapi            ## типы клиента из схемы; нужен Node (npx openapi-typescript)
 	@mkdir -p apps/web/src/api
 	npx --yes openapi-typescript api/openapi.json -o apps/web/src/api/schema.d.ts
+
+web-check:                ## клиент: tsc, eslint, vitest (нужен Node и npm ci в apps/web)
+	cd apps/web && npx tsc -b && npx eslint . && npx vitest run
+
+web-build:                ## собрать клиент в apps/web/dist
+	cd apps/web && npm run build
+
+e2e: web-build            ## приёмка «утро за десять нажатий» (Playwright, chromium)
+	cd apps/web && npx playwright test

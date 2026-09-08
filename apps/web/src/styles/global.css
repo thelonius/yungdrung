@@ -1,0 +1,93 @@
+/* Токены перенесены из static/style.css как есть: та же палитра, та же тёмная
+   тема. Переписывать их на утилиты — работа без выигрыша (REFACTOR.md). */
+[hidden] { display: none !important; }
+
+:root {
+  --bg: #f4f2ec;
+  --card: #ffffff;
+  --ink: #22201a;
+  --muted: #6d685a;
+  --line: #dcd7c8;
+  --line-strong: #b9b2a0;
+  --accent: #2f6d5f;
+  --accent-ink: #ffffff;
+  --danger: #9b3535;
+  --danger-bg: #fbeeee;
+  --ok: #2f6d5f;
+  --focus: #e8e2cf;
+  --radius: 8px;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #191811;
+    --card: #23211a;
+    --ink: #ece8db;
+    --muted: #a29b87;
+    --line: #3a362a;
+    --line-strong: #56503f;
+    --accent: #6ac3ae;
+    --accent-ink: #14201c;
+    --danger: #e08a8a;
+    --danger-bg: #33211f;
+    --ok: #6ac3ae;
+    --focus: #2e2b21;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); }
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: var(--radius);
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  padding: 8px 14px;
+}
+button:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button.ghost { background: transparent; border-color: transparent; color: var(--accent); padding: 4px 8px; }
+button.quiet { background: transparent; border-color: transparent; color: var(--muted); padding: 4px 8px; }
+button.small { font-size: 13px; padding: 4px 10px; }
+button:disabled { opacity: .5; cursor: default; }
+
+input[type=text], select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  width: 100%;
+}
+input.invalid { border-color: var(--danger); }
+
+kbd {
+  font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 5px;
+  background: var(--card);
+  color: var(--muted);
+}
+
+.wrap { max-width: 720px; margin: 0 auto; padding: 32px 20px 120px; }
+.muted { color: var(--muted); }
+.err { color: var(--danger); font-size: 14px; margin: 0; }

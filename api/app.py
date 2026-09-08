@@ -9,21 +9,30 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 from api import errors, legacy
 from api.v1 import router as v1
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
+# Собранный клиент (REFACTOR.md, срез 1c). В git его нет: собирает
+# `tools/update.py` на машине заказчика. Нет каталога — нет и маршрута, старые
+# страницы работают как раньше.
+DIST = Path(__file__).resolve().parent.parent / "apps" / "web" / "dist"
 
 # Пользовательские маршруты по-русски — их видит человек, они не меняются
 # (решение в REFACTOR.md). Пока страницы старые; новое приложение занимает `/`
 # в срезе 1c, старая лента переезжает на `/старая`.
 PAGES = {
-    "/": "feed.html", "/лента": "feed.html", "/новая": "index.html",
+    "/старая": "feed.html", "/новая": "index.html",
     "/шаблоны": "templates.html", "/задача": "task.html", "/настройки": "settings.html",
     "/архив": "archive.html", "/задачи": "list.html", "/база": "kb.html",
     "/база/запись": "kb-note.html",
 }
+# Лента — новое приложение (`apps/web/dist`, срез 1c принят 2026-09-08). Нет
+# сборки — отдаётся прежняя страница: трекер работает и до первого
+# `tools/update.py`, просто без клавиатуры и отмены.
+FEED_ROUTES = ("/", "/лента")
 
 app = FastAPI(title="Yungdrung", version="1",
               description="Трекер задач с последовательными шагами и контрольным временем. "
@@ -48,6 +57,20 @@ def _static(name: str, media_type: str):
                         status_code=404, media_type="application/json; charset=utf-8")
     return FileResponse(path, media_type=media_type,
                         headers={"X-Content-Type-Options": "nosniff"})
+
+
+def _feed_page():
+    if (DIST / "index.html").is_file():
+        return FileResponse(DIST / "index.html", media_type="text/html; charset=utf-8",
+                            headers={"X-Content-Type-Options": "nosniff"})
+    return _static("feed.html", "text/html; charset=utf-8")
+
+
+for _route in FEED_ROUTES:
+    app.add_api_route(_route, _feed_page, methods=["GET"], include_in_schema=False)
+
+if (DIST / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=str(DIST / "assets")), name="assets")
 
 
 for _route, _file in PAGES.items():

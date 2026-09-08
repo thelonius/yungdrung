@@ -11,7 +11,8 @@ from core import search as core_search
 from core.context import Context
 from core.errors import ValidationError
 from core.models import (
-    BacklogResult, ExtractResult, FeedResult, MarkResult, SearchResult, WhenResult,
+    BacklogResult, ExtractResult, FeedResult, MarkResult, ReasonsResult, SearchResult,
+    WhenResult,
 )
 from domain.ru_dates import parse_date_input
 
@@ -81,3 +82,8 @@ def extract_when(body: TextIn, now: datetime = Depends(moment)):
 def search(q: str | None = None, kind: str | None = None,
            limit: int = Query(50, ge=1, le=500), c: Context = Depends(ctx)):
     return core_search.search(c, q, kind=kind, limit=limit)
+
+
+@router.get("/reasons", response_model=ReasonsResult)
+def reasons(c: Context = Depends(ctx)):
+    return ReasonsResult(reasons=c.reasons())

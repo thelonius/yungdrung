@@ -1,0 +1,37 @@
+.head { margin-bottom: 20px; }
+.headRow { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.h1 { font-size: 26px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+.links { display: flex; gap: 4px; flex-wrap: wrap; font-size: 13px; }
+.links a { text-decoration: none; padding: 4px 8px; border-radius: 6px; }
+.links a:hover { background: var(--focus); }
+.counters { display: flex; gap: 16px; margin-top: 6px; font-size: 14px; color: var(--muted); }
+.counters b { color: var(--ink); font-weight: 600; margin-left: 4px; }
+.hot b { color: var(--danger); }
+.plate {
+  width: 100%; display: flex; justify-content: space-between; align-items: center;
+  background: var(--danger-bg); color: var(--danger); border: 1px solid transparent;
+  padding: 10px 14px; margin: 0 0 14px; text-align: left; font-weight: 600;
+}
+.plate:hover { border-color: var(--danger); }
+.plate kbd { color: var(--danger); border-color: currentColor; background: transparent; }
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.row {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 12px;
+}
+.row.focused { border-color: var(--accent); background: var(--focus); }
+.stalled .title::before { content: '⚑ '; color: var(--danger); }
+.main { flex: 1; min-width: 0; }
+.title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub { display: flex; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.time { font-variant-numeric: tabular-nums; }
+.tag { border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; font-size: 12px; }
+.postponed { color: var(--danger); }
+.actions { display: flex; gap: 4px; }
+.tick, .more { width: 34px; height: 34px; padding: 0; display: grid; place-items: center; }
+.tick { color: var(--ok); }
+.empty { color: var(--muted); padding: 24px 0; }
+.queueHead { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 12px; }
+.queueHead h2 { margin: 0; font-size: 18px; }
+.footer { margin-top: 28px; font-size: 13px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; }
