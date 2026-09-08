@@ -28,7 +28,9 @@
 ## Веб-интерфейс
 
 После запуска `python server.py` открывается браузер на `http://127.0.0.1:8765`.
-Сервер сам в стор не пишет — только зовёт команды движка (см. `CONTRACT.md`).
+Сервер (FastAPI, `api/`) сам в стор не пишет — только зовёт ядро (см. `CONTRACT.md`).
+Описание типизированного API — на `http://127.0.0.1:8765/docs`; прежние
+маршруты `/api/*` живут для старых страниц и уходят вместе с ними.
 
 | Адрес | Назначение |
 |-------|------------|
@@ -109,7 +111,7 @@ python engine.py list
 | Что написало | Что делать |
 |---|---|
 | `'python' is not recognized...` | Python без PATH — переустановить с галочкой |
-| `нужен pyyaml: pip install pyyaml` | Выполнить `pip install -r requirements.txt` |
+| `нужен pyyaml: pip install pyyaml`, `нужны fastapi и uvicorn` | Выполнить `pip install -r requirements.txt` |
 | Порт занят | `python server.py --port 9000` |
 
 ---

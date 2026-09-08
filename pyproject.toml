@@ -31,10 +31,10 @@ select = ["E", "F", "W"]
 "notify.py" = ["E501"]
 
 [tool.mypy]
-# Проверяет только новые слои. `api/` добавится в срезе 1b. На engine.py
+# Проверяет только новые слои. На engine.py
 # mypy не наводим: 3000 строк без аннотаций дадут отчёт, который никто не
 # прочтёт, а сам файл демонтируется в срезе 5.
-files = ["core", "domain"]
+files = ["core", "domain", "api"]
 python_version = "3.11"
 ignore_missing_imports = true
 # Старые модули (settings, kb, worktime, store) импортируются новыми слоями,

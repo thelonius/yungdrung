@@ -77,3 +77,35 @@ class MarkResult(BaseModel):
     control_date: str | None = None
     row: FeedRow | None = None
     counts: Counts
+
+
+class WhenResult(BaseModel):
+    """Во что превратился человеческий ввод даты — подсказка под полем формы.
+    Подпись («завтра в 09:30», «18.10.2026, через 40 дн.») считается здесь,
+    а не в браузере: по контракту оболочка не пересказывает данные ядра
+    своими словами. Нераспознанный ввод — это ответ, а не ошибка запроса:
+    поле опрашивается на каждое нажатие клавиши."""
+
+    ok: bool
+    date: str | None = None
+    label: str | None = None
+    past: bool = False
+    error: str | None = None
+
+
+class ExtractResult(BaseModel):
+    """Быстрый ввод одной строкой: название, дата и границы распознанного куска
+    в исходном тексте — для подсветки и вырезания из названия."""
+
+    title: str
+    date: str | None = None
+    label: str | None = None
+    past: bool = False
+    span: tuple[int, int] | None = None
+
+
+class SearchResult(BaseModel):
+    ok: bool = True
+    query: str
+    count: int
+    results: list[dict]
