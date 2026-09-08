@@ -13,8 +13,7 @@ test:                     ## тесты движка и оболочки
 lint:                     ## ruff по конфигу из pyproject.toml
 	$(PY) -m ruff check .
 
-typecheck:                ## mypy; включается вместе с модулями среза 1
-	@test -d core || { echo "core/ ещё нет — mypy включается в срезе 1"; exit 0; }
+typecheck:                ## mypy по core/ и domain/ (см. pyproject.toml)
 	$(PY) -m mypy
 
 bench:                    ## базовые замеры (см. tools/bench.py --help)

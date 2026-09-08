@@ -19,6 +19,16 @@ def as_date(value):
     return datetime.fromisoformat(str(value).strip()).date()
 
 
+def format_control(moment):
+    """Момент контроля в том виде, в котором его понимает разбор ввода. Пробел
+    между датой и временем обязателен — на «T» разбор спотыкается. Тот же
+    формат, что у `templates.control_text`; здесь копия, потому что `core` не
+    может импортировать `templates` (тот импортирует `engine`, вышло бы кольцо)."""
+    if isinstance(moment, datetime):
+        return moment.strftime("%Y-%m-%d %H:%M")
+    return moment.strftime("%Y-%m-%d")
+
+
 def parse_stored_control(text):
     """Строка control_date (из `parse_date_input` или уже из хранилища) →
     `date` или `datetime`, время сохраняется, если было.
@@ -372,3 +382,41 @@ def parse_date_input(text, today, *, now=None):
         return date(год + 2000 if год < 100 else год, мес, д)
 
     return as_date(s)  # ISO и всё, что понимает datetime.fromisoformat
+
+
+def extract_when(text, today, *, now=None):
+    """Дата внутри свободной фразы — для быстрого ввода одной строкой (R21).
+
+    «позвонить Василию завтра в полдесятого» → («позвонить Василию»,
+    datetime(…, 9, 30), (18, 38)). Третий элемент — границы распознанного
+    куска в исходной строке, чтобы форма подсветила его и вырезала из
+    названия. Без даты — (текст как есть, None, None).
+
+    Способ — перебор хвостов фразы по словам от самого длинного: первый хвост,
+    который `parse_date_input` принимает, и есть дата. Разбор при этом не
+    трогается вовсе: он по-прежнему понимает только строку целиком, а здесь
+    лишь выбирается, какую строку ему дать. Предлоги-связки («в 15:00»)
+    разбор сам выкидывает, поэтому «созвон в 15:00» даёт название «созвон»,
+    а не «созвон в».
+
+    Что считается датой, решает тот же разбор, со всеми его правилами: голое
+    число в конце («заказать 10») станет временем 10:00 сегодня, ровно как
+    «в 10» в поле даты. Форма показывает, что распознано, — человек видит и
+    правит, а угадывать за него здесь нечего.
+    """
+    if text is None:
+        return "", None, None
+    s = str(text).strip()
+    if not s:
+        return "", None, None
+    начала = [m.start() for m in re.finditer(r"\S+", s)]
+    for начало in начала:
+        хвост = s[начало:]
+        try:
+            момент = parse_date_input(хвост, today, now=now)
+        except (ValueError, TypeError):
+            continue
+        if момент is None:
+            continue
+        return s[:начало].rstrip(), момент, (начало, len(s))
+    return s, None, None

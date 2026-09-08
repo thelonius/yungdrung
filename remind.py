@@ -22,10 +22,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import backup
+import core.feed as core_feed
 import engine
 import notify
 import settings as cfg
 import worktime
+from core.context import Context
 
 
 def _notification_settings():
@@ -144,12 +146,14 @@ def main():
     now = worktime.as_datetime(args.now) if args.now else datetime.now()
     today = now.date()
 
-    # Через `engine._work`, а не `worktime.settings()`: та отдаёт зашитые
-    # 09:00–21:00, и напоминания жили по ним, чей бы стор ни обслуживали.
-    # Заказчик ставил конец дня в 18:00, лента и завал его слушались (они
-    # считаются движком), а тосты продолжали приходить до девяти вечера —
-    # настройка была, кнопка была, эффекта не было.
-    work = engine._work(None)
+    # Рабочие часы — из настроек стора, а не `worktime.settings()`: та отдаёт
+    # зашитые 09:00–21:00, и напоминания жили по ним, чей бы стор ни
+    # обслуживали. Заказчик ставил конец дня в 18:00, лента и завал его
+    # слушались, а тосты продолжали приходить до девяти вечера — настройка
+    # была, кнопка была, эффекта не было. Теперь у ленты и у напоминаний один
+    # источник — `Context.work`.
+    ctx = Context(engine.VAULT)
+    work = ctx.work()
 
     # `cmd_refresh` здесь больше не зовётся. Он стоял тут с объяснением «без
     # пересчёта лента считалась бы по вчерашним данным» — и объяснение было
@@ -172,8 +176,11 @@ def main():
     engine.cmd_recur(SimpleNamespace(name=None, force=False, limit=None), today)
     автобэкап(today)
 
-    лента = engine.cmd_feed(SimpleNamespace(), today)
-    items = лента["feed"]
+    # Лента — прямо из ядра, тем же вызовом, что у HTTP и CLI, и от того же
+    # `now`, что решает «пора ли показывать»: два разных «сейчас» в одном
+    # пробуждении дали бы строку в ленте, которую показывать ещё рано.
+    лента = core_feed.feed(ctx, now, work)
+    items = [r.model_dump() for r in лента.feed]
 
     notif = _notification_settings()
     state = notify.load_state(engine.VAULT)
@@ -183,7 +190,7 @@ def main():
         if not args.quiet_empty:
             вне = "" if worktime.is_working_moment(now, work) else " (сейчас нерабочее время)"
             print(f"показывать нечего{вне}; в ленте {len(items)}, "
-                  f"просрочено {лента['overdue_count']}")
+                  f"просрочено {лента.overdue_count}")
         return 0
 
     if args.dry_run:
