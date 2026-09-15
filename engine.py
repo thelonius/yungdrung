@@ -25,7 +25,6 @@ import json
 import os
 import re
 import sys
-import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -82,9 +81,11 @@ import core.clock  # noqa: E402
 import core.feed as core_feed  # noqa: E402
 import core.mark as core_mark  # noqa: E402
 import core.persist as core_persist  # noqa: E402
+import core.recur as core_recur  # noqa: E402
 import core.tasks as core_tasks  # noqa: E402
+import core.templates as core_templates  # noqa: E402
 from core.context import Context  # noqa: E402
-from core.errors import CoreError, ValidationError  # noqa: E402
+from core.errors import CoreError, NotFound, ValidationError  # noqa: E402
 from core.models_tasks import TaskEditIn  # noqa: E402
 
 SCHEMA = core_persist.TASK_SCHEMA
@@ -455,11 +456,18 @@ def _recurrence_view(шаблон):
 
 def cmd_templates(args, today):
     """Список шаблонов. Отдаём с предпросмотром на сегодня: заказчику надо видеть,
-    какие даты получатся, а не только имена."""
-    склад = tpl.JsonStore(VAULT)
+    какие даты получатся, а не только имена.
+
+    Склад и вложения читаются через `core.templates.store`/`Context.store`, а не
+    напрямую: тот же адрес стора, что видит `/api/v1`, — не два способа его
+    собрать. Выходные для предпросмотра берутся из настроек заказчика
+    (`ctx.work()`), не из дефолтов — иначе при включённой работе по выходным
+    строка сама себе противоречила бы (см. `core.templates.preview`)."""
+    ctx = _ctx()
     старт = parse_date_input(args.start, today) if getattr(args, "start", None) else today
     из_даты = as_date(старт)
-    файлы = get_store()
+    склад = core_templates.store(ctx)
+    файлы = ctx.store
     out = []
     for шаблон in склад.all():
         out.append({
@@ -467,7 +475,7 @@ def cmd_templates(args, today):
             "tags": шаблон.get("tags") or [],
             "steps": len(шаблон.get("steps") or []),
             "attachments": len(файлы.list_attachments("template", шаблон["name"])),
-            "preview": tpl.preview(шаблон, из_даты),
+            "preview": tpl.preview(шаблон, из_даты, ctx.work()),
             "recurrence": _recurrence_view(шаблон),
         })
     return {"templates": out, "count": len(out), "start": из_даты.isoformat()}
@@ -491,43 +499,35 @@ def cmd_template_preview(args, today):
     except json.JSONDecodeError as e:
         return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
 
-    старт = as_date(parse_date_input(args.start, today)) \
-        if getattr(args, "start", None) else today
-    пробный = {**data, "name": (data.get("name") or "").strip() or "—", "recurrence": None}
-    ошибки = [e for e in tpl.validate_template(пробный)
-              if not str(e.get("field") or "").startswith("name")]
-    if ошибки:
-        return {"ok": False, "errors": ошибки}
-    return {"ok": True, "start": старт.isoformat(),
-            "start_text": tpl.human_moment(старт),
-            "steps": tpl.preview(пробный, старт)}
+    # Расчёт переехал в `core.templates.preview` (§3.4 среза 2): та же проверка
+    # и та же сборка строк, только плохая дата теперь не роняет команду
+    # исключением, а возвращает `ok: false`, как остальные живые проверки.
+    результат = core_templates.preview(_ctx(), data, getattr(args, "start", None), today)
+    if not результат.ok:
+        return {"ok": False, "errors": [e.model_dump() for e in результат.errors]}
+    return {"ok": True, "start": результат.start.isoformat(),
+            "start_text": результат.start_text,
+            "steps": [s.model_dump() for s in результат.steps]}
 
 
 def cmd_recurrence_preview(args, today):
     """Проверить и описать правило без сохранения — живая подпись в форме,
-    та же роль, что у `/api/parse-date` для одиночной даты."""
-    if not getattr(args, "anchor", None):
-        return {"ok": False, "errors": [{"field": "recurrence.anchor",
-                                         "error": "Нужна дата, от которой считать первый цикл"}]}
-    try:
-        якорь = as_date(parse_date_input(args.anchor, today))
-    except (ValueError, TypeError):
-        return {"ok": False, "errors": [{"field": "recurrence.anchor",
-                                         "error": "Дату не понял, нужен формат 2026-08-18"}]}
+    та же роль, что у `/api/parse-date` для одиночной даты.
+
+    Проверка и подпись переехали в `core.templates.preview_rule`; здесь
+    остаётся только разбор JSON правила из CLI-аргумента."""
     try:
         правило = json.loads(args.rule) if isinstance(args.rule, str) else (args.rule or {})
     except json.JSONDecodeError as e:
         return {"ok": False, "errors": [{"field": "recurrence", "error": f"битый JSON: {e}"}]}
 
-    ошибки = rec.validate_rule(правило, start=якорь)
-    if ошибки:
-        return {"ok": False, "errors": [
-            {"field": f"recurrence.{e['field']}" if e.get("field") else "recurrence",
-             "error": e["error"]} for e in ошибки]}
-
-    return {"ok": True, "description": rec.describe(правило), "anchor": якорь.isoformat(),
-            "preview": [{"date": s["date"].isoformat(), "text": s["text"]}
-                       for s in rec.preview(правило, якорь, count=5)]}
+    результат = core_templates.preview_rule(
+        getattr(args, "anchor", None), правило, today, _ctx().work())
+    if not результат.ok:
+        return {"ok": False, "errors": [e.model_dump() for e in результат.errors]}
+    return {"ok": True, "description": результат.description,
+            "anchor": результат.anchor.isoformat(),
+            "preview": [{"date": d.date.isoformat(), "text": d.text} for d in результат.preview]}
 
 
 def cmd_recurrence_parse(args, today):
@@ -542,37 +542,33 @@ def cmd_recurrence_parse(args, today):
     человеку, как система его поняла, — «каждую неделю по вторникам» рядом с
     ближайшими датами. Иначе разбор молча съедает опечатку.
     """
-    try:
-        правило = rec.parse_text(getattr(args, "text", None))
-    except rec.RuleError as e:
-        return {"ok": False, "errors": e.errors}
-    if правило.get("until") is not None:
-        правило["until"] = правило["until"].isoformat()
-    return {"ok": True, "rule": правило, "description": rec.describe(правило)}
+    результат = core_templates.parse_rule(getattr(args, "text", None))
+    if not результат.ok:
+        return {"ok": False, "errors": [e.model_dump() for e in результат.errors]}
+    return {"ok": True, "rule": результат.rule.model_dump(),
+            "description": результат.description}
 
 
 def cmd_set_recurrence(args, today):
     """Прикрепить или снять правило повторения с шаблона.
 
-    Идёт через `Store.save` целиком, а не отдельным полем: у шаблона один путь
-    записи, тот же, что у формы шагов, — иначе однажды разойдутся форматом.
+    Идёт через `core.templates.set_recurrence` → `Store.save` целиком, а не
+    отдельным полем: у шаблона один путь записи, тот же, что у формы шагов, —
+    иначе однажды разойдутся форматом.
     """
-    склад = tpl.JsonStore(VAULT)
-    шаблон = склад.get(args.name)
-    if not шаблон:
-        return {"ok": False, "errors": [{"field": "name",
-                                         "error": f"нет шаблона «{args.name}»"}]}
-    данные = dict(шаблон)
     if getattr(args, "clear", False):
-        данные["recurrence"] = None
+        правило = None
     else:
-        данные["recurrence"] = args.rule if isinstance(args.rule, dict) else json.loads(args.rule)
+        правило = args.rule if isinstance(args.rule, dict) else json.loads(args.rule)
     try:
-        обновлённый = склад.save(данные)
-    except tpl.TemplateError as e:
-        return {"ok": False, "errors": getattr(e, "errors", [{"field": None, "error": str(e)}])}
-    return {"ok": True, "template": обновлённый["name"],
-            "recurrence": _recurrence_view(обновлённый)}
+        карточка = core_templates.set_recurrence(_ctx(), args.name, правило, today)
+    except NotFound as e:
+        return {"ok": False, "errors": [{"field": "name", "error": str(e)}]}
+    except ValidationError as e:
+        return {"ok": False, "errors": e.errors}
+    return {"ok": True, "template": карточка.name,
+            "recurrence": карточка.recurrence.model_dump(mode="json")
+            if карточка.recurrence else None}
 
 
 def cmd_save_template(args, today):
@@ -593,12 +589,11 @@ def cmd_save_template(args, today):
     except json.JSONDecodeError as e:
         return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
 
-    склад = tpl.JsonStore(VAULT)
     try:
-        шаблон = склад.save(data)
-    except tpl.TemplateError as e:
-        return {"ok": False, "errors": getattr(e, "errors", [{"field": None, "error": str(e)}])}
-    return {"ok": True, "template": шаблон["name"], "steps": len(шаблон.get("steps") or [])}
+        карточка = core_templates.save(_ctx(), data, today)
+    except ValidationError as e:
+        return {"ok": False, "errors": e.errors}
+    return {"ok": True, "template": карточка.name, "steps": len(карточка.steps)}
 
 
 def cmd_template_delete(args, today):
@@ -611,10 +606,10 @@ def cmd_template_delete(args, today):
     шаблон никого не ломает: её читают только по source_type/source_id
     конкретной задачи или шаблона, а не перечислением всех строк подряд.
     """
-    склад = tpl.JsonStore(VAULT)
-    if not склад.delete(args.name):
-        return {"ok": False, "errors": [{"field": "name",
-                                         "error": f"нет шаблона «{args.name}»"}]}
+    try:
+        core_templates.delete(_ctx(), args.name)
+    except NotFound as e:
+        return {"ok": False, "errors": [{"field": "name", "error": str(e)}]}
     return {"ok": True, "template": args.name, "deleted": True}
 
 
@@ -668,39 +663,24 @@ def recurrence_state_path(vault=None):
     """Журнал повторений лежит рядом с стором, но не в нём: это отметки «какой
     цикл был последним», а не данные заказчика. Тот же приём, что у файла
     доставки в notify.py — потеря файла означает лишний повтор, а не потерю
-    задачи."""
-    return Path(vault or VAULT) / ".повторения.json"
+    задачи. Тонкая обёртка над `core.recur.state_path`: `vault` здесь только
+    для тестов, что подменяют его отдельно от `engine.VAULT`."""
+    return core_recur.state_path(Context(vault) if vault else _ctx())
 
 
 def load_recurrence_state():
-    path = recurrence_state_path()
-    if not path.is_file():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        # Битый журнал — не повод падать: хуже пропустить проверку блокировки
-        # один раз, чем перестать заводить задачи по всем правилам разом.
-        return {}
+    return core_recur.load_state(_ctx())
 
 
 def save_recurrence_state(state):
-    path = recurrence_state_path()
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=1, default=str)
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    core_recur.save_state(_ctx(), state)
 
 
 def recurring_title(name, cycle_date):
     """Имя автосозданной задачи. Голое имя шаблона совпало бы с прошлым циклом —
     ровно та коллизия, что при ручном разворачивании ловит понятную ошибку
     в форме, а здесь заведение идёт без человека и споткнуться не о что."""
-    return f"{name} — {cycle_date:%d.%m.%Y}"
+    return core_recur.recurring_title(name, cycle_date)
 
 
 def _cycle_closed(task_name, today):
@@ -710,10 +690,7 @@ def _cycle_closed(task_name, today):
     считаем закрытием, а не блокировкой навсегда — иначе удалённая вручную
     задача остановила бы правило насовсем, и это тише любой ошибки.
     """
-    for задача in load_tasks():
-        if задача["path"].stem == task_name:
-            return task_status(задача, today) == "done"
-    return True
+    return core_recur.cycle_closed(_ctx(), task_name, today)
 
 
 def _recompute_previous(запись, today):
@@ -724,13 +701,7 @@ def _recompute_previous(запись, today):
     цикла из `from-template` должны считать его одинаково, иначе один сочтёт
     цикл открытым, а другой закрытым, и решения разойдутся.
     """
-    if not запись.get("previous"):
-        return None
-    предыдущий = dict(запись["previous"])
-    задача_цикла = предыдущий.pop("task", None)
-    if задача_цикла:
-        предыдущий["closed"] = _cycle_closed(задача_цикла, today)
-    return предыдущий
+    return core_recur.recompute_previous(_ctx(), запись, today)
 
 
 def _record_manual_cycle(шаблон, task_name, today):
@@ -743,29 +714,10 @@ def _record_manual_cycle(шаблон, task_name, today):
     Журнал правится так, будто цикл создал сам `recur`: тот же расчёт через
     `due_cycles`, и только если он в самом деле нашёл цикл к созданию — цикл,
     заведённый заранее (раньше своего дня по `lead_days`) или заблокированный
-    незакрытым предыдущим, ручная задача не трогает.
+    незакрытым предыдущим, ручная задача не трогает. Логика — `core.recur`;
+    здесь только адрес контекста.
     """
-    правило = шаблон.get("recurrence")
-    if not правило:
-        return
-    имя = шаблон["name"]
-    state = load_recurrence_state()
-    запись = state.get(имя) or {}
-    предыдущий = _recompute_previous(запись, today)
-    якорь = as_date(правило["anchor"])
-    try:
-        решения = rec.due_cycles(
-            {k: v for k, v in правило.items() if k != "anchor"}, якорь, today,
-            previous=предыдущий, work=worktime.settings(), force=False, limit=1)
-    except rec.RuleError:
-        return
-    создан = next((р for р in решения if р["action"] == "create"), None)
-    if создан is None:
-        return
-    запись["previous"] = {"date": создан["date"].isoformat(), "closed": False,
-                          "task": task_name}
-    state[имя] = запись
-    save_recurrence_state(state)
+    core_recur.record_manual_cycle(_ctx(), шаблон, task_name, today)
 
 
 def cmd_recur(args, today):
@@ -851,17 +803,18 @@ def cmd_template_from_task(args, today):
     """Сделать шаблон из существующей задачи — «я это уже делал, повтори так же».
 
     Сдвиги считаются от даты первого шага, поэтому шаблон переносим на любую дату
-    старта. Задача при этом не меняется.
+    старта. Задача при этом не меняется. Кусок названия остаётся входом CLI —
+    `core.templates.from_task` адресуется `task_id`, как и весь `/api/v1`; заодно
+    из группового шага без даты шаблон больше не собирает шаг-пустышку — в шаблон
+    идут только листья (`domain.steps.leaves_of`).
     """
     задача = find_task(args.task)
-    склад = tpl.JsonStore(VAULT)
     try:
-        шаблон = tpl.template_from_task(задача["meta"], name=args.name)
-        склад.save(шаблон)
-    except tpl.TemplateError as e:
-        return {"ok": False, "errors": getattr(e, "errors", [{"field": None, "error": str(e)}])}
-    return {"ok": True, "template": шаблон["name"], "from_task": задача["path"].stem,
-            "steps": len(шаблон.get("steps") or [])}
+        карточка = core_templates.from_task(_ctx(), задача["path"].id, args.name, today)
+    except ValidationError as e:
+        return {"ok": False, "errors": e.errors}
+    return {"ok": True, "template": карточка.name, "from_task": задача["path"].stem,
+            "steps": len(карточка.steps)}
 
 
 def cmd_refresh(args, today):

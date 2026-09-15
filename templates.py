@@ -216,7 +216,7 @@ def human_moment(moment):
 
 # --- проверка --------------------------------------------------------------
 
-def validate_template(data, existing_names=()):
+def validate_template(data, existing_names=(), today=None):
     """Проверка шаблона до сохранения. Возвращает список ошибок по полям.
 
     Список, а не первое попавшееся исключение: форме надо подсветить все
@@ -228,8 +228,14 @@ def validate_template(data, existing_names=()):
     название шаблона становится названием задачи, то есть именем файла в сторе.
     Второй такой список разошёлся бы с первым, и шаблон начал бы выдавать задачи,
     которые движок отказывается записать.
+
+    `today` — день, от которого разбирается человеческий якорь повторения
+    («завтра», «пн»). По умолчанию системные часы, как было; ядро передаёт
+    свой `today`, иначе тест с `--today` в прошлом и якорем «завтра» считал бы
+    якорь от реального календаря, а не от дня вызова.
     """
     errors = []
+    today = today or date.today()
 
     name = str(data.get("name") or "").strip()
     if not name:
@@ -361,7 +367,7 @@ def validate_template(data, existing_names=()):
                                "error": "Нужна дата, от которой считать первый цикл"})
             else:
                 try:
-                    анкер_дата = as_date(parse_date_input(якорь, date.today()))
+                    анкер_дата = as_date(parse_date_input(якорь, today))
                 except (ValueError, TypeError):
                     errors.append({"field": "recurrence.anchor",
                                    "error": "Дату не понял, нужен формат 2026-08-18"})
@@ -373,7 +379,7 @@ def validate_template(data, existing_names=()):
     return errors
 
 
-def normalize_template(data):
+def normalize_template(data, today=None):
     """Шаблон к каноническому виду: строки очищены, сдвиги числа, позиции плотные.
 
     Хранится и считается только такой вид, поэтому разбор пользовательского ввода
@@ -412,7 +418,7 @@ def normalize_template(data):
     повтор = None
     сырое_повторение = data.get("recurrence")
     if сырое_повторение:
-        якорь = as_date(parse_date_input(сырое_повторение["anchor"], date.today()))
+        якорь = as_date(parse_date_input(сырое_повторение["anchor"], today or date.today()))
         правило = rec.normalize_rule(
             {k: v for k, v in сырое_повторение.items() if k != "anchor"}, start=якорь)
         # `until` возвращается объектом date — JSON его не сериализует. В строку
@@ -599,16 +605,17 @@ class Store:
     def get(self, name):
         return find(self._load(), name)
 
-    def save(self, data):
+    def save(self, data, today=None):
         """Сохранить шаблон. Проверка здесь, а не у вызывающего: путь записи один,
-        и мимо него испорченный шаблон в хранилище не попадёт."""
+        и мимо него испорченный шаблон в хранилище не попадёт. `today` уходит
+        в разбор якоря повторения (см. `validate_template`)."""
         текущие = self._load()
         имя = str(data.get("name") or "").strip()
         чужие = [t.get("name") for t in текущие if not same_name(t.get("name"), имя)]
-        errors = validate_template(data, чужие)
+        errors = validate_template(data, чужие, today)
         if errors:
             raise TemplateError(errors)
-        шаблон = normalize_template(data)
+        шаблон = normalize_template(data, today)
         self._commit(put(текущие, шаблон))
         return шаблон
 
