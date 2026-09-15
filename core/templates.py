@@ -55,7 +55,7 @@ def _not_found(name) -> NotFound:
     return NotFound(f"нет шаблона «{name}»")
 
 
-def _load(ctx: Context, name) -> dict:
+def load(ctx: Context, name) -> dict:
     with _template_errors():
         шаблон = store(ctx).get(name)
     if not шаблон:
@@ -82,13 +82,23 @@ def _rule_payload(rule) -> dict:
     return {k: v for k, v in сырое.items() if v is not None}
 
 
+СПИСОЧНЫЕ_ПОЛЯ = ("byweekday", "bymonthday", "bysetpos", "bymonth")
+
+
 def recurrence_view(template: dict) -> RecurrenceView | None:
     """Правило со склада плюс подпись. Подпись считает `recurrence.describe`,
-    а не морда: оболочка правило словами не пересказывает."""
+    а не морда: оболочка правило словами не пересказывает.
+
+    `domain.recurrence._normalized` хранит «поле не ограничивает цикл» как
+    `None` (см. `_numbers`), а не пустым списком — для расчёта это то же
+    самое, но `RecurrenceView` типизирует список без вариантов, чтобы клиенту
+    не пришлось на каждое поле отдельно проверять `null` (`byweekday ?? []`
+    в четырёх местах формы против одного здесь)."""
     правило = template.get("recurrence")
     if not правило:
         return None
-    return RecurrenceView(**правило, description=rec.describe(
+    заполненное = {**правило, **{k: правило.get(k) or [] for k in СПИСОЧНЫЕ_ПОЛЯ}}
+    return RecurrenceView(**заполненное, description=rec.describe(
         {k: v for k, v in правило.items() if k != "anchor"}))
 
 
@@ -114,7 +124,7 @@ def list_all(ctx: Context) -> TemplateList:
 
 
 def get(ctx: Context, name) -> TemplateCard:
-    return card(ctx, _load(ctx, name))
+    return card(ctx, load(ctx, name))
 
 
 def _parse_start(start, today):
@@ -127,7 +137,7 @@ def _parse_start(start, today):
     return as_date(parse_date_input(str(start), today))
 
 
-def preview(ctx: Context, template: dict, start, today) -> TemplatePreview:
+def preview(ctx: Context, template: dict | BaseModel, start, today) -> TemplatePreview:
     """Какие даты дадут шаги шаблона от даты старта. Раздел 5.6 ТЗ.
 
     Название здесь не проверяется намеренно: даты от него не зависят, а
@@ -144,8 +154,9 @@ def preview(ctx: Context, template: dict, start, today) -> TemplatePreview:
     except (ValueError, TypeError):
         return TemplatePreview(ok=False, start=None, start_text=None,
                                errors=[FieldError(field="start", error=НЕ_ПОНЯЛ)])
-    пробный = {**_payload(template),
-               "name": str(template.get("name") or "").strip() or "—", "recurrence": None}
+    данные = _payload(template)
+    пробный = {**данные,
+               "name": str(данные.get("name") or "").strip() or "—", "recurrence": None}
     ошибки = [FieldError(**e) for e in tpl.validate_template(пробный, today=today)
               if not str(e.get("field") or "").startswith("name")]
     if ошибки:
@@ -168,7 +179,7 @@ def save(ctx: Context, data, today, *, expect_name: str | None = None) -> Templa
     """
     данные = _payload(data)
     if expect_name is not None:
-        _load(ctx, expect_name)
+        load(ctx, expect_name)
         if not tpl.same_name(данные.get("name"), expect_name):
             raise ValidationError.single(
                 "name", "Переименование шаблона пока не поддерживается")
@@ -194,7 +205,7 @@ def set_recurrence(ctx: Context, name, rule, today) -> TemplateCard:
     Идёт через `Store.save` целиком, а не отдельным полем: у шаблона один путь
     записи, тот же, что у формы шагов, — иначе однажды разойдутся форматом.
     """
-    шаблон = dict(_load(ctx, name))
+    шаблон = dict(load(ctx, name))
     шаблон["recurrence"] = None if rule is None else _rule_payload(rule)
     with _template_errors():
         обновлённый = store(ctx).save(шаблон, today)
@@ -208,7 +219,7 @@ def instantiate(ctx: Context, name, start, title, today, now, work) -> FromTempl
     Порядок тот же, что был в `cmd_from_template`: задача пишется первой, и
     только для записанной переносятся файлы и правится журнал.
     """
-    шаблон = _load(ctx, name)
+    шаблон = load(ctx, name)
     try:
         старт = _parse_start(start, today)
     except (ValueError, TypeError):
