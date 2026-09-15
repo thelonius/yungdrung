@@ -167,13 +167,22 @@ def preview(ctx: Context, template: dict | BaseModel, start, today) -> TemplateP
         steps=[PreviewRow(**r) for r in tpl.preview(пробный, старт, ctx.work())])
 
 
-def save(ctx: Context, data, today, *, expect_name: str | None = None) -> TemplateCard:
+def save(ctx: Context, data, today, *, expect_name: str | None = None,
+         create_only: bool = False) -> TemplateCard:
     """Создать шаблон или переписать существующий целиком (`PUT`).
 
     `expect_name` — имя из пути `PUT /templates/{name}`: шаблон обязан
     существовать, а имя в теле — совпадать с ним без регистра. Переименование
     через `PUT` отвергается (Р4): имя шаблона везде ключ — вложения, журнал
     повторений, `put` по имени; переименование потребовало бы id шаблона.
+
+    `create_only` — для `POST /templates`: `templates.Store.save` сам по себе
+    upsert (тест `test_templates.py` пиннит, что пересохранить шаблон под тем
+    же именем не ошибка — иначе он не сохранялся бы «сам себе дубликатом»), а
+    контракт (§1.3) требует, чтобы создание нового шаблона отвергало занятое
+    имя 422 по полю `name`. Проверка здесь, до `Store.save`, а не переключением
+    поведения самого склада — у `PUT` (правка существующего) конфликт по
+    определению не может возникнуть, `expect_name` уже это гарантирует.
 
     Якорь повторения разбирается от `today` вызывающего, не от системных часов.
     """
@@ -183,6 +192,11 @@ def save(ctx: Context, data, today, *, expect_name: str | None = None) -> Templa
         if not tpl.same_name(данные.get("name"), expect_name):
             raise ValidationError.single(
                 "name", "Переименование шаблона пока не поддерживается")
+    if create_only:
+        with _template_errors():
+            занято = store(ctx).get(данные.get("name"))
+        if занято:
+            raise ValidationError.single("name", "Шаблон с таким названием уже есть")
     with _template_errors():
         шаблон = store(ctx).save(данные, today)
     return card(ctx, шаблон)

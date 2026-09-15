@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from api.deps import ctx, moment
+from api.errors import bracket_path
 from core import templates as core_templates
 from core.context import Context
 from core.models_templates import (
@@ -39,6 +40,15 @@ class TextIn(BaseModel):
     text: str | None = None
 
 
+def _bracketed(result):
+    """Скобочный путь поля (Р1) для живых проверок: они отвечают 200 и не
+    проходят через исключение — общий обработчик `api/errors.py` их не видит,
+    перевод делаем здесь, перед самой отдачей."""
+    result.errors = [type(e)(field=bracket_path(e.field), error=e.error)
+                     for e in result.errors]
+    return result
+
+
 @router.get("/templates", response_model=TemplateList)
 def list_templates(c: Context = Depends(ctx)):
     return core_templates.list_all(c)
@@ -57,7 +67,7 @@ def preview_saved(name: str, start: str | None = None,
     проверка опрашивается на каждое нажатие, а не рвёт форму ошибкой запроса).
     """
     шаблон = core_templates.load(c, name)
-    return core_templates.preview(c, шаблон, start, now.date())
+    return _bracketed(core_templates.preview(c, шаблон, start, now.date()))
 
 
 @router.post("/templates/preview", response_model=TemplatePreview)
@@ -65,12 +75,12 @@ def preview_draft(body: TemplatePreviewIn, c: Context = Depends(ctx),
                   now: datetime = Depends(moment)):
     """Предпросмотр ещё не сохранённого шаблона — форма шлёт черновик целиком,
     имя не проверяется (человек набирает шаги раньше, чем придумывает имя)."""
-    return core_templates.preview(c, body.template, body.start, now.date())
+    return _bracketed(core_templates.preview(c, body.template, body.start, now.date()))
 
 
 @router.post("/templates", response_model=TemplateCard)
 def create_template(body: TemplateIn, c: Context = Depends(ctx), now: datetime = Depends(moment)):
-    return core_templates.save(c, body, now.date())
+    return core_templates.save(c, body, now.date(), create_only=True)
 
 
 @router.put("/templates/{name}", response_model=TemplateCard)
@@ -114,10 +124,10 @@ def clear_recurrence(name: str, c: Context = Depends(ctx), now: datetime = Depen
 
 @router.post("/recurrence/parse", response_model=RuleParseResult)
 def parse_recurrence(body: TextIn):
-    return core_templates.parse_rule(body.text)
+    return _bracketed(core_templates.parse_rule(body.text))
 
 
 @router.post("/recurrence/preview", response_model=RulePreviewResult)
 def preview_recurrence(body: RulePreviewIn, c: Context = Depends(ctx),
                        now: datetime = Depends(moment)):
-    return core_templates.preview_rule(body.anchor, body.rule, now.date(), c.work())
+    return _bracketed(core_templates.preview_rule(body.anchor, body.rule, now.date(), c.work()))
