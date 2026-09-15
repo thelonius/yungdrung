@@ -4,9 +4,11 @@
 // через `/api/v1/tasks/quick`. Без React-query: результат нужен диалогу
 // целиком и сразу, а не как кэшируемый список.
 import { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type { components } from '@/api/schema';
 import { ApiError, unwrapErrors } from '@/api/errors';
+import { BACKLOG, FEED } from '@/features/feed/useFeed';
 
 export type ExtractResult = components['schemas']['ExtractResult'];
 
@@ -15,6 +17,7 @@ export type QuickDone = { task: string; task_id: number; label: string };
 const EXTRACT_DEBOUNCE_MS = 150;
 
 export function useQuickAdd(active: boolean) {
+  const qc = useQueryClient();
   const [text, setText] = useState('');
   const [extract, setExtract] = useState<ExtractResult | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
@@ -74,6 +77,12 @@ export function useQuickAdd(active: boolean) {
       setDone(d);
       setText('');
       setExtract(null);
+      // Быстрый ввод почти всегда даёт шаг с контролем на сегодня (Р8
+      // SLICE2_SPEC.md) — задача обязана появиться в ленте сразу, не через
+      // `staleTime`; риск 16 map-client.md, та же инвалидация, что у
+      // `useCreateTask`/`useTask.ts`.
+      qc.invalidateQueries({ queryKey: FEED });
+      qc.invalidateQueries({ queryKey: BACKLOG });
       return d;
     } catch (e) {
       if (e instanceof ApiError) setError(e);

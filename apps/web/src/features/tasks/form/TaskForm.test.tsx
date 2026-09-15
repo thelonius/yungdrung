@@ -8,17 +8,20 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ToasterProvider } from '@/ui/Toaster';
+import { BACKLOG, FEED } from '@/features/feed/useFeed';
 import { TaskForm } from './TaskForm';
 
 const calls: { method: string; url: string; body?: unknown }[] = [];
 
 let planErrors: { field: string | null; error: string }[] = [];
 let createResponse: { status: number; body: unknown } | null = null;
+let scanHypotheses: unknown[] = [];
 
 beforeEach(() => {
   calls.length = 0;
   planErrors = [];
   createResponse = null;
+  scanHypotheses = [];
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const req = input instanceof Request ? input : new Request(String(input), init);
     const url = req.url;
@@ -38,7 +41,7 @@ beforeEach(() => {
       return json({ ok: planErrors.length === 0, errors: planErrors, warnings: [], steps: [] });
     }
     if (url.includes('/api/v1/kb/scan')) {
-      return json({ hypotheses: [], confirmed: [], kb_broken: [] });
+      return json({ hypotheses: scanHypotheses, confirmed: [], kb_broken: [] });
     }
     if (url.includes('/kb-confirm')) {
       return json({ ok: true, links: [{ id: 1 }], errors: [] });
@@ -58,7 +61,7 @@ beforeEach(() => {
 
 function mount() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={['/новая']}>
         <ToasterProvider>
@@ -67,6 +70,7 @@ function mount() {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, qc };
 }
 
 function stepTitleInputs(): HTMLInputElement[] {
@@ -168,5 +172,57 @@ describe('TaskForm', () => {
     expect(stepTitleInputs()[0]).toHaveValue('');
     expect(calls.some((c) => c.url.endsWith('/api/v1/tasks') && c.method === 'POST')).toBe(true);
     expect(calls.some((c) => c.url.includes('kb-confirm'))).toBe(false);
+  });
+
+  it('успех при отмеченной гипотезе зовёт kb-confirm (SLICE2_SPEC.md §5.4 п.8)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ delay: null });
+    scanHypotheses = [{
+      entry_id: 1, title: 'Василий Говнов', via: null, source: null, matched: 'Василия',
+      offset_start: 10, offset_end: 17, confirmed: false,
+    }];
+    mount();
+
+    await user.type(screen.getByLabelText('Название задачи'), 'Позвонить Василию');
+    await user.type(stepTitleInputs()[0], 'Позвонить');
+    await user.type(screen.getByLabelText('Дата контроля'), 'завтра');
+    await user.type(screen.getByLabelText(/Заметка/), 'Позвонить Василию');
+    // `KbHints` дебаунсит скан на 300 мс.
+    await act(async () => { await vi.advanceTimersByTimeAsync(350); });
+
+    await screen.findByTestId('kb-hints');
+    await user.click(screen.getByRole('button', { name: 'Да' }));
+
+    await user.keyboard('{Control>}{Enter}{/Control}');
+
+    await waitFor(() => expect(screen.getByLabelText('Название задачи')).toHaveValue(''));
+    const confirmCall = calls.find((c) => c.url.includes('kb-confirm'));
+    expect(confirmCall?.body).toEqual({
+      mentions: [{
+        entry_id: 1, title: 'Василий Говнов', via: null, source: null, matched: 'Василия',
+        offset_start: 10, offset_end: 17, confirmed: true,
+      }],
+    });
+    expect(await screen.findByText(/проставлено ссылок: 1/)).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it('успешное создание инвалидирует ленту и завал (риск 16 map-client.md)', async () => {
+    const user = userEvent.setup();
+    const { qc } = mount();
+    // `invalidateQueries` помечает существующую запись кэша — без неё
+    // проверять нечего, поэтому сперва «наполняем» кэш ленты/завала, как
+    // будто их уже читала `FeedPage` до открытия формы.
+    qc.setQueryData(FEED, { feed: [] });
+    qc.setQueryData(BACKLOG, { backlog: [] });
+
+    await user.type(screen.getByLabelText('Название задачи'), 'Переезд');
+    await user.type(stepTitleInputs()[0], 'Собрать документы');
+    await user.type(screen.getByLabelText('Дата контроля'), 'завтра');
+    await user.keyboard('{Control>}{Enter}{/Control}');
+
+    await waitFor(() => expect(screen.getByLabelText('Название задачи')).toHaveValue(''));
+    await waitFor(() => expect(qc.getQueryState(FEED)?.isInvalidated).toBe(true));
+    expect(qc.getQueryState(BACKLOG)?.isInvalidated).toBe(true);
   });
 });

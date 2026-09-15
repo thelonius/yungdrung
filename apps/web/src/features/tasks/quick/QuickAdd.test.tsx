@@ -2,6 +2,7 @@
 // подсветка распознанного куска, создание и переход по второму Enter.
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuickAdd } from './QuickAdd';
@@ -45,13 +46,16 @@ beforeEach(() => {
 });
 
 function mount() {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MemoryRouter initialEntries={['/']}>
-      <Routes>
-        <Route path="/задача/:id" element={<p data-testid="card-route">карточка</p>} />
-        <Route path="*" element={<QuickAdd open onClose={() => {}} />} />
-      </Routes>
-    </MemoryRouter>,
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/задача/:id" element={<p data-testid="card-route">карточка</p>} />
+          <Route path="*" element={<QuickAdd open onClose={() => {}} />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
