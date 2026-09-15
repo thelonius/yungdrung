@@ -28,6 +28,7 @@ from core import recur as core_recur  # noqa: E402
 from core import templates as core_templates  # noqa: E402
 from core.context import Context  # noqa: E402
 from core.errors import NotFound, ValidationError  # noqa: E402
+from core.models_templates import TemplateIn  # noqa: E402
 
 
 @pytest.fixture
@@ -99,6 +100,46 @@ def test_save_по_несуществующему_имени_в_put_даёт_Not
     with pytest.raises(NotFound):
         core_templates.save(ctx, _template("Новое"), date(2026, 1, 1),
                             expect_name="Нет такого")
+
+
+# --- PUT без ключа recurrence не стирает сохранённое правило ----------------
+# Находка ревью среза 2 (core/templates.py:66): `TemplateIn.model_dump(
+# exclude_unset=True)` роняет отсутствующий в JSON ключ "recurrence" так же,
+# как явный "recurrence": null — `normalize_template` дальше эти случаи не
+# различает и стирал правило. Модель нужна настоящая (не dict), иначе
+# `model_fields_set` неоткуда взять.
+
+def test_put_без_ключа_recurrence_сохраняет_прежнее_правило(ctx):
+    core_templates.save(ctx, TemplateIn(**_template(recurrence={
+        "anchor": "2026-01-05", "freq": "weekly", "byweekday": [1],
+    })), date(2026, 1, 1))
+
+    # Форма правки шагов/тегов не несёт виджета повторения — ключа
+    # "recurrence" в теле нет вовсе (`exclude_unset`, а не `None`).
+    правка = TemplateIn.model_validate({"name": "Отчёт",
+                                        "steps": [{"title": "Собрать", "offset_days": 0}]})
+    assert "recurrence" not in правка.model_fields_set
+    карточка = core_templates.save(ctx, правка, date(2026, 1, 1), expect_name="Отчёт")
+
+    assert карточка.recurrence is not None
+    assert карточка.recurrence.freq == "weekly"
+    assert карточка.recurrence.byweekday == [1]
+
+
+def test_put_с_recurrence_null_снимает_правило(ctx):
+    """Отличие от предыдущего теста: явный `null` — это просьба снять цикл,
+    а не забытое поле, и она обязана сработать по-прежнему."""
+    core_templates.save(ctx, TemplateIn(**_template(recurrence={
+        "anchor": "2026-01-05", "freq": "weekly", "byweekday": [1],
+    })), date(2026, 1, 1))
+
+    правка = TemplateIn.model_validate({"name": "Отчёт",
+                                        "steps": [{"title": "Собрать", "offset_days": 0}],
+                                        "recurrence": None})
+    assert "recurrence" in правка.model_fields_set
+    карточка = core_templates.save(ctx, правка, date(2026, 1, 1), expect_name="Отчёт")
+
+    assert карточка.recurrence is None
 
 
 # --- риск 7: «сохранить как шаблон» берёт только листья ---------------------

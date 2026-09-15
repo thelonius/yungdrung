@@ -185,13 +185,26 @@ def save(ctx: Context, data, today, *, expect_name: str | None = None,
     определению не может возникнуть, `expect_name` уже это гарантирует.
 
     Якорь повторения разбирается от `today` вызывающего, не от системных часов.
+
+    Ключ `recurrence` в теле `PUT`, которого нет вовсе (форма прислала только
+    шаги/теги), не должен молча стирать сохранённое правило: `_payload` через
+    `exclude_unset` роняет отсутствующий ключ так же, как `recurrence: null`
+    (явная просьба снять правило), а `normalize_template` дальше эти два
+    случая не различает (`data.get("recurrence")` даёт `None` в обоих).
+    Разница видна только здесь, по `model_fields_set` исходной Pydantic-модели
+    — до `_payload` её теряем. Если ключа не было, подставляем прежнее
+    значение из уже загруженного шаблона: тогда снять правило по-прежнему
+    можно, прислав `"recurrence": null` явно, а забытое поле больше не
+    стирает цикл заказчика (находка ревью среза 2, core/templates.py:66).
     """
     данные = _payload(data)
     if expect_name is not None:
-        load(ctx, expect_name)
+        текущий = load(ctx, expect_name)
         if not tpl.same_name(данные.get("name"), expect_name):
             raise ValidationError.single(
                 "name", "Переименование шаблона пока не поддерживается")
+        if isinstance(data, BaseModel) and "recurrence" not in data.model_fields_set:
+            данные["recurrence"] = текущий.get("recurrence")
     if create_only:
         with _template_errors():
             занято = store(ctx).get(данные.get("name"))

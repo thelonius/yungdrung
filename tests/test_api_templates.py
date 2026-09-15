@@ -114,14 +114,14 @@ def test_круглая_поездка_put_сохраняет_скрытые_п�
     assert прочитанное["recurrence"]["paused"] is True
     assert прочитанное["recurrence"]["byweekday"] == [1]
 
-    # `RuleIn` собран с `extra="forbid"` (§2.2): клиент шлёт запрос по форме
-    # запроса, а не карточку ответа как есть — `description` в `RuleIn` нет,
-    # его добавляет `recurrence_view` только для чтения.
-    правило_для_put = {k: v for k, v in прочитанное["recurrence"].items()
-                       if k != "description"}
+    # Буквально то, что предписывает комментарий у `PUT` в §1.3: карточка
+    # ответа `GET` уходит назад как есть, вместе с `description` — поля,
+    # которого нет у `RuleIn`. `RuleIn.extra="ignore"` (не `"forbid"`)
+    # обязан проглотить лишнее, а не ронять честный round-trip 422-й
+    # (находка ревью среза 2, core/models_templates.py:41).
     тело = {"name": прочитанное["name"], "tags": прочитанное["tags"],
             "body": прочитанное["body"], "steps": прочитанное["steps"],
-            "recurrence": правило_для_put}
+            "recurrence": прочитанное["recurrence"]}
     перезапись = client.put("/api/v1/templates/Отчёт", json=тело)
     assert перезапись.status_code == 200, перезапись.json()
     d = перезапись.json()
@@ -129,6 +129,39 @@ def test_круглая_поездка_put_сохраняет_скрытые_п�
     assert d["recurrence"]["lead_days"] == 2
     assert d["recurrence"]["paused"] is True
     assert d["recurrence"]["byweekday"] == [1]
+
+
+def test_put_без_ключа_recurrence_в_теле_не_стирает_правило(client):
+    """Находка ревью среза 2 (core/templates.py:66): форма, правящая только
+    шаги или теги, не обязана присылать `recurrence` — отсутствие ключа не
+    то же самое, что явный `null` (который снимает правило, см. следующий
+    тест)."""
+    client.post("/api/v1/templates", json=шаблон(recurrence={
+        "anchor": "2026-08-04", "freq": "weekly", "byweekday": [1],
+    }))
+
+    правка = client.put("/api/v1/templates/Отчёт", json={
+        "name": "Отчёт", "steps": [{"title": "Собрать другое", "offset_days": 0}],
+    })
+    assert правка.status_code == 200, правка.json()
+    assert правка.json()["recurrence"]["freq"] == "weekly"
+
+    прочитанное = client.get("/api/v1/templates/Отчёт").json()
+    assert прочитанное["recurrence"]["freq"] == "weekly"
+    assert прочитанное["recurrence"]["byweekday"] == [1]
+
+
+def test_put_с_recurrence_null_снимает_правило(client):
+    client.post("/api/v1/templates", json=шаблон(recurrence={
+        "anchor": "2026-08-04", "freq": "weekly", "byweekday": [1],
+    }))
+
+    правка = client.put("/api/v1/templates/Отчёт", json={
+        "name": "Отчёт", "steps": [{"title": "Собрать", "offset_days": 0}],
+        "recurrence": None,
+    })
+    assert правка.status_code == 200, правка.json()
+    assert правка.json()["recurrence"] is None
 
 
 # --- удаление ------------------------------------------------------------

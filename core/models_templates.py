@@ -36,9 +36,17 @@ class RuleIn(BaseModel):
     `model_dump(exclude_unset=True)`: незаданное поле не затирает дефолты
     `recurrence.normalize_rule`, а поля без виджета (`holiday_shift`,
     `lead_days`, `until`, `paused`) возвращаются такими, какими пришли из
-    `GET` — `describe` их проговаривает, терять нельзя."""
+    `GET` — `describe` их проговаривает, терять нельзя.
 
-    model_config = ConfigDict(extra="forbid")
+    `extra="ignore"`, не `"forbid"`: комментарий у `PUT /templates/{name}`
+    («клиент шлёт то, что получил в `GET`») буквально предлагает подставить
+    сюда `RecurrenceView` из ответа как есть, а в нём есть `description`,
+    которого у `RuleIn` нет. `forbid` ронял такой честный round-trip 422‑й
+    (находка ревью среза 2, core/models_templates.py:41); полю всё равно
+    некуда деться дальше `_payload`/`_rule_payload`, они разбирают только
+    известные ключи."""
+
+    model_config = ConfigDict(extra="ignore")
 
     anchor: str | None = None
     freq: str | None = None
