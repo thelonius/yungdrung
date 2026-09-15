@@ -12,6 +12,7 @@ import type {
   TaskSaveResult, TemplateCard,
 } from '@/api/client';
 import { ApiError, unwrapErrors } from '@/api/errors';
+import { attachmentsKey } from '@/features/attachments/useAttachments';
 import { BACKLOG, FEED } from '@/features/feed/useFeed';
 
 export const TASK = (id: number) => ['task', id] as const;
@@ -114,16 +115,22 @@ export function usePlan() {
 }
 
 /** Один запрос на всю задачу (Р6 SLICE2_SPEC.md) — файлы задачи и всех её
- * шагов; ключ кэша `['attachments', owner]` тот же, что возьмёт настоящий
- * `AttachmentList` (F4b), когда сам начнёт по нему грузить — раздача идёт
- * через `items`+`filter`, повторного похода в сеть на каждый шаг нет
- * (§5.1 интерфейс `AttachmentList`). */
+ * шагов; ключ кэша и форма записи (`AttachmentListResult`, не голый массив)
+ * ровно те же, что у `useAttachmentsQuery`/`useUploadAttachment`/
+ * `useDeleteAttachment` из `features/attachments` (находка ревью среза 2:
+ * раньше здесь был другой по форме ключ — `{kind, task_id}` вместо кортежа
+ * `attachmentsKey` — и запись их оптимистичных мутаций уходила в кэш, кото-
+ * рый никто не читал). `select` — только разворачивает `.attachments` для
+ * потребителя (`TaskCardPage`/`StepEditor` ждут массив), самого кэша не
+ * трогает. */
 export function useTaskAttachments(id: number | null) {
+  const key = attachmentsKey({ kind: 'task', task_id: id ?? -1 });
   return useQuery({
-    queryKey: ['attachments', { kind: 'task', task_id: id ?? -1 }],
+    queryKey: key,
     queryFn: () => unwrapErrors<AttachmentListResult>(api.GET('/api/v1/tasks/{task_id}/attachments', {
       params: { path: { task_id: id as number } },
-    })).then((r) => r.attachments),
+    })),
+    select: (r: AttachmentListResult) => r.attachments,
     enabled: id !== null,
   });
 }
