@@ -19,6 +19,7 @@ from api.deps import ctx, moment
 from core import attachments as core_att
 from core.attachments import TaskOwner, TemplateOwner
 from core.context import Context
+from core.errors import NotFound
 from core.models_attachments import AttachmentDeleteResult, AttachmentList, AttachResult
 
 router = APIRouter(prefix="/api/v1", tags=["attachments"])
@@ -65,7 +66,7 @@ def attachment_delete(id: int, c: Context = Depends(ctx)):
     return core_att.remove(c, id)
 
 
-def attachment_bytes(id: int, c: Context = Depends(ctx)):
+def _bytes_response(c: Context, id: int) -> FileResponse:
     """Байты вложения — не JSON. `FileResponse`, а не `read_bytes()` в
     память: файл до 15 МБ уходит потоком. `nosniff` запрещает браузеру
     переугадывать тип: для всего вне белого списка это `octet-stream` на
@@ -76,6 +77,27 @@ def attachment_bytes(id: int, c: Context = Depends(ctx)):
                                  "X-Content-Type-Options": "nosniff"})
 
 
+def attachment_bytes(id: int, c: Context = Depends(ctx)):
+    return _bytes_response(c, id)
+
+
+def public_attachment_bytes(id: str, c: Context = Depends(ctx)):
+    """`/вложение/{id}` — пользовательский путь (виден в адресной строке,
+    в `src` картинки), не схема: `id` здесь берётся строкой и разбирается
+    руками, не типизированным `int` — старый `api/legacy.py` ловил
+    `ValueError` от `int(id_text)` и отвечал 404 «нет вложения», а типовой
+    путь FastAPI на нечисловой id отвечает 422 валидации запроса через общий
+    обработчик (`api/errors.py`). Мусор в этом месте — обычный случай (ссылка
+    скопирована руками, не собрана клиентом из ответа API), и он не то же
+    самое, что «неверный запрос»: вложения с таким id никогда не было и не
+    будет, 404 точнее (находка ревью среза 2, api/v1/attachments.py:79)."""
+    try:
+        числовой_id = int(id)
+    except ValueError:
+        raise NotFound("нет вложения") from None
+    return _bytes_response(c, числовой_id)
+
+
 router.add_api_route("/attachments/{id}/bytes", attachment_bytes, methods=["GET"],
                      response_class=FileResponse)
-public.add_api_route("/вложение/{id}", attachment_bytes, methods=["GET"])
+public.add_api_route("/вложение/{id}", public_attachment_bytes, methods=["GET"])

@@ -173,6 +173,16 @@ def test_удаление_и_404_после(client):
     assert r.json() == {"ok": False, "errors": [{"field": None, "error": f"нет вложения {aid}"}]}
 
 
+def test_вложение_мусорный_id_404_как_в_легаси(client):
+    """`/вложение/{id}` — пользовательский путь (виден в адресной строке),
+    не типизированная схема: нечисловой id раньше (легаси) отвечал 404 «нет
+    вложения», как любой другой несуществующий id, а не 422 валидации пути
+    (находка ревью среза 2, api/v1/attachments.py:79)."""
+    r = client.get("/вложение/мусор")
+    assert r.status_code == 404
+    assert r.json()["errors"][0]["error"] == "нет вложения"
+
+
 def test_потерянный_на_диске_файл_404(client, tmp_path):
     a = upload(client, f"/api/v1/tasks/{client.tid}/attachments", "план.png", PNG).json()
     for f in attachments.dir_path(tmp_path).iterdir():
