@@ -5,6 +5,11 @@
 Стор всегда временный: настоящий `стор.db` не читается и не пишется. Объём
 закрытых — целевой профиль из PLAN.md: время ответа отметки в приёмке
 должно мериться на нём, а не на пустой базе.
+
+Срез 2 (§5.1 SLICE2_SPEC.md) досевает один шаблон и одну задачу с par-группой
+для будущих сценариев F1–F3 (быстрый ввод + карточка + шаблоны). Оба вне
+сегодняшней ленты нарочно (control_date в будущем) — `morning.spec.ts` пиннит
+ровно 10 строк на `/`, лишняя строка молча сломала бы этот тест.
 """
 import json
 import os
@@ -36,6 +41,34 @@ for i in range(10):
                   {"title": "Следующее", "control_date": (today + timedelta(days=7)).isoformat()}],
     }), force=False, reason=None, to=None), today)
     assert ответ.get("ok"), ответ
+
+# Задача с par-группой — сценарий "карточка + шаблоны" (срез 2, §5.8):
+# оба подшага будущей датой, чтобы не попасть в сегодняшнюю ленту.
+ответ_группы = engine.cmd_create(SimpleNamespace(json=json.dumps({
+    "title": "Собрать документы (пример группы)",
+    "tags": ["e2e"],
+    "steps": [{
+        "title": "Документы",
+        "mode": "par",
+        "steps": [
+            {"title": "Паспорт", "control_date": (today + timedelta(days=3)).isoformat()},
+            {"title": "Справка", "control_date": (today + timedelta(days=3)).isoformat()},
+        ],
+    }],
+}), force=False, reason=None, to=None), today)
+assert ответ_группы.get("ok"), ответ_группы
+
+# Один шаблон с повторением — сценарий "шаблоны" (§5.8, второй, по желанию).
+ответ_шаблона = engine.cmd_save_template(SimpleNamespace(json=json.dumps({
+    "name": "Еженедельный отчёт",
+    "tags": ["e2e"],
+    "body": "",
+    "steps": [
+        {"title": "Собрать цифры", "offset_days": 0, "time_of_day": None},
+        {"title": "Отправить отчёт", "offset_days": 2, "time_of_day": "10:00"},
+    ],
+}), force=False, reason=None, to=None), today)
+assert ответ_шаблона.get("ok"), ответ_шаблона
 
 conn = sqlite3.connect(str(VAULT / "стор.db"))
 store.migrate_schema(conn)
