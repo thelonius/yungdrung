@@ -1,0 +1,54 @@
+.head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+.h1 { font-size: 26px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+.empty { color: var(--muted); padding: 24px 0; }
+
+.list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+
+.card {
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;
+}
+.card.focused, .focused { border-color: var(--accent); background: var(--focus); }
+.cardMain { display: flex; flex-direction: column; gap: 2px; }
+.name { font-weight: 650; font-size: 16px; }
+.meta { font-size: 13px; color: var(--muted); }
+.recur { font-size: 13px; color: var(--muted); }
+.recurSet { color: var(--accent); }
+.note { margin: 4px 0 0; font-size: 13px; color: var(--muted); white-space: pre-wrap; }
+.cardActions { display: flex; gap: 6px; flex-wrap: wrap; }
+.cardActions kbd { margin-left: 4px; }
+.cardFiles { border-top: 1px solid var(--line); padding-top: 8px; margin-top: 2px; }
+
+/* --- InstantiateDialog: предпросмотр дат --- */
+.preview { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.preview li { display: flex; justify-content: space-between; gap: 12px; }
+.previewTitle { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.weekend { color: var(--danger); }
+
+/* --- TemplateForm --- */
+.formContent { width: min(640px, calc(100vw - 32px)); max-height: 86vh; overflow-y: auto; }
+.fixedName { margin: 0; font-weight: 650; }
+.stepsList { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.stepRow {
+  display: grid;
+  grid-template-columns: 20px 1fr 110px 90px auto 24px;
+  align-items: center; gap: 8px;
+  position: relative;
+}
+.stepNum { color: var(--muted); font-size: 13px; text-align: right; }
+.offsetField { display: flex; flex-direction: column; gap: 2px; }
+.smallLabel { font-size: 11px; font-weight: 400; color: var(--muted); letter-spacing: 0; }
+.stepPreview { font-size: 12px; color: var(--muted); white-space: nowrap; grid-column: 2 / -1; }
+.stepDrop { color: var(--muted); }
+.stepErr { grid-column: 1 / -1; margin: 0; }
+
+@media (max-width: 520px) {
+  .stepRow { grid-template-columns: 20px 1fr; }
+  .stepPreview, .stepDrop { grid-column: 2; }
+}
+
+/* --- RecurrenceForm --- */
+.ruleGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.weekdays { display: flex; gap: 6px; flex-wrap: wrap; }
+.weekdayOn { border-color: var(--accent); color: var(--accent); }
+.recurDescription { font-size: 13px; color: var(--muted); margin: 0; }
