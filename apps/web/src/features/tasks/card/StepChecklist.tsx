@@ -75,6 +75,16 @@ function StepList(props: Props & { parent: number[] }): JSX.Element {
                 parent.length > 0 ? styles.substep : '',
                 focused ? styles.focused : '',
                 titleErr ? styles.invalidRow : '',
+                // Литеральные классы поверх хешированных CSS-module —
+                // контракт SLICE2_SPEC.md §5.5 п.5 (перенос из старой
+                // карточки, `map-client.md` §1, `task.js:238-245`);
+                // находка ревью среза 2: без них ничего снаружи компонента
+                // (e2e, скрипты) не может опознать строку по классу.
+                node.closed ? 'is-closed' : '',
+                node.state === 'overdue' ? 'is-overdue' : '',
+                node.active && !node.closed ? 'is-active' : '',
+                isGroup ? 'is-group' : '',
+                parent.length > 0 ? 'is-substep' : '',
               ].filter(Boolean).join(' ')}
               data-testid="card-step"
               data-step-id={node.id ?? 'new'}

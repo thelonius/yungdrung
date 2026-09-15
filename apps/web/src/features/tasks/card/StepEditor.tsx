@@ -62,6 +62,13 @@ export function StepEditor({
             </select>
             {modeErr && <p className="err">{modeErr}</p>}
           </div>
+          {/* Ядро отдаёт `.start_date`/`.control_date` для группы, если в
+              данных остались даты листа (после «Разбить на подшаги» или
+              правки шага руками) — «Даты ставятся подшагам, не группе»
+              (domain/steps_plan.py). Раньше эти ошибки считались, но нигде
+              не показывались (находка ревью среза 2). */}
+          {startErr && <p className="err">{startErr}</p>}
+          {controlErr && <p className="err">{controlErr}</p>}
           <button type="button" className="small" onClick={onAddSubstep}>+ Подшаг</button>
         </>
       ) : (
