@@ -22,6 +22,23 @@ function invalidateTemplates(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: TEMPLATES });
 }
 
+/** Запись ответа мутации (`TemplateCard`) сразу в кэш списка — второй `GET
+ * /api/v1/templates` не нужен (§1.5 SLICE2_SPEC.md: «`TemplateCard` после
+ * любой записи шаблона»; находка ревью среза 2 — раньше здесь был
+ * безусловный `invalidateTemplates`). Список не читан (`prev` нет) —
+ * ничего не пишем, обычный запрос при следующем монтировании возьмёт
+ * свежие данные сам. */
+function upsertTemplate(qc: ReturnType<typeof useQueryClient>, card: TemplateCard) {
+  qc.setQueryData<TemplateList>(TEMPLATES, (prev) => {
+    if (!prev) return prev;
+    const idx = prev.templates.findIndex((t) => t.name === card.name);
+    if (idx === -1) return { count: prev.count + 1, templates: [...prev.templates, card] };
+    const templates = prev.templates.slice();
+    templates[idx] = card;
+    return { ...prev, templates };
+  });
+}
+
 /** Создание (`name` в теле, ещё не существует) или правка под тем же именем
  * (`expectName` — прежнее имя из пути `PUT /templates/{name}`, Р4: переименование
  * через эту ручку сервер отвергает 422, форма и не предлагает его редактировать). */
@@ -34,7 +51,7 @@ export function useSaveTemplate() {
           ? api.PUT('/api/v1/templates/{name}', { params: { path: { name: v.expectName } }, body: v.data })
           : api.POST('/api/v1/templates', { body: v.data }),
       ),
-    onSuccess: () => invalidateTemplates(qc),
+    onSuccess: (card) => upsertTemplate(qc, card),
   });
 }
 
@@ -72,7 +89,7 @@ export function useSetRecurrence(name: string) {
       unwrapErrors<TemplateCard>(
         api.PUT('/api/v1/templates/{name}/recurrence', { params: { path: { name } }, body: rule }),
       ),
-    onSuccess: () => invalidateTemplates(qc),
+    onSuccess: (card) => upsertTemplate(qc, card),
   });
 }
 
@@ -83,6 +100,6 @@ export function useClearRecurrence(name: string) {
       unwrapErrors<TemplateCard>(
         api.DELETE('/api/v1/templates/{name}/recurrence', { params: { path: { name } } }),
       ),
-    onSuccess: () => invalidateTemplates(qc),
+    onSuccess: (card) => upsertTemplate(qc, card),
   });
 }
