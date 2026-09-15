@@ -9,6 +9,7 @@ import { useNavigate } from 'react-router';
 import type { FeedRow, MarkOp } from '@/api/client';
 import { errorText } from '@/api/client';
 import { useToaster } from '@/ui/toasterContext';
+import { useAnyOverlayOpen, useOverlayRegistration } from '@/app/overlayContext';
 import { ControlDialog } from '@/ui/control/ControlDialog';
 import type { DialogMode } from '@/ui/control/ControlDialog';
 import { CommandPalette } from './CommandPalette';
@@ -43,7 +44,16 @@ export function FeedPage() {
   const [dialog, setDialog] = useState<{ row: FeedRow; mode: DialogMode } | null>(null);
   const [palette, setPalette] = useState(false);
   const [help, setHelp] = useState(false);
-  const overlay = dialog !== null || palette || help;
+  const ownOverlay = dialog !== null || palette || help;
+  // Регистрация в общем реестре (`app/overlayContext`): хоткеи ленты должны
+  // молчать не только при своём диалоге, но и когда поверх открыт QuickAdd
+  // или HelpOverlay из `Layout` (находка ревью среза 2). `|| ownOverlay`
+  // напрямую — не только через реестр — нужен вне `Layout` (юнит-тесты
+  // монтируют страницу без `OverlayProvider`, где `useAnyOverlayOpen`
+  // молчаливо отдаёт `false`).
+  useOverlayRegistration(ownOverlay);
+  const anyOverlay = useAnyOverlayOpen();
+  const overlay = ownOverlay || anyOverlay;
 
   const listRef = useRef<HTMLOListElement>(null);
   useEffect(() => {

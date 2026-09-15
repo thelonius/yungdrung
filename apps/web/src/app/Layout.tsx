@@ -11,12 +11,25 @@ import { useToaster } from '@/ui/toasterContext';
 import { CommandPalette } from '@/features/feed/CommandPalette';
 import { HelpOverlay } from '@/features/feed/HelpOverlay';
 import { QuickAdd } from '@/features/tasks/quick/QuickAdd';
+import { OverlayProvider } from './OverlayProvider';
+import { useAnyOverlayOpen, useOverlayRegistration } from './overlayContext';
 import { PAGES } from './pages';
 import styles from './Layout.module.css';
 
 const FEED_ROUTES = new Set(['/', '/лента']);
 
 export function Layout() {
+  // Провайдер — здесь, а не в `App.tsx`: `Layout` и все страницы за `Outlet`
+  // должны делить один реестр, но остальное дерево (провайдеры запросов,
+  // роутер) реестру не нужно.
+  return (
+    <OverlayProvider>
+      <LayoutContent />
+    </OverlayProvider>
+  );
+}
+
+function LayoutContent() {
   const location = useLocation();
   const toaster = useToaster();
   const onFeed = FEED_ROUTES.has(location.pathname);
@@ -24,10 +37,17 @@ export function Layout() {
   const [quickOpen, setQuickOpen] = useState(false);
   const [help, setHelp] = useState(false);
   const [palette, setPalette] = useState(false);
-  const overlay = quickOpen || help || palette;
+  const ownOverlay = quickOpen || help || palette;
+  // Гейтинг собственных клавиш — по **общему** реестру (находка ревью): свой
+  // `overlay` регистрируется в нём же, поэтому `anyOverlay` уже включает его,
+  // плюс любой оверлей открытой сейчас страницы (диалог карточки, палитра
+  // шаблонов и т.п.) — `a` не должен открывать второй диалог поверх первого.
+  useOverlayRegistration(ownOverlay);
+  const anyOverlay = useAnyOverlayOpen();
 
-  useHotkeys('a', () => setQuickOpen(true), { enabled: !overlay, preventDefault: true }, []);
-  useHotkeys('shift+slash', () => setHelp(true), { enabled: !overlay && !onFeed, preventDefault: true }, [onFeed]);
+  useHotkeys('a', () => setQuickOpen(true), { enabled: !anyOverlay, preventDefault: true }, [anyOverlay]);
+  useHotkeys('shift+slash', () => setHelp(true),
+    { enabled: !anyOverlay && !onFeed, preventDefault: true }, [anyOverlay, onFeed]);
   useHotkeys('mod+k, slash', () => setPalette(true),
     { enabled: !onFeed, preventDefault: true, enableOnFormTags: false }, [onFeed]);
   useHotkeys('u', () => { toaster.runLatestAction(); }, { enabled: !onFeed }, [onFeed, toaster]);

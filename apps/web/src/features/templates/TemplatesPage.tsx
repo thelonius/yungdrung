@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import type { TemplateCard as TemplateCardData } from '@/api/client';
+import { useAnyOverlayOpen, useOverlayRegistration } from '@/app/overlayContext';
 import { clampFocus, moveFocus } from '@/features/feed/model';
 import { useTemplatesQuery } from './useTemplates';
 import { TemplateCard } from './TemplateCard';
@@ -24,7 +25,13 @@ export function TemplatesPage() {
   const [instantiating, setInstantiating] = useState<TemplateCardData | null>(null);
   const [form, setForm] = useState<{ open: boolean; initial: TemplateCardData | null }>({ open: false, initial: null });
   const [recurring, setRecurring] = useState<TemplateCardData | null>(null);
-  const overlay = instantiating !== null || form.open || recurring !== null;
+  const ownOverlay = instantiating !== null || form.open || recurring !== null;
+  // Общий реестр оверлеев (`app/overlayContext`, находка ревью среза 2):
+  // `x`/`e`/`Enter` под фокусом должны молчать и при открытом QuickAdd из
+  // `Layout`, не только при своих трёх диалогах.
+  useOverlayRegistration(ownOverlay);
+  const anyOverlay = useAnyOverlayOpen();
+  const overlay = ownOverlay || anyOverlay;
 
   const listRef = useRef<HTMLOListElement>(null);
   useEffect(() => {

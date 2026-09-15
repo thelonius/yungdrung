@@ -13,6 +13,7 @@ import type { FieldError, FieldWarning, MarkOp, TaskCard, TaskEditIn } from '@/a
 import { errorText } from '@/api/client';
 import { ApiError, errorsFor, generalErrors } from '@/api/errors';
 import { useToaster } from '@/ui/toasterContext';
+import { useAnyOverlayOpen, useOverlayRegistration } from '@/app/overlayContext';
 import { DateField } from '@/ui/DateField';
 import { ControlDialog } from '@/ui/control/ControlDialog';
 import type { DialogMode } from '@/ui/control/ControlDialog';
@@ -96,7 +97,13 @@ export function TaskCardPage(): JSX.Element {
   const idx = clampFocus(focusIdx, leaves.length);
   const focusedLeaf = idx >= 0 ? leaves[idx] : null;
   const focusedPath = focusedLeaf ? focusedLeaf.indices.join(',') : null;
-  const overlay = dialog !== null;
+  const ownOverlay = dialog !== null;
+  // Общий реестр оверлеев (`app/overlayContext`, находка ревью среза 2):
+  // `d`/`n`/`t`/`f`/`Enter` на шаге карточки должны молчать и при открытом
+  // редакторе шага, и при QuickAdd/палитре из `Layout` поверх карточки.
+  useOverlayRegistration(ownOverlay);
+  const anyOverlay = useAnyOverlayOpen();
+  const overlay = ownOverlay || anyOverlay;
 
   // Пока список листьев непустой, фокус всегда есть — как в ленте (`j`/`d`
   // должны работать сразу после загрузки, без промежуточного `j`).
