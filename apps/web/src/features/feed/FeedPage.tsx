@@ -5,13 +5,13 @@
 // утренний разбор проходится без мыши, и любая запись отменяется тостом.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
+import { useNavigate } from 'react-router';
 import type { FeedRow, MarkOp } from '@/api/client';
 import { errorText } from '@/api/client';
 import { useToaster } from '@/ui/toasterContext';
+import { ControlDialog } from '@/ui/control/ControlDialog';
+import type { DialogMode } from '@/ui/control/ControlDialog';
 import { CommandPalette } from './CommandPalette';
-import { PAGES } from './pages';
-import { ControlDialog } from './ControlDialog';
-import type { DialogMode } from './ControlDialog';
 import { HelpOverlay } from './HelpOverlay';
 import { Row } from './Row';
 import { clampFocus, moveFocus, outcomeText } from './model';
@@ -27,6 +27,7 @@ export function FeedPage() {
   const mark = useMark();
   const undo = useUndo();
   const toaster = useToaster();
+  const navigate = useNavigate();
 
   const rows: FeedRow[] = useMemo(
     () => (mode === 'feed' ? feed.data?.feed ?? [] : backlog.data?.backlog ?? []),
@@ -71,9 +72,12 @@ export function FeedPage() {
     });
   }, [mark, undo, toaster]);
 
+  // `/задача?name=…`, не `/задача/:id` напрямую: лента знает только название
+  // (`FeedRow.task`), `ResolveTaskRoute` меняет ссылку на id первым переходом
+  // (map-client.md, риск 3; таблица маршрутов §5.1 SLICE2_SPEC.md).
   const openCard = useCallback((row: FeedRow) => {
-    window.location.href = `/задача?name=${encodeURIComponent(row.task)}`;
-  }, []);
+    navigate(`/задача?name=${encodeURIComponent(row.task)}`);
+  }, [navigate]);
 
   // --- клавиши списка; в открытом диалоге и палитре они молчат --------------
   const opts = { enabled: !overlay, preventDefault: true };
@@ -98,9 +102,6 @@ export function FeedPage() {
       <header className={styles.head}>
         <div className={styles.headRow}>
           <h1 className={styles.h1}>{mode === 'feed' ? 'Что сегодня' : 'Разбор завала'}</h1>
-          <nav className={styles.links}>
-            {PAGES.filter((p) => p.href !== '/старая').map((p) => <a key={p.href} href={p.href}>{p.label}</a>)}
-          </nav>
         </div>
         {counts && (
           <div className={styles.counters}>

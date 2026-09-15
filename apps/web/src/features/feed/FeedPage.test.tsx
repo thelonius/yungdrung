@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HotkeysProvider } from 'react-hotkeys-hook';
+import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FeedResult, MarkResult } from '@/api/client';
 import { ToasterProvider } from '@/ui/Toaster';
@@ -56,14 +57,19 @@ beforeEach(() => {
 
 function mount() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  // MemoryRouter: срез 2 завёл `useNavigate` (открыть карточку, палитра
+  // команд) — в проде страница всегда внутри роутера (`app/router.tsx`),
+  // здесь тот же контекст нужен только для этого.
   return render(
-    <QueryClientProvider client={qc}>
-      <HotkeysProvider>
-        <ToasterProvider>
-          <FeedPage />
-        </ToasterProvider>
-      </HotkeysProvider>
-    </QueryClientProvider>,
+    <MemoryRouter initialEntries={['/']}>
+      <QueryClientProvider client={qc}>
+        <HotkeysProvider>
+          <ToasterProvider>
+            <FeedPage />
+          </ToasterProvider>
+        </HotkeysProvider>
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
 }
 

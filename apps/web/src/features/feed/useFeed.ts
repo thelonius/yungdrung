@@ -35,14 +35,6 @@ export function useBacklogQuery(enabled: boolean) {
   });
 }
 
-export function useReasons() {
-  return useQuery({
-    queryKey: ['reasons'],
-    queryFn: async () => (await unwrap(api.GET('/api/v1/reasons'))).reasons,
-    staleTime: 10 * 60_000,
-  });
-}
-
 export type MarkVars = {
   task_id: number;
   step: number;

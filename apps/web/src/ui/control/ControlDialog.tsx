@@ -1,12 +1,14 @@
 // Окно контроля — раздел 6.4 ТЗ. Крестик и Esc значат «напомнить позже», а не
-// ответ: отмахнуться от шага случайно нельзя. Одно окно на ленту, завал и,
-// в срезе 2, на карточку: второй экземпляр из task.js исчезает.
+// ответ: отмахнуться от шага случайно нельзя. Общий компонент (перенесён из
+// features/feed в срезе 2, §5.1): лента, завал и карточка задачи используют
+// один и тот же диалог, второй самостоятельный экземпляр из task.js не
+// заводится (map-client.md §2.2.14).
 import * as Dialog from '@radix-ui/react-dialog';
 import { useEffect, useRef, useState } from 'react';
 import type { FeedRow, MarkOp, WhenResult } from '@/api/client';
-import { useReasons } from './useFeed';
-import { DateField } from './DateField';
-import { shortDate, shortTime } from './model';
+import { useReasons } from '@/api/hooks';
+import { shortDate, shortTime } from '@/ui/format';
+import { DateField } from '@/ui/DateField';
 import styles from './ControlDialog.module.css';
 
 export type DialogMode = 'menu' | 'defer' | 'fail' | 'notdone';
@@ -17,9 +19,13 @@ type Props = {
   progress?: string;
   onClose: () => void;
   onMark: (op: MarkOp, extra?: { reason?: string | null; to?: string | null }) => void;
+  /** Префикс id полей — по умолчанию `'c'` (как было). Карточка задачи
+   * ставит своё значение (`idPrefix="card"`), чтобы её экземпляр диалога не
+   * делил id `c-reason`/`c-date` с лентой на одной странице (Р7 SLICE2_SPEC.md). */
+  idPrefix?: string;
 };
 
-export function ControlDialog({ row, mode: initialMode, progress, onClose, onMark }: Props) {
+export function ControlDialog({ row, mode: initialMode, progress, onClose, onMark, idPrefix = 'c' }: Props) {
   const [mode, setMode] = useState<DialogMode>(initialMode);
   const [reason, setReason] = useState('');
   const [to, setTo] = useState('');
@@ -28,6 +34,8 @@ export function ControlDialog({ row, mode: initialMode, progress, onClose, onMar
   const reasons = useReasons();
   const reasonRef = useRef<HTMLSelectElement>(null);
   const dateRef = useRef<HTMLInputElement>(null);
+  const reasonId = `${idPrefix}-reason`;
+  const dateId = `${idPrefix}-date`;
 
   useEffect(() => {
     setMode(initialMode);
@@ -98,11 +106,11 @@ export function ControlDialog({ row, mode: initialMode, progress, onClose, onMar
               {mode !== 'menu' && (
                 <div className={styles.form}>
                   <div className={styles.field}>
-                    <label htmlFor="c-reason">
+                    <label htmlFor={reasonId}>
                       Причина {needReason ? '' : <span className="muted">(необязательно)</span>}
                     </label>
                     <select
-                      id="c-reason"
+                      id={reasonId}
                       ref={reasonRef}
                       value={reason}
                       className={err && needReason && !reason ? 'invalid' : ''}
@@ -114,7 +122,7 @@ export function ControlDialog({ row, mode: initialMode, progress, onClose, onMar
                     </select>
                   </div>
                   {mode !== 'fail' && (
-                    <DateField value={to} onChange={setTo} onParsed={setParsed} onSubmit={submit}
+                    <DateField id={dateId} value={to} onChange={setTo} onParsed={setParsed} onSubmit={submit}
                       inputRef={dateRef} />
                   )}
                   {err && <p className="err">{err}</p>}

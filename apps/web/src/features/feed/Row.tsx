@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import type { FeedRow } from '@/api/client';
-import { shortDate, shortTime } from './model';
+import { shortDate, shortTime } from '@/ui/format';
 import styles from './FeedPage.module.css';
 
 type Props = {

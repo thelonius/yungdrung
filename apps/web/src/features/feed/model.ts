@@ -71,22 +71,6 @@ export function outcomeText(op: MarkOp, r: MarkResult): string {
   }
 }
 
-export function shortTime(iso: string | null | undefined): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-}
-
-export function shortDate(iso: string | null | undefined): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-}
-
-/** Пресеты переноса — те же четыре, что были на старой ленте. */
-export const PRESETS: { label: string; when: string }[] = [
-  { label: 'через час', when: 'через час' },
-  { label: 'завтра утром', when: '+1 09:00' },
-  { label: 'через 3 дня', when: '+3' },
-  { label: 'через неделю', when: '+7' },
-];
+// shortTime/shortDate и PRESETS переехали в `ui/format.ts` и `ui/DateField.tsx`
+// в срезе 2 (§5.1): это общая подпись даты и пресеты общего поля, феду они
+// больше не принадлежат единолично (нужны и карточке, и форме).

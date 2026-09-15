@@ -2,10 +2,11 @@
 // действия над строкой под фокусом. Одна точка входа вместо шести ссылок в шапке.
 import { Command } from 'cmdk';
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router';
 import { api } from '@/api/client';
 import type { FeedRow, MarkOp } from '@/api/client';
-import { hitHref, PAGES } from './pages';
-import type { Hit } from './pages';
+import { hitHref, isInternalPath, PAGES } from '@/app/pages';
+import type { Hit, Page } from '@/app/pages';
 import styles from './CommandPalette.module.css';
 
 type Props = {
@@ -19,6 +20,7 @@ type Props = {
 export function CommandPalette({ open, onClose, focused, onMark, onOpenDialog }: Props) {
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<Hit[]>([]);
+  const navigate = useNavigate();
 
   useEffect(() => { if (!open) { setQ(''); setHits([]); } }, [open]);
 
@@ -31,9 +33,19 @@ export function CommandPalette({ open, onClose, focused, onMark, onOpenDialog }:
     return () => window.clearTimeout(t);
   }, [q]);
 
-  function go(href: string) {
+  // Внутренние маршруты переходят через роутер (без перезагрузки), внешние —
+  // как раньше, обычной ссылкой: страница ещё не переехала на React.
+  function go(path: string) {
     onClose();
-    window.location.href = href;
+    if (isInternalPath(path)) navigate(path);
+    else window.location.href = path;
+  }
+
+  function goPage(p: Page) {
+    onClose();
+    if ('to' in p) navigate(p.to);
+    else if (isInternalPath(p.href)) navigate(p.href);
+    else window.location.href = p.href;
   }
 
   return (
@@ -67,7 +79,9 @@ export function CommandPalette({ open, onClose, focused, onMark, onOpenDialog }:
         )}
         <Command.Group heading="Страницы" className={styles.group}>
           {PAGES.map((p) => (
-            <Command.Item key={p.href} value={p.label} onSelect={() => go(p.href)}>{p.label}</Command.Item>
+            <Command.Item key={'to' in p ? p.to : p.href} value={p.label} onSelect={() => goPage(p)}>
+              {p.label}
+            </Command.Item>
           ))}
         </Command.Group>
       </Command.List>
