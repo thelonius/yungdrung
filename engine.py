@@ -638,23 +638,27 @@ def copy_template_attachments(template_name, task_name, today):
 
 
 def cmd_from_template(args, today):
-    """Завести задачу из шаблона."""
-    склад = tpl.JsonStore(VAULT)
-    шаблон = склад.get(args.name)
-    if not шаблон:
-        return {"ok": False, "errors": [{"field": "name",
-                                         "error": f"нет шаблона «{args.name}»"}]}
-    старт = as_date(parse_date_input(args.start, today)) if args.start else today
-    данные = tpl.expand(шаблон, старт, title=args.title)
+    """Завести задачу из шаблона.
 
-    задача, errors = _create_task_from_data(данные, today)
-    if errors:
-        return {"ok": False, "errors": errors}
-    файлы = copy_template_attachments(шаблон["name"], задача["path"].stem, today)
-    _record_manual_cycle(шаблон, задача["path"].stem, today)
-    return {"ok": True, "task": задача["path"].stem, "template": шаблон["name"],
-            "steps": len(задача["meta"]["steps"]), "attachments": файлы,
-            "status": задача["meta"]["status"]}
+    Тонкий адаптер над `core.templates.instantiate` (§3.4 спецификации среза
+    2): цепочка «развернуть шаблон → записать задачу → перенести файлы →
+    отметить цикл» раньше была продублирована здесь и в `instantiate`
+    дословно — то же самое, что уже было исправлено для `cmd_recur` выше
+    (находка ревью среза 2, engine.py:640). Форма ответа прежняя: `status`
+    здесь по-прежнему русский, как раньше отдавал `task["meta"]["status"]`
+    после записи, а не английский `FromTemplateResult.task_status`.
+    """
+    try:
+        итог = core_templates.instantiate(
+            _ctx(), args.name, args.start, args.title, today,
+            _now(args, today), _work(args))
+    except NotFound as e:
+        return {"ok": False, "errors": [{"field": "name", "error": str(e)}]}
+    except ValidationError as e:
+        return {"ok": False, "errors": e.errors}
+    return {"ok": True, "task": итог.task, "template": итог.template,
+            "steps": итог.steps, "attachments": итог.attachments,
+            "status": STATUS_RU[итог.task_status]}
 
 
 # --- повторения --------------------------------------------------------
@@ -724,79 +728,19 @@ def cmd_recur(args, today):
     """Прогнать шаблоны с правилом повторения: создать очередной цикл или
     записать пропуск. Раздел 5.12 ТЗ.
 
-    Идемпотентно в границах контракта: незакрытый цикл при повторном вызове в
-    тот же день снова даёт пропуск, а не вторую задачу — `due_cycles` сам не
-    продвигает журнал, пока предыдущий цикл не закрыт.
+    Тонкий адаптер над `core.recur.run` (§3.4 спецификации среза 2): форма
+    ответа совпадает дословно (её и раньше отдавал только этот адаптер и
+    легаси `/api/recur`), поэтому здесь не остаётся собственной логики.
+    Раньше тело было отдельной копией того же расчёта, задублированной с
+    `core.recur.run` вместо вызова его — два места считали один и тот же
+    cron-путь по-разному могли бы разойтись после следующей правки одного
+    без другого (находка ревью среза 2, engine.py:723). `_create_task_from_data`
+    и `copy_template_attachments`, которых требовала старая копия, отсюда
+    больше не зовутся; они остаются шимами для `cmd_from_template` (регион B2).
     """
-    склад = tpl.JsonStore(VAULT)
-    state = load_recurrence_state()
-    work = worktime.settings()
-    задачи_кэш = [t["path"].stem for t in load_tasks()]
-
-    отчёт = []
-    for шаблон in склад.all():
-        правило = шаблон.get("recurrence")
-        if not правило:
-            continue
-        имя = шаблон["name"]
-        if getattr(args, "name", None) and имя != args.name:
-            continue
-        запись = state.get(имя) or {}
-        предыдущий = _recompute_previous(запись, today)
-
-        якорь = as_date(правило["anchor"])
-        сила = bool(getattr(args, "force", False)) and getattr(args, "name", None) == имя
-        try:
-            решения = rec.due_cycles(
-                {k: v for k, v in правило.items() if k != "anchor"}, якорь, today,
-                previous=предыдущий, work=work, force=сила,
-                limit=getattr(args, "limit", None) or 12)
-        except rec.RuleError as e:
-            отчёт.append({"template": имя, "errors": e.errors, "created": [], "skipped": []})
-            continue
-
-        # Статус закрытия старого цикла пересчитывается заново на каждом вызове
-        # из фактического состояния задачи (см. выше), а не хранится, — поэтому
-        # если новых циклов в этом прогоне не появилось, запись про «previous»
-        # трогать не нужно вовсе: она и так будет пересчитана в следующий раз.
-        созданы, пропущены, сбой = [], [], None
-        for решение in решения:
-            if решение["action"] == "skip":
-                пропущены.append({"date": решение["date"].isoformat(),
-                                  "message": решение["message"]})
-                continue
-            title = recurring_title(имя, решение["date"])
-            данные = tpl.expand(шаблон, решение["date"], title=title)
-            # Откуда задача взялась — в колонки, а не в разбор названия потом.
-            # `решение["key"]` это `recurrence.cycle_key`, тот же ключ, которым
-            # журнал повторений отличает уже записанный цикл от нового.
-            данные["template_name"] = имя
-            данные["cycle_key"] = решение["key"]
-            задача, errors = _create_task_from_data(данные, today, existing=задачи_кэш)
-            if errors:
-                # Название занято чем-то посторонним — не тем же циклом: имя
-                # несёт дату, и наше собственное совпадение уже поймала бы
-                # проверка выше по этому же циклу. Останавливаем это правило,
-                # остальные шаблоны идут дальше своим чередом.
-                сбой = errors
-                break
-            задачи_кэш.append(задача["path"].stem)
-            copy_template_attachments(имя, задача["path"].stem, today)
-            созданы.append({"date": решение["date"].isoformat(), "task": задача["path"].stem})
-            запись["previous"] = {"date": решение["date"].isoformat(), "closed": False,
-                                  "task": задача["path"].stem}
-
-        if созданы:
-            state[имя] = запись
-        if сбой:
-            отчёт.append({"template": имя, "errors": сбой,
-                          "created": созданы, "skipped": пропущены})
-        else:
-            отчёт.append({"template": имя, "created": созданы, "skipped": пропущены})
-
-    save_recurrence_state(state)
-    return {"today": today.isoformat(), "templates": отчёт,
-            "created": sum(len(t["created"]) for t in отчёт)}
+    return core_recur.run(_ctx(), today, name=getattr(args, "name", None),
+                          force=bool(getattr(args, "force", False)),
+                          limit=getattr(args, "limit", None) or 12)
 
 
 def cmd_template_from_task(args, today):
