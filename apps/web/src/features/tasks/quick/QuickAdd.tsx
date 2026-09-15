@@ -58,7 +58,6 @@ export function QuickAdd({ open, onClose }: Props): JSX.Element {
               className={error ? 'invalid' : ''}
               placeholder="позвонить Василию завтра в полдесятого"
               value={text}
-              disabled={pending}
               onChange={(e) => onChange(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') { e.preventDefault(); void submit(); }

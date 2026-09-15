@@ -15,9 +15,14 @@ type Props = {
   focused: FeedRow | null;
   onMark: (op: MarkOp) => void;
   onOpenDialog: (mode: 'defer' | 'fail') => void;
+  // Открыть быстрый ввод (`QuickAdd`) прямо из палитры — сама им не владеет
+  // (он в `Layout`, диалог общий на всё приложение), только просит открыть.
+  // Необязательный: у палитры внутри `FeedPage` своего пункта нет, там уже
+  // есть прямая клавиша `a` (SLICE2_SPEC.md §5.1).
+  onQuickAdd?: () => void;
 };
 
-export function CommandPalette({ open, onClose, focused, onMark, onOpenDialog }: Props) {
+export function CommandPalette({ open, onClose, focused, onMark, onOpenDialog, onQuickAdd }: Props) {
   const [q, setQ] = useState('');
   const [hits, setHits] = useState<Hit[]>([]);
   const navigate = useNavigate();
@@ -78,6 +83,11 @@ export function CommandPalette({ open, onClose, focused, onMark, onOpenDialog }:
           </Command.Group>
         )}
         <Command.Group heading="Страницы" className={styles.group}>
+          {onQuickAdd && (
+            <Command.Item value="Быстрый ввод" onSelect={() => { onClose(); onQuickAdd(); }}>
+              Быстрый ввод — задача одной строкой <kbd>a</kbd>
+            </Command.Item>
+          )}
           {PAGES.map((p) => (
             <Command.Item key={'to' in p ? p.to : p.href} value={p.label} onSelect={() => goPage(p)}>
               {p.label}

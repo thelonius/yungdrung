@@ -1,6 +1,6 @@
 // Шапка карточки — п.1–2 §5.5 SLICE2_SPEC.md: редактируемое название, плашка
 // статуса, срок, прогресс; три деструктивные кнопки через `ConfirmButton`
-// (Р15 — без `confirm()`), «Сохранить как шаблон» — обычная кнопка.
+// (Р15 — без блокирующего window.confirm), «Сохранить как шаблон» — обычная кнопка.
 import { useState } from 'react';
 import type { JSX, RefObject } from 'react';
 import type { TaskCard } from '@/api/client';

@@ -42,7 +42,7 @@ export function ToasterProvider({ children }: { children: ReactNode }) {
             onOpenChange={(open) => { if (!open) dismiss(t.id); }}
             duration={t.tone === 'error' ? 8000 : UNDO_MS}
           >
-            <Toast.Title className={styles.title}>{t.title}</Toast.Title>
+            <Toast.Title className={styles.title} data-testid="toast">{t.title}</Toast.Title>
             {t.action && (
               <Toast.Action asChild altText={t.action.label}>
                 <button

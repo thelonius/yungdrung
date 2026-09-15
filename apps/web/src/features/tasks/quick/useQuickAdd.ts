@@ -58,7 +58,14 @@ export function useQuickAdd(active: boolean) {
   }
 
   async function create(): Promise<QuickDone | null> {
-    if (!text.trim()) return null;
+    // `pending` тоже сторожит повторную отправку — раньше это делал
+    // `disabled` на поле, но выключение фокусируемого элемента снимает с
+    // него фокус (браузер уводит его в `document.body`), и второй быстрый
+    // `Enter` вместо диалога попадал в глобальные клавиши страницы под
+    // модалкой (нашлось на e2e-сценарии §5.8: второй `Enter` открывал не ту
+    // карточку). Поле теперь остаётся включённым, отправку от повтора
+    // бережёт этот флаг.
+    if (pending || !text.trim()) return null;
     setPending(true);
     setError(null);
     try {

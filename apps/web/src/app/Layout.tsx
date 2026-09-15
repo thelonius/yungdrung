@@ -53,6 +53,7 @@ export function Layout() {
         focused={null}
         onMark={() => {}}
         onOpenDialog={() => {}}
+        onQuickAdd={() => setQuickOpen(true)}
       />
     </>
   );
