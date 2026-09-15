@@ -48,7 +48,6 @@ except ImportError:
 # Импорты ниже — после настройки кодировки потоков и после проверки pyyaml:
 # понятная строка «нужен pyyaml» полезнее ImportError из середины модуля.
 # Отсюда E402 по всему блоку, тот же приём, что в server.py.
-import attachments  # noqa: E402
 import backup  # noqa: E402
 import kb  # noqa: E402
 import recurrence as rec  # noqa: E402
@@ -70,6 +69,7 @@ from domain.steps import (  # noqa: E402,F401
     is_closed, is_group, leaves_of, stall_count, step_view, steps_of, task_status,
     task_summary,
 )
+import core.attachments as core_attachments  # noqa: E402
 import core.clock  # noqa: E402
 import core.feed as core_feed  # noqa: E402
 import core.mark as core_mark  # noqa: E402
@@ -984,24 +984,9 @@ def _create_task_from_data(данные, today, existing=None):
 
 def copy_template_attachments(template_name, task_name, today):
     """Перенести файлы шаблона на заведённую из него задачу. Возвращает,
-    сколько перенесено.
-
-    Копируются строки в `attachments`, а не байты: файл на диске адресуется
-    своим sha256 (`attachments.save`), поэтому вторая ссылка на ту же картинку
-    ничего не пишет на диск и ничего не весит. Без этого шага фото на шаблоне
-    остаётся украшением карточки: человек делает задачу, а схема, ради которой
-    файл прикрепляли, лежит там, куда он в этот момент не смотрит.
-
-    Подпись и имя файла переносятся как есть, дата ставится сегодняшняя — это
-    дата появления файла у задачи, а не у шаблона.
-    """
-    склад = get_store()
-    перенесено = 0
-    for r in склад.list_attachments("template", template_name):
-        склад.add_attachment("task", task_name, r["sha256"], r["filename"],
-                             r["mime"], r["bytes"], r["caption"], today)
-        перенесено += 1
-    return перенесено
+    сколько перенесено. Шим над `core.attachments.copy_template_to_task`:
+    зовётся из `cmd_from_template` и `cmd_recur`, пока те не переехали."""
+    return core_attachments.copy_template_to_task(_ctx(), template_name, task_name, today)
 
 
 def cmd_from_template(args, today):
@@ -2457,53 +2442,49 @@ def cmd_export_json(args, today):
 # --- вложения ----------------------------------------------------------
 
 def _attachment_owner(args):
-    """(source_type, source_id) из `task`/`--step` или `--template`: та же
-    адресация, что и везде в контракте — по названию, не по числовому id из
-    базы. Задача обязана существовать; шаг, если указан, — тоже, иначе привязка
-    ссылалась бы на то, чего нет.
+    """Владелец для `core.attachments` из `task`/`--step` или `--template`.
+    Адаптер «кусок названия → `TaskOwner`»: задача в CLI ищется подстрокой
+    (`find_task_id`), в ядре она уже адресуется `task_id`. Существование
+    задачи, шага и шаблона проверяет ядро (`owner_key`), здесь только форма.
 
-    Шаблон адресуется именем из хранилища, а не тем, что прислали: имена
-    сравниваются без регистра (`tpl.same_name`), и «квартальный отчёт» не
-    должен завести вложениям вторую полку рядом с «Квартальный отчёт».
+    Нечисловой `--step` ядру не передать: `TaskOwner.step_id` — int. Ответ
+    прежний, «нет шага X в «Название»», для чего название читается отдельно.
     """
     имя_шаблона = getattr(args, "template", None)
     if имя_шаблона not in (None, ""):
-        шаблон = tpl.JsonStore(VAULT).get(имя_шаблона)
-        if not шаблон:
-            sys.exit(f"нет шаблона «{имя_шаблона}»")
-        return "template", шаблон["name"]
+        return core_attachments.TemplateOwner(имя_шаблона)
     if getattr(args, "task", None) in (None, ""):
         sys.exit("нужно название задачи или --template")
-    task = find_task(args.task)
+    task_id = find_task_id(args.task)
     шаг = getattr(args, "step", None)
-    if шаг not in (None, ""):
-        try:
-            шаг_id = int(шаг)
-        except (TypeError, ValueError):
-            шаг_id = None
-        if шаг_id not in {s["id"] for s in steps_of(task)}:
-            sys.exit(f"нет шага {шаг} в «{task['path'].stem}»")
-        return "step", f'{task["path"].stem}:{шаг_id}'
-    return "task", task["path"].stem
+    if шаг in (None, ""):
+        return core_attachments.TaskOwner(task_id)
+    try:
+        step_id = int(шаг)
+    except (TypeError, ValueError):
+        task = get_store().task_by_id(task_id)
+        sys.exit(f"нет шага {шаг} в «{task['path'].stem}»")
+    return core_attachments.TaskOwner(task_id, step_id)
 
 
 def cmd_attach(args, today):
-    """Прикрепить файл к задаче или к шагу (`--step`). Один путь для CLI и
-    формы: данные приходят либо уже готовыми байтами (форма — `args.data`),
-    либо путём к файлу на диске (CLI — `args.file`) — тот же приём, что у
-    `cmd_create` с JSON-строкой или `-` для чтения из stdin.
+    """Прикрепить файл к задаче, шагу (`--step`) или шаблону (`--template`).
+    Один путь для CLI и формы: данные приходят либо уже готовыми байтами
+    (`args.data`), либо путём к файлу на диске (CLI — `args.file`) — тот же
+    приём, что у `cmd_create` с JSON-строкой или `-` для чтения из stdin.
+
+    Форма ответа прежняя: `NotFound` ядра (задача, шаг, шаблон) отдаётся с
+    полем `template` или `task` — так пиннит `test_attach_к_несуществующему_шагу`.
     """
+    поле = "template" if getattr(args, "template", None) else "task"
     try:
-        source_type, source_id = _attachment_owner(args)
+        owner = _attachment_owner(args)
     except SystemExit as e:
-        поле = "template" if getattr(args, "template", None) else "task"
         return {"ok": False, "errors": [{"field": поле, "error": str(e)}]}
 
     filename = (getattr(args, "filename", None) or "").strip()
     if not filename and getattr(args, "file", None):
         filename = Path(args.file).name
-    if not filename:
-        return {"ok": False, "errors": [{"field": "filename", "error": "Нужно имя файла"}]}
 
     if getattr(args, "data", None) is not None:
         data = args.data
@@ -2514,35 +2495,47 @@ def cmd_attach(args, today):
             return {"ok": False, "errors": [{"field": "file", "error": str(e)}]}
 
     try:
-        sha256, size = attachments.save(VAULT, data, filename)
-    except attachments.AttachmentError as e:
-        return {"ok": False, "errors": [e.as_json()]}
-
-    mime = attachments.guess_mime(filename)
-    caption = (getattr(args, "caption", None) or "").strip() or None
-    attachment_id = get_store().add_attachment(
-        source_type, source_id, sha256, filename, mime, size, caption, today)
-    return {"ok": True, "id": attachment_id, "sha256": sha256, "filename": filename,
-            "mime": mime, "bytes": size}
+        info = core_attachments.add(_ctx(), owner, data, filename,
+                                    getattr(args, "caption", None), today)
+    except ValidationError as e:
+        return {"ok": False, "errors": e.errors}
+    except CoreError as e:
+        return {"ok": False, "errors": [{"field": поле, "error": str(e)}]}
+    # `sha256` в ответе был всегда; модель ядра его не несёт (клиенту он не
+    # нужен), поэтому для прежней формы он дочитывается из строки.
+    row = get_store().get_attachment(info.id)
+    return {"ok": True, "id": info.id, "sha256": row["sha256"], "filename": info.filename,
+            "mime": info.mime, "bytes": info.bytes}
 
 
 def cmd_attachments(args, today):
-    """Список вложений задачи целиком или одного шага (`--step`)."""
-    source_type, source_id = _attachment_owner(args)
-    rows = get_store().list_attachments(source_type, source_id)
+    """Список вложений задачи, одного шага (`--step`) или шаблона.
+
+    Для задачи без `--step` — только её собственные файлы, как и раньше:
+    ядро (`list_for`) отдаёт задачу вместе с шагами одним списком (Р6), а
+    CLI-форма это разделение держит (`test_attach_к_шагу`).
+    """
+    owner = _attachment_owner(args)
+    try:
+        rows = core_attachments.list_for(_ctx(), owner).attachments
+    except CoreError as e:
+        sys.exit(str(e))
+    if isinstance(owner, core_attachments.TaskOwner) and owner.step_id is None:
+        rows = [a for a in rows if a.step_id is None]
     return {"attachments": [
-        {"id": r["id"], "filename": r["filename"], "mime": r["mime"],
-         "bytes": r["bytes"], "caption": r["caption"], "added": r["added"]}
-        for r in rows]}
+        {"id": a.id, "filename": a.filename, "mime": a.mime,
+         "bytes": a.bytes, "caption": a.caption, "added": str(a.added)}
+        for a in rows]}
 
 
 def cmd_attachment_delete(args, today):
     """Удалить вложение. Не задачу и не шаг — на связь между ними это никак
     не влияет, только на список вложений."""
-    if get_store().get_attachment(args.id) is None:
-        sys.exit(f"нет вложения {args.id}")
-    get_store().delete_attachment(args.id)
-    return {"ok": True, "id": args.id}
+    try:
+        r = core_attachments.remove(_ctx(), args.id)
+    except CoreError as e:
+        sys.exit(str(e))
+    return {"ok": True, "id": r.id}
 
 
 def rename_tag_everywhere(old_name, new_name, today=None):
