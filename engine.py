@@ -65,6 +65,14 @@ from domain.ru_dates import (  # noqa: E402,F401
     ДНИ_НЕДЕЛИ, ОТНОСИТЕЛЬНЫЕ, as_date, parse_date_input, parse_stored_control,
     parse_time_part,
 )
+# Планирование шагов (проверка, дефолты дат, сборка и правка) переехало в
+# `domain/steps_plan.py` (срез 2); здесь те же имена для тестов и `templates.py`.
+import domain.steps_plan as steps_plan  # noqa: E402
+from domain.steps_plan import (  # noqa: E402,F401
+    MODES, _parse_optional_date, _финиш_узла, apply_task_edit, build_task,
+    default_step_start, resolve_steps, soft_warnings, validate_new_task,
+    validate_task_edit, walk_resolved,
+)
 from domain.steps import (  # noqa: E402,F401
     DONE, FAILED, OPEN, SKIPPED, STATUS_RU, _closure, current_step, current_steps,
     is_closed, is_group, leaves_of, stall_count, step_view, steps_of, task_status,
@@ -244,8 +252,8 @@ def get_step(task, step_id):
 _step_snapshot = core_mark.step_snapshot
 
 
-STEPS_START = "<!-- шаги: пишет движок, править руками не нужно -->"
-STEPS_END = "<!-- /шаги -->"
+STEPS_START = steps_plan.STEPS_START
+STEPS_END = steps_plan.STEPS_END
 
 
 
@@ -311,222 +319,6 @@ def cmd_next(args, today):
             "broken": list(BROKEN)}
 
 
-def _parse_optional_date(raw, today, поле, errors):
-    """Разобрать необязательную дату, добавить ошибку в список при провале.
-
-    Общий кусок между валидацией контрольной даты и даты начала — раньше жил
-    только внутри `validate_new_task`, теперь нужен в двух местах и разойтись
-    им нельзя: разное сообщение об ошибке на одну и ту же дату сбивает с толку.
-    """
-    raw = (raw or "").strip()
-    if not raw:
-        return None
-    try:
-        return parse_date_input(raw, today)
-    except (ValueError, TypeError):
-        errors.append({"field": поле,
-                       "error": "Дату не понял. Можно: 18.08 · 15 марта · "
-                                "завтра · +3 · пн · полдесятого"})
-        return None
-
-
-def default_step_start(предыдущий_контроль, старт_задачи):
-    """Дата начала шага по умолчанию — раздел 6.3.2 ТЗ: контроль предыдущего
-    шага, а для первого шага дата начала задачи."""
-    return предыдущий_контроль or старт_задачи
-
-
-MODES = ("par", "seq")
-
-
-def resolve_steps(steps_data, старт_задачи, today, старые=None, prefix="steps",
-                  предыдущий=None, mode="seq"):
-    """Разобрать шаги и подставить дефолт даты начала — один проход, которым
-    пользуются и проверка, и запись, и создание, и правка.
-
-    Раньше дефолт вычислялся заново в `build_task`, отдельно от `validate_new_task`:
-    проверка смотрела только на то, что пришло в запросе, и дефолт мог обогнать
-    control_date уже после проверки. Здесь дефолт и проверка смотрят на одни
-    и те же значения.
-
-    Шаг с непустым списком `steps` — группа: у неё режим ("par" по умолчанию,
-    "seq" для подцепочки), дат нет, дети разбираются рекурсивно. Дефолт даты
-    начала листа — по последовательной цепочке: контроль предыдущего элемента,
-    у группы это максимум контролей её поддерева. Внутри параллельной группы
-    цепочки нет: каждый ребёнок стартует от точки входа группы.
-
-    `старые` — режим правки: для листа с известным `id` без явной даты начала
-    берётся сохранённое, а не дефолт по новому порядку. Без этого чистая
-    перестановка шагов в карточке упиралась бы в «контроль раньше начала».
-
-    Возвращает дерево словарей: title, start, control, note, id, mode,
-    children, errors, явный_старт, поле, предыдущий (для мягких предупреждений).
-    """
-    resolved = []
-    for i, step in enumerate(steps_data or []):
-        поле = f"{prefix}.{i}"
-        errors = []
-        if not (step.get("title") or "").strip():
-            errors.append({"field": f"{поле}.title", "error": "Название шага обязательно"})
-        дети_данные = step.get("steps") or []
-        node = {"title": step.get("title"), "note": step.get("note"),
-                "id": step.get("id"), "errors": errors, "children": [],
-                "mode": None, "start": None, "control": None,
-                "явный_старт": False, "поле": поле, "предыдущий": предыдущий}
-        if дети_данные or step.get("mode"):
-            режим = step.get("mode") or "par"
-            if режим not in MODES:
-                errors.append({"field": f"{поле}.mode",
-                               "error": "Режим группы — par или seq"})
-                режим = "par"
-            node["mode"] = режим
-            if not дети_данные:
-                errors.append({"field": f"{поле}.steps",
-                               "error": "В группе нужен хотя бы один подшаг"})
-            for k in ("control_date", "start_date"):
-                if step.get(k):
-                    errors.append({"field": f"{поле}.{k}",
-                                   "error": "Даты ставятся подшагам, не группе"})
-            node["children"] = resolve_steps(
-                дети_данные, старт_задачи, today, старые,
-                prefix=f"{поле}.steps", предыдущий=предыдущий, mode=режим)
-            финиш = _финиш_узла(node)
-        else:
-            control = _parse_optional_date(step.get("control_date"), today,
-                                           f"{поле}.control_date", errors)
-            явный_старт = _parse_optional_date(step.get("start_date"), today,
-                                               f"{поле}.start_date", errors)
-            сохранённый = None
-            if старые is not None and step.get("id") in старые:
-                сохранённый = as_date(старые[step["id"]].get("start_date"))
-            start = явный_старт or сохранённый or default_step_start(предыдущий,
-                                                                     старт_задачи)
-            # Жёсткая проверка из раздела 6.3.3 ТЗ: контроль раньше, чем шаг можно
-            # начать, бессмысленен как дата — блокирует сохранение. Сравниваем с
-            # итоговым start (явным или дефолтным), а не только с введённым.
-            if start and control and as_date(control) < as_date(start):
-                errors.append({"field": f"{поле}.control_date",
-                               "error": "Контроль раньше даты начала шага"})
-            node.update(start=start, control=control,
-                        явный_старт=bool(явный_старт))
-            финиш = control
-        resolved.append(node)
-        if mode != "par" and финиш:
-            предыдущий = финиш
-    return resolved
-
-
-def _финиш_узла(node):
-    """Когда элемент цепочки «кончается» для дефолта следующего: у листа это
-    его контроль, у группы — самый поздний контроль поддерева. None, если дат
-    в поддереве нет вовсе."""
-    даты = [node["control"]] if node["control"] else []
-    даты += [f for f in (_финиш_узла(c) for c in node["children"]) if f]
-    return max(даты, key=as_date) if даты else None
-
-
-def walk_resolved(nodes):
-    """Дерево resolve_steps плоским потоком, глубина-первым порядком."""
-    for n in nodes:
-        yield n
-        yield from walk_resolved(n["children"])
-
-
-def validate_new_task(data, existing_names, today):
-    """Проверка задачи до записи. Возвращает список ошибок по полям — тех,
-    что блокируют сохранение. Мягкие предупреждения — отдельно, в `soft_warnings`.
-
-    Отдельно от формы намеренно: правила должны быть в одном месте, иначе форма
-    и CLI разойдутся, и в стор попадёт то, что движок потом не прочитает.
-    Ошибки возвращаются списком, а не первым попавшимся исключением, — форме надо
-    подсветить все проблемные поля разом, а не гонять человека по кругу.
-    """
-    errors = []
-
-    ошибка_имени = title_error(data.get("title") or "", existing_names)
-    if ошибка_имени:
-        errors.append({"field": "title", "error": ошибка_имени})
-
-    старт_задачи = _parse_optional_date(data.get("start_date"), today,
-                                        "start_date", errors) or today
-
-    steps = data.get("steps") or []
-    if not steps:
-        errors.append({"field": "steps", "error": "Нужен хотя бы один шаг"})
-    for r in walk_resolved(resolve_steps(steps, старт_задачи, today)):
-        errors += r["errors"]
-    return errors
-
-
-def soft_warnings(data, today):
-    """Мягкие предупреждения из раздела 6.3.3 ТЗ: сохранить можно, но человек
-    должен увидеть, что даты выглядят подозрительно.
-
-    Не блокируют запись, поэтому отдельная функция, а не часть `validate_new_task`:
-    смешивать в одном списке то, что останавливает сохранение, с тем, что просто
-    предупреждает, заставило бы форму гадать, какая ошибка какая.
-
-    Сравнение идёт по явно введённой дате начала, не по дефолтной: дефолт равен
-    как раз тому, с чем его сравнивают (концу задачи или предыдущему шагу), и
-    строгое «меньше» на них никогда не сработает — предупреждать не о чем.
-    """
-    warnings = []
-    старт_задачи = _parse_optional_date(data.get("start_date"), today, None, []) or today
-    for r in walk_resolved(resolve_steps(data.get("steps") or [], старт_задачи, today)):
-        if not r["явный_старт"]:
-            continue
-        if as_date(r["start"]) < as_date(старт_задачи):
-            warnings.append({"field": f'{r["поле"]}.start_date',
-                             "warning": "Шаг начинается раньше даты начала задачи"})
-        if r["предыдущий"] and as_date(r["start"]) < as_date(r["предыдущий"]):
-            warnings.append({"field": f'{r["поле"]}.start_date',
-                             "warning": "Шаг начинается раньше, чем закончится "
-                                       "предыдущий"})
-    return warnings
-
-
-def build_task(data, today):
-    """Данные формы → frontmatter задачи. Без записи на диск.
-
-    Идентификаторы шагов раздаёт движок, а не форма: они должны быть плотными и
-    по порядку, иначе `done <задача> 3` будет попадать не туда.
-    """
-    старт_задачи = _parse_optional_date(data.get("start_date"), today, None, []) or today
-    steps = []
-
-    def добавить(nodes, parent):
-        for r in nodes:
-            sid = len(steps) + 1
-            steps.append({
-                "id": sid,
-                "title": r["title"].strip(),
-                # У группы статус смысла не несёт (закрытие вычисляется из
-                # детей), но форма записи шага одна на всех — колонка NOT NULL.
-                "status": OPEN,
-                "start_date": r["start"],
-                "control_date": r["control"],
-                "completed_date": None,
-                "note": (r["note"] or "").strip() or None,
-                "parent": parent,
-                "mode": r["mode"],
-                "log": [],
-            })
-            добавить(r["children"], sid)
-
-    добавить(resolve_steps(data.get("steps") or [], старт_задачи, today), None)
-    tags = [t.strip() for t in (data.get("tags") or []) if t and t.strip()]
-    meta = {
-        "schema": SCHEMA,
-        "type": "task",
-        "title": data["title"].strip(),
-        "created": today,
-        "start_date": старт_задачи,
-        "tags": tags,
-        "steps": steps,
-    }
-    return meta
-
-
 def cmd_create(args, today):
     """Завести задачу. Единственный путь создания — и из формы, и из CLI.
 
@@ -556,98 +348,6 @@ def cmd_create(args, today):
             {"field": "title", "error": "Задача с таким названием уже есть"}]}
     return {"ok": True, "task": task["path"].stem,
             "steps": len(meta["steps"]), "status": task["meta"]["status"]}
-
-
-# --- правка существующей задачи --------------------------------------------
-#
-# Отдельно от создания. При правке шаги приходят с уже известными `id`, и эти
-# id обязаны пережить редактирование: на них ссылаются `done`/`notdone`/
-# `defer`/`fail`/`skip`, и переезд с 1..N при каждом сохранении раскидал бы
-# отметки не по тем шагам.
-#
-# Статус, дата закрытия и журнал шага правкой не трогаются никогда — это поле
-# зоны четырёх команд перехода, а не карточки. Карточка меняет только то, что
-# заказчик видит как метаданные: заголовок, даты, заметку, порядок, состав.
-
-def validate_task_edit(task, data, existing_names, today):
-    """Проверка правки — со своими правилами дат (см. `resolve_steps_for_edit`),
-    а не `validate_new_task`: та не знает про сохранённые даты существующих
-    шагов и на чистой перестановке без единой правки дат ошибалась бы сама.
-    """
-    errors = []
-    # Дубль считается среди чужих названий: своё, вернувшееся из карточки
-    # без изменений, дублем не является.
-    свои = {n for n in existing_names if n.lower() != task["path"].stem.lower()}
-    ошибка_имени = title_error(data.get("title") or "", свои)
-    if ошибка_имени:
-        errors.append({"field": "title", "error": ошибка_имени})
-
-    старт_задачи = _parse_optional_date(data.get("start_date"), today, "start_date",
-                                        errors) or as_date(task["meta"].get("start_date")) \
-        or today
-    старые = {s["id"]: s for s in steps_of(task)}
-
-    steps = data.get("steps") or []
-    if not steps:
-        errors.append({"field": "steps", "error": "Нужен хотя бы один шаг"})
-    for r in walk_resolved(resolve_steps(steps, старт_задачи, today, старые=старые)):
-        errors += r["errors"]
-    return errors
-
-
-def apply_task_edit(task, data, today):
-    """Переписать метаданные задачи по данным карточки. Возвращает список
-    id шагов, которые пропали из данных без явного «снять» — молчаливая потеря
-    шага хуже, чем отказ сохранить.
-    """
-    meta = task["meta"]
-    старые = {s["id"]: s for s in steps_of(task)}
-    старт_задачи = _parse_optional_date(data.get("start_date"), today, None, []) or \
-        as_date(meta.get("start_date")) or today
-
-    следующий_id = max([s["id"] for s in старые.values()], default=0) + 1
-    новые, увиденные = [], set()
-
-    def добавить(nodes, parent):
-        nonlocal следующий_id
-        for r in nodes:
-            если_старый = r["id"] is not None and r["id"] in старые
-            if если_старый:
-                шаг = dict(старые[r["id"]])  # статус/completed_date/log копируются как есть
-                увиденные.add(r["id"])
-            else:
-                # Тот же порядок полей, что у build_task, — иначе новый шаг в файле
-                # выглядит написанным другой рукой, хотя человеку разницы нет.
-                шаг = {"id": следующий_id, "title": None, "status": OPEN,
-                       "start_date": None, "control_date": None,
-                       "completed_date": None, "note": None, "parent": None,
-                       "mode": None, "log": []}
-                следующий_id += 1
-            шаг["title"] = r["title"].strip()
-            шаг["start_date"] = r["start"]
-            шаг["control_date"] = r["control"]
-            шаг["note"] = (r["note"] or "").strip() or None
-            # Родитель и режим переписываются и у старых шагов: карточка могла
-            # перетащить шаг в группу или обратно, это правка структуры, а не
-            # статуса. Статус и журнал при этом не трогаются.
-            шаг["parent"] = parent
-            шаг["mode"] = r["mode"]
-            новые.append(шаг)
-            добавить(r["children"], шаг["id"])
-
-    добавить(resolve_steps(data.get("steps") or [], старт_задачи, today, старые=старые),
-             None)
-
-    пропали = [sid for sid in старые if sid not in увиденные]
-
-    meta["title"] = data.get("title", meta["title"]).strip()
-    meta["start_date"] = старт_задачи
-    if "tags" in data:
-        meta["tags"] = [t.strip() for t in (data.get("tags") or []) if t and t.strip()]
-    meta["steps"] = новые
-    if "body" in data:
-        task["body"] = (data.get("body") or "").strip() + "\n"
-    return пропали
 
 
 def cmd_update(args, today):
@@ -1886,35 +1586,9 @@ def _find_task_by_stem(name):
     return склад.task_by_id(task_id) if task_id is not None else None
 
 
-def _strip_steps_block(body):
-    """Тело без блока шагов плюс способ вернуть блок на прежнее место.
-
-    Смещения гипотез посчитаны против текста БЕЗ этого блока (см. `cmd_kb_scan`
-    и докстринг вызывающего кода), поэтому сплайс ссылок должен идти по той же
-    системе координат. Блока может не быть вовсе — задача только что создана
-    и ещё не проходила через `save()`; тогда возвращается тело как есть.
-
-    Первая же вставка блока (`put_steps_into_body`, когда маркеров ещё не
-    было) склеивает его с текстом заказчика через «\\n\\n» — до одного
-    перевода строки, если текста не было вовсе. Эта склейка не текст
-    заказчика, а механика рендера, и в форме создания на момент сканирования
-    её ещё нет. Не срезать её здесь — значит увести смещения на два символа
-    для любой задачи, которую подтверждают сразу после первого сохранения:
-    ровно тот путь, которым и приходит подтверждение из формы (раздел 4).
-    Дальше эта склейка не меняется (`put_steps_into_body` при найденных
-    маркерах переносит хвост как есть), поэтому срез безопасен и на
-    повторных сохранениях — режется всегда один и тот же кусок.
-    """
-    start = body.find(STEPS_START)
-    end = body.find(STEPS_END)
-    if start == -1 or end == -1 or end <= start:
-        return body, lambda stripped: stripped
-    block_end = end + len(STEPS_END)
-    block = body[start:block_end]
-    tail = body[block_end:]
-    склейка = tail[:2] if tail[:2] == "\n\n" else (tail[:1] if tail[:1] == "\n" else "")
-    return (body[:start] + tail[len(склейка):],
-            lambda stripped: stripped[:start] + block + склейка + stripped[start:])
+# Срез блока шагов переехал в `domain.steps_plan.strip_steps_block`; имя
+# сохранено для тестов и `_mark_links_in_body`.
+_strip_steps_block = steps_plan.strip_steps_block
 
 
 def _mark_links_in_body(task, mentions):
