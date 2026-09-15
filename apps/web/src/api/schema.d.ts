@@ -140,10 +140,496 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create */
+        post: operations["create_api_v1_tasks_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/quick": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Quick */
+        post: operations["quick_api_v1_tasks_quick_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Plan */
+        post: operations["plan_api_v1_tasks_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Resolve */
+        get: operations["resolve_api_v1_tasks_resolve_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Show */
+        get: operations["show_api_v1_tasks__task_id__get"];
+        /** Update */
+        put: operations["update_api_v1_tasks__task_id__put"];
+        post?: never;
+        /** Delete */
+        delete: operations["delete_api_v1_tasks__task_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel */
+        post: operations["cancel_api_v1_tasks__task_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_id}/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Close */
+        post: operations["close_api_v1_tasks__task_id__close_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_id}/steps/{step_id}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reopen */
+        post: operations["reopen_api_v1_tasks__task_id__steps__step_id__reopen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/kb/scan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Scan */
+        post: operations["scan_api_v1_kb_scan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/kb/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject */
+        post: operations["reject_api_v1_kb_reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_id}/kb-confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm */
+        post: operations["confirm_api_v1_tasks__task_id__kb_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Templates */
+        get: operations["list_templates_api_v1_templates_get"];
+        put?: never;
+        /** Create Template */
+        post: operations["create_template_api_v1_templates_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Template */
+        get: operations["get_template_api_v1_templates__name__get"];
+        /**
+         * Replace Template
+         * @description Переписать шаблон целиком. Переименование через `PUT` отвергается
+         *     (Р4): `name` в теле обязан совпасть с `name` в пути. `recurrence` из тела
+         *     заменяет сохранённое — клиент шлёт то, что получил в `GET`, снятое
+         *     правило доезжает как `null`.
+         */
+        put: operations["replace_template_api_v1_templates__name__put"];
+        post?: never;
+        /** Delete Template */
+        delete: operations["delete_template_api_v1_templates__name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{name}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview Saved
+         * @description Предпросмотр уже сохранённого шаблона на дату `start` (по умолчанию
+         *     сегодня). Шаблона нет — 404; плохая дата — 200 `ok: false` (Р9: живая
+         *     проверка опрашивается на каждое нажатие, а не рвёт форму ошибкой запроса).
+         */
+        get: operations["preview_saved_api_v1_templates__name__preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Draft
+         * @description Предпросмотр ещё не сохранённого шаблона — форма шлёт черновик целиком,
+         *     имя не проверяется (человек набирает шаги раньше, чем придумывает имя).
+         */
+        post: operations["preview_draft_api_v1_templates_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{name}/instantiate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Instantiate Template */
+        post: operations["instantiate_template_api_v1_templates__name__instantiate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/from-task": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Template From Task */
+        post: operations["template_from_task_api_v1_templates_from_task_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{name}/recurrence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set Recurrence */
+        put: operations["set_recurrence_api_v1_templates__name__recurrence_put"];
+        post?: never;
+        /** Clear Recurrence */
+        delete: operations["clear_recurrence_api_v1_templates__name__recurrence_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recurrence/parse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Parse Recurrence */
+        post: operations["parse_recurrence_api_v1_recurrence_parse_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recurrence/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Recurrence */
+        post: operations["preview_recurrence_api_v1_recurrence_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_id}/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Task Attachments
+         * @description Файлы задачи и всех её шагов одним списком, у строк шагов — `step_id`.
+         */
+        get: operations["task_attachments_api_v1_tasks__task_id__attachments_get"];
+        put?: never;
+        /** Task Attach */
+        post: operations["task_attach_api_v1_tasks__task_id__attachments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{name}/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Template Attachments */
+        get: operations["template_attachments_api_v1_templates__name__attachments_get"];
+        put?: never;
+        /** Template Attach */
+        post: operations["template_attach_api_v1_templates__name__attachments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/attachments/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Attachment Delete */
+        delete: operations["attachment_delete_api_v1_attachments__id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/attachments/{id}/bytes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Attachment Bytes
+         * @description Байты вложения — не JSON. `FileResponse`, а не `read_bytes()` в
+         *     память: файл до 15 МБ уходит потоком. `nosniff` запрещает браузеру
+         *     переугадывать тип: для всего вне белого списка это `octet-stream` на
+         *     скачивание, и переугадывание вернуло бы html со скриптом шанс исполниться.
+         */
+        get: operations["attachment_bytes_api_v1_attachments__id__bytes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AttachResult */
+        AttachResult: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            attachment: components["schemas"]["AttachmentInfo"];
+        };
+        /** AttachmentDeleteResult */
+        AttachmentDeleteResult: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /** Id */
+            id: number;
+        };
+        /** AttachmentInfo */
+        AttachmentInfo: {
+            /** Id */
+            id: number;
+            /** Filename */
+            filename: string;
+            /** Mime */
+            mime: string;
+            /** Bytes */
+            bytes: number;
+            /** Caption */
+            caption: string | null;
+            /**
+             * Added
+             * Format: date
+             */
+            added: string;
+            /** Step Id */
+            step_id?: number | null;
+            /** Url */
+            url: string;
+        };
+        /** AttachmentList */
+        AttachmentList: {
+            /** Attachments */
+            attachments: components["schemas"]["AttachmentInfo"][];
+        };
         /** BacklogResult */
         BacklogResult: {
             /** Now */
@@ -154,6 +640,78 @@ export interface components {
             count: number;
             /** Broken */
             broken?: string[];
+        };
+        /** Body_task_attach_api_v1_tasks__task_id__attachments_post */
+        Body_task_attach_api_v1_tasks__task_id__attachments_post: {
+            /** File */
+            file: string;
+            /** Step Id */
+            step_id?: number | null;
+            /** Caption */
+            caption?: string | null;
+        };
+        /** Body_template_attach_api_v1_templates__name__attachments_post */
+        Body_template_attach_api_v1_templates__name__attachments_post: {
+            /** File */
+            file: string;
+            /** Caption */
+            caption?: string | null;
+        };
+        /** CancelIn */
+        CancelIn: {
+            /** Reason */
+            reason?: string | null;
+        };
+        /** CardStep */
+        CardStep: {
+            /** Id */
+            id: number;
+            /** Title */
+            title: string | null;
+            /** Status */
+            status: string;
+            /** Start Date */
+            start_date: string | null;
+            /** Control Date */
+            control_date: string | null;
+            /** Completed Date */
+            completed_date: string | null;
+            /** Note */
+            note: string | null;
+            /** Mode */
+            mode: string | null;
+            /** Closed */
+            closed: boolean;
+            /** Active */
+            active: boolean;
+            /** Stalled */
+            stalled: number;
+            /** State */
+            state: string | null;
+            row?: components["schemas"]["FeedRow"] | null;
+            /**
+             * Actions
+             * @default []
+             */
+            actions: string[];
+            /**
+             * Steps
+             * @default []
+             */
+            steps: components["schemas"]["CardStep"][];
+        };
+        /** CloseResult */
+        CloseResult: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /** Task Id */
+            task_id: number;
+            /** Closed Steps */
+            closed_steps: number;
+            card: components["schemas"]["TaskCard"];
         };
         /** Counts */
         Counts: {
@@ -242,10 +800,148 @@ export interface components {
             /** Actions */
             actions: string[];
         };
+        /** FieldError */
+        FieldError: {
+            /** Field */
+            field: string | null;
+            /** Error */
+            error: string;
+        };
+        /** FieldWarning */
+        FieldWarning: {
+            /** Field */
+            field: string;
+            /** Warning */
+            warning: string;
+        };
+        /** FromTaskIn */
+        FromTaskIn: {
+            /** Task Id */
+            task_id: number;
+            /** Name */
+            name?: string | null;
+        };
+        /** FromTemplateResult */
+        FromTemplateResult: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /** Task Id */
+            task_id: number;
+            /** Task */
+            task: string;
+            /** Template */
+            template: string;
+            /** Steps */
+            steps: number;
+            /** Attachments */
+            attachments: number;
+            /** Task Status */
+            task_status: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * Hypothesis
+         * @description Форма из `kb.py:373-383` (`_hypothesis`). `extra="allow"`, чтобы поля,
+         *     о которых этот файл не знает, не терялись при обратной пересылке —
+         *     `reject`/`confirm` шлют гипотезу назад ровно такой, какой её показал `scan`.
+         */
+        Hypothesis: {
+            /** Entry Id */
+            entry_id: number | string;
+            /** Title */
+            title: string;
+            /** Via */
+            via?: string | null;
+            /** Source */
+            source?: string | null;
+            /** Matched */
+            matched: string;
+            /** Offset Start */
+            offset_start: number;
+            /** Offset End */
+            offset_end: number;
+            /**
+             * Confirmed
+             * @default false
+             */
+            confirmed: boolean;
+        } & {
+            [key: string]: unknown;
+        };
+        /** InstantiateIn */
+        InstantiateIn: {
+            /** Start */
+            start?: string | null;
+            /** Title */
+            title?: string | null;
+        };
+        /** KbConfirmIn */
+        KbConfirmIn: {
+            /** Mentions */
+            mentions: components["schemas"]["Hypothesis"][];
+        };
+        /** KbConfirmResult */
+        KbConfirmResult: {
+            /** Ok */
+            ok: boolean;
+            /** Links */
+            links: {
+                [key: string]: unknown;
+            }[];
+            /** Errors */
+            errors: components["schemas"]["FieldError"][];
+        };
+        /** KbRejectIn */
+        KbRejectIn: {
+            mention: components["schemas"]["Hypothesis"];
+            /**
+             * Mute
+             * @default false
+             */
+            mute: boolean;
+        };
+        /** KbScanIn */
+        KbScanIn: {
+            /** Text */
+            text: string;
+            /** Task Id */
+            task_id?: number | null;
+        };
+        /** KbScanResult */
+        KbScanResult: {
+            /** Hypotheses */
+            hypotheses: components["schemas"]["Hypothesis"][];
+            /** Confirmed */
+            confirmed: components["schemas"]["Hypothesis"][];
+            /** Kb Broken */
+            kb_broken: string[];
+        };
+        /** LogEntry */
+        LogEntry: {
+            /** Step Id */
+            step_id: number;
+            /** Step Title */
+            step_title: string | null;
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Event */
+            event: string;
+            /** Reason */
+            reason?: string | null;
+            /** Was */
+            was?: string | null;
+            /** To */
+            to?: string | null;
         };
         /**
          * MarkIn
@@ -307,6 +1003,78 @@ export interface components {
             row?: components["schemas"]["FeedRow"] | null;
             counts: components["schemas"]["Counts"];
         };
+        /** OkResult */
+        OkResult: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+        };
+        /** PlanIn */
+        PlanIn: {
+            /** Task Id */
+            task_id?: number | null;
+            /** Start Date */
+            start_date?: string | null;
+            /** Steps */
+            steps: components["schemas"]["StepEditIn"][];
+        };
+        /** PlanResult */
+        PlanResult: {
+            /** Ok */
+            ok: boolean;
+            /** Errors */
+            errors: components["schemas"]["FieldError"][];
+            /** Warnings */
+            warnings: components["schemas"]["FieldWarning"][];
+            /** Steps */
+            steps: components["schemas"]["PlannedStep"][];
+        };
+        /** PlannedStep */
+        PlannedStep: {
+            /** Path */
+            path: string;
+            /** Id */
+            id: number | null;
+            /** Mode */
+            mode: string | null;
+            /** Start */
+            start: string | null;
+            /** Control */
+            control: string | null;
+            /** Explicit Start */
+            explicit_start: boolean;
+            /**
+             * Steps
+             * @default []
+             */
+            steps: components["schemas"]["PlannedStep"][];
+        };
+        /** PreviewRow */
+        PreviewRow: {
+            /** Position */
+            position: number;
+            /** Title */
+            title: string;
+            /** Offset Days */
+            offset_days: number;
+            /** Control Date */
+            control_date: string;
+            /** Control Text */
+            control_text: string;
+            /** Weekday */
+            weekday: string;
+            /** On Weekend */
+            on_weekend: boolean;
+            /** Show At */
+            show_at: string;
+        };
+        /** QuickIn */
+        QuickIn: {
+            /** Text */
+            text: string;
+        };
         /**
          * ReasonsResult
          * @description Справочник причин переноса и провала (раздел 5.4 ТЗ). Только активные:
@@ -315,6 +1083,112 @@ export interface components {
         ReasonsResult: {
             /** Reasons */
             reasons: string[];
+        };
+        /**
+         * RecurrenceView
+         * @description Нормализованное правило со склада плюс подпись `description` —
+         *     её считает `recurrence.describe`, а не морда: оболочка правило словами
+         *     не пересказывает.
+         */
+        RecurrenceView: {
+            /**
+             * Anchor
+             * Format: date
+             */
+            anchor: string;
+            /** Freq */
+            freq: string;
+            /** Interval */
+            interval: number;
+            /** Byweekday */
+            byweekday: number[];
+            /** Bymonthday */
+            bymonthday: number[];
+            /** Bysetpos */
+            bysetpos: number[];
+            /** Bymonth */
+            bymonth: number[];
+            /** Holiday Shift */
+            holiday_shift: string;
+            /** Lead Days */
+            lead_days: number;
+            /** Until */
+            until: string | null;
+            /** Paused */
+            paused: boolean;
+            /** Description */
+            description: string;
+        };
+        /** RuleDate */
+        RuleDate: {
+            /**
+             * Date
+             * Format: date
+             */
+            date: string;
+            /** Text */
+            text: string;
+        };
+        /**
+         * RuleIn
+         * @description Правило повторения как его вводит форма. В ядро уходит
+         *     `model_dump(exclude_unset=True)`: незаданное поле не затирает дефолты
+         *     `recurrence.normalize_rule`, а поля без виджета (`holiday_shift`,
+         *     `lead_days`, `until`, `paused`) возвращаются такими, какими пришли из
+         *     `GET` — `describe` их проговаривает, терять нельзя.
+         */
+        RuleIn: {
+            /** Anchor */
+            anchor?: string | null;
+            /** Freq */
+            freq?: string | null;
+            /** Interval */
+            interval?: number | null;
+            /** Byweekday */
+            byweekday?: number[] | null;
+            /** Bymonthday */
+            bymonthday?: number[] | null;
+            /** Bysetpos */
+            bysetpos?: number[] | null;
+            /** Bymonth */
+            bymonth?: number[] | null;
+            /** Holiday Shift */
+            holiday_shift?: string | null;
+            /** Lead Days */
+            lead_days?: number | null;
+            /** Until */
+            until?: string | null;
+            /** Paused */
+            paused?: boolean | null;
+        };
+        /** RuleParseResult */
+        RuleParseResult: {
+            /** Ok */
+            ok: boolean;
+            rule?: components["schemas"]["RuleIn"] | null;
+            /** Description */
+            description?: string | null;
+            /** Errors */
+            errors?: components["schemas"]["FieldError"][];
+        };
+        /** RulePreviewIn */
+        RulePreviewIn: {
+            /** Anchor */
+            anchor?: string | null;
+            rule: components["schemas"]["RuleIn"];
+        };
+        /** RulePreviewResult */
+        RulePreviewResult: {
+            /** Ok */
+            ok: boolean;
+            /** Description */
+            description?: string | null;
+            /** Anchor */
+            anchor?: string | null;
+            /** Preview */
+            preview?: components["schemas"]["RuleDate"][];
+            /** Errors */
+            errors?: components["schemas"]["FieldError"][];
         };
         /** SearchResult */
         SearchResult: {
@@ -332,10 +1206,294 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
-        /** TextIn */
-        TextIn: {
-            /** Text */
-            text?: string | null;
+        /** StepEditIn */
+        StepEditIn: {
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+            /** Control Date */
+            control_date?: string | null;
+            /** Start Date */
+            start_date?: string | null;
+            /** Note */
+            note?: string | null;
+            /** Mode */
+            mode?: string | null;
+            /**
+             * Steps
+             * @default []
+             */
+            steps: components["schemas"]["StepEditIn"][];
+            /** Id */
+            id?: number | null;
+        };
+        /** StepIn */
+        StepIn: {
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+            /** Control Date */
+            control_date?: string | null;
+            /** Start Date */
+            start_date?: string | null;
+            /** Note */
+            note?: string | null;
+            /** Mode */
+            mode?: string | null;
+            /**
+             * Steps
+             * @default []
+             */
+            steps: components["schemas"]["StepIn"][];
+        };
+        /** TaskCard */
+        TaskCard: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /** Task Id */
+            task_id: number;
+            /** Task */
+            task: string;
+            /** Task Status */
+            task_status: string;
+            /** Status Ru */
+            status_ru: string;
+            /** Body */
+            body: string;
+            /**
+             * Created
+             * Format: date
+             */
+            created: string;
+            /** Start Date */
+            start_date: string;
+            /** Tags */
+            tags: string[];
+            /**
+             * Cancelled
+             * @default false
+             */
+            cancelled: boolean;
+            /** Cancelled Reason */
+            cancelled_reason?: string | null;
+            /** Template Name */
+            template_name?: string | null;
+            /** Cycle Key */
+            cycle_key?: string | null;
+            /** Control Date */
+            control_date: string | null;
+            /** Current Step */
+            current_step: string | null;
+            /** Progress */
+            progress: string | null;
+            /** Stalled */
+            stalled: number;
+            /** Steps */
+            steps: components["schemas"]["CardStep"][];
+            /** History */
+            history: components["schemas"]["LogEntry"][];
+            /** Actions */
+            actions: string[];
+        };
+        /** TaskDeleteResult */
+        TaskDeleteResult: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /** Task Id */
+            task_id: number;
+            /** Task */
+            task: string;
+            /**
+             * Deleted
+             * @default true
+             */
+            deleted: boolean;
+        };
+        /** TaskEditIn */
+        TaskEditIn: {
+            /** Title */
+            title: string;
+            /** Start Date */
+            start_date?: string | null;
+            /** Tags */
+            tags?: string[] | null;
+            /** Body */
+            body?: string | null;
+            /** Steps */
+            steps: components["schemas"]["StepEditIn"][];
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
+        };
+        /** TaskIn */
+        TaskIn: {
+            /** Title */
+            title: string;
+            /** Start Date */
+            start_date?: string | null;
+            /**
+             * Tags
+             * @default []
+             */
+            tags: string[];
+            /**
+             * Body
+             * @default
+             */
+            body: string;
+            /** Steps */
+            steps: components["schemas"]["StepIn"][];
+        };
+        /** TaskRef */
+        TaskRef: {
+            /** Task Id */
+            task_id: number;
+            /** Task */
+            task: string;
+        };
+        /** TaskSaveResult */
+        TaskSaveResult: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /** Task Id */
+            task_id: number;
+            /** Task */
+            task: string;
+            /** Task Status */
+            task_status: string;
+            /** Steps */
+            steps: number;
+            /** Created */
+            created: boolean;
+            /** Renamed From */
+            renamed_from?: string | null;
+            /**
+             * Warnings
+             * @default []
+             */
+            warnings: components["schemas"]["FieldWarning"][];
+            card: components["schemas"]["TaskCard"];
+        };
+        /** TemplateCard */
+        TemplateCard: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /** Name */
+            name: string;
+            /** Tags */
+            tags: string[];
+            /** Body */
+            body: string;
+            /** Steps */
+            steps: components["schemas"]["TemplateStep"][];
+            /** Steps Count */
+            steps_count: number;
+            /** Attachments Count */
+            attachments_count: number;
+            recurrence: components["schemas"]["RecurrenceView"] | null;
+        };
+        /** TemplateDeleteResult */
+        TemplateDeleteResult: {
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
+            /** Template */
+            template: string;
+            /**
+             * Deleted
+             * @default true
+             */
+            deleted: boolean;
+        };
+        /** TemplateIn */
+        TemplateIn: {
+            /** Name */
+            name: string;
+            /** Tags */
+            tags?: string[];
+            /**
+             * Body
+             * @default
+             */
+            body: string;
+            /** Steps */
+            steps: components["schemas"]["TemplateStepIn"][];
+            recurrence?: components["schemas"]["RuleIn"] | null;
+        };
+        /** TemplateList */
+        TemplateList: {
+            /** Templates */
+            templates: components["schemas"]["TemplateCard"][];
+            /** Count */
+            count: number;
+        };
+        /**
+         * TemplatePreview
+         * @description Живой предпросмотр: плохой ввод — это ответ `ok: false`, а не ошибка
+         *     запроса, потому что форма спрашивает на каждое нажатие.
+         */
+        TemplatePreview: {
+            /** Ok */
+            ok: boolean;
+            /** Start */
+            start: string | null;
+            /** Start Text */
+            start_text: string | null;
+            /** Steps */
+            steps?: components["schemas"]["PreviewRow"][];
+            /** Errors */
+            errors?: components["schemas"]["FieldError"][];
+        };
+        /** TemplatePreviewIn */
+        TemplatePreviewIn: {
+            template: components["schemas"]["TemplateIn"];
+            /** Start */
+            start?: string | null;
+        };
+        /** TemplateStep */
+        TemplateStep: {
+            /** Position */
+            position: number;
+            /** Title */
+            title: string;
+            /** Offset Days */
+            offset_days: number;
+            /** Time Of Day */
+            time_of_day: string | null;
+        };
+        /** TemplateStepIn */
+        TemplateStepIn: {
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+            /** Offset Days */
+            offset_days?: number | string | null;
+            /** Time Of Day */
+            time_of_day?: string | null;
+            /** Position */
+            position?: number | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -372,6 +1530,20 @@ export interface components {
             past: boolean;
             /** Error */
             error?: string | null;
+        };
+        /** TextIn */
+        api__v1__router__TextIn: {
+            /** Text */
+            text?: string | null;
+        };
+        /**
+         * TextIn
+         * @description Как `TextIn` в `api/v1/router.py` — свой экземпляр, а не импорт оттуда:
+         *     модуль шаблонов не должен тянуть за собой маршруты задач ради одного поля.
+         */
+        api__v1__templates__TextIn: {
+            /** Text */
+            text?: string | null;
         };
     };
     responses: never;
@@ -527,7 +1699,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TextIn"];
+                "application/json": components["schemas"]["api__v1__router__TextIn"];
             };
         };
         responses: {
@@ -562,7 +1734,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["TextIn"];
+                "application/json": components["schemas"]["api__v1__router__TextIn"];
             };
         };
         responses: {
@@ -635,6 +1807,1083 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReasonsResult"];
+                };
+            };
+        };
+    };
+    create_api_v1_tasks_post: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskSaveResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    quick_api_v1_tasks_quick_post: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["QuickIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskSaveResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plan_api_v1_tasks_plan_post: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlanIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_api_v1_tasks_resolve_get: {
+        parameters: {
+            query: {
+                title: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskRef"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    show_api_v1_tasks__task_id__get: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskCard"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_api_v1_tasks__task_id__put: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskEditIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskSaveResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_api_v1_tasks__task_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDeleteResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_api_v1_tasks__task_id__cancel_post: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskCard"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    close_api_v1_tasks__task_id__close_post: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CloseResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reopen_api_v1_tasks__task_id__steps__step_id__reopen_post: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path: {
+                task_id: number;
+                step_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskCard"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scan_api_v1_kb_scan_post: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KbScanIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KbScanResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_api_v1_kb_reject_post: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KbRejectIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_api_v1_tasks__task_id__kb_confirm_post: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KbConfirmIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KbConfirmResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_templates_api_v1_templates_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateList"];
+                };
+            };
+        };
+    };
+    create_template_api_v1_templates_post: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TemplateIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateCard"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_template_api_v1_templates__name__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateCard"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    replace_template_api_v1_templates__name__put: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TemplateIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateCard"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_template_api_v1_templates__name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateDeleteResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_saved_api_v1_templates__name__preview_get: {
+        parameters: {
+            query?: {
+                start?: string | null;
+                now?: string | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplatePreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_draft_api_v1_templates_preview_post: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TemplatePreviewIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplatePreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    instantiate_template_api_v1_templates__name__instantiate_post: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InstantiateIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FromTemplateResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    template_from_task_api_v1_templates_from_task_post: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FromTaskIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateCard"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_recurrence_api_v1_templates__name__recurrence_put: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuleIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateCard"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_recurrence_api_v1_templates__name__recurrence_delete: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateCard"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    parse_recurrence_api_v1_recurrence_parse_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["api__v1__templates__TextIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuleParseResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_recurrence_api_v1_recurrence_preview_post: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RulePreviewIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RulePreviewResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    task_attachments_api_v1_tasks__task_id__attachments_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachmentList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    task_attach_api_v1_tasks__task_id__attachments_post: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path: {
+                task_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_task_attach_api_v1_tasks__task_id__attachments_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    template_attachments_api_v1_templates__name__attachments_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachmentList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    template_attach_api_v1_templates__name__attachments_post: {
+        parameters: {
+            query?: {
+                now?: string | null;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_template_attach_api_v1_templates__name__attachments_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attachment_delete_api_v1_attachments__id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachmentDeleteResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attachment_bytes_api_v1_attachments__id__bytes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

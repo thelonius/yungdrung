@@ -12,7 +12,11 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from api import errors, legacy
+from api.v1 import attachments as v1_attachments
+from api.v1 import kb as v1_kb
 from api.v1 import router as v1
+from api.v1 import tasks as v1_tasks
+from api.v1 import templates as v1_templates
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 # Собранный клиент (REFACTOR.md, срез 1c). В git его нет: собирает
@@ -41,6 +45,14 @@ app = FastAPI(title="Yungdrung", version="1",
               docs_url="/docs", redoc_url=None)
 errors.install(app)
 app.include_router(v1.router)
+app.include_router(v1_tasks.router)
+app.include_router(v1_kb.router)
+app.include_router(v1_templates.router)
+app.include_router(v1_attachments.router)
+# `public`: `/вложение/{id}` без префикса и вне схемы (Р17) — пользовательский
+# путь, виден в новой вкладке и в `src` картинки, тот же обработчик, что
+# `/api/v1/attachments/{id}/bytes`.
+app.include_router(v1_attachments.public)
 app.include_router(legacy.router)
 
 

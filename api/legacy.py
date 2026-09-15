@@ -15,7 +15,6 @@ import json
 from datetime import date, datetime
 from types import SimpleNamespace
 
-import attachments
 import engine
 import settings as cfg
 import templates as tpl
@@ -343,22 +342,6 @@ for _route, _fn in GET.items():
 for _route, _fn in POST.items():
     router.add_api_route(_route, _make_post(_fn), methods=["POST"])
 
-
-@router.get("/вложение/{id_text}")
-def attachment_bytes(id_text: str):
-    """Байты вложения — не JSON: тип и разрешение показывать инлайн против
-    скачивания решает `attachments.py`."""
-    try:
-        attachment_id = int(id_text)
-    except ValueError:
-        return _json({"error": "нет вложения"}, 404)
-    row = engine.get_store().get_attachment(attachment_id)
-    if row is None:
-        return _json({"error": "нет вложения"}, 404)
-    путь = attachments.locate(engine.VAULT, row["sha256"])
-    if путь is None:
-        return _json({"error": "файл вложения потерян на диске"}, 404)
-    ctype, disposition = attachments.content_type_and_disposition(row["mime"], row["filename"])
-    return Response(путь.read_bytes(), media_type=ctype,
-                    headers={"Content-Disposition": disposition,
-                             "X-Content-Type-Options": "nosniff"})
+# `/вложение/{id}` переехал в `api/v1/attachments.py` (роутер `public`, Р17
+# спецификации среза 2) и подключается в `api/app.py` — дубль здесь убран,
+# чтобы легаси-маршрут не перекрывал новый обработчик.
