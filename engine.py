@@ -82,8 +82,10 @@ import core.clock  # noqa: E402
 import core.feed as core_feed  # noqa: E402
 import core.mark as core_mark  # noqa: E402
 import core.persist as core_persist  # noqa: E402
+import core.tasks as core_tasks  # noqa: E402
 from core.context import Context  # noqa: E402
 from core.errors import CoreError, ValidationError  # noqa: E402
+from core.models_tasks import TaskEditIn  # noqa: E402
 
 SCHEMA = core_persist.TASK_SCHEMA
 VAULT = Path(os.environ.get("YUNGDRUNG_VAULT", Path(__file__).resolve().parent))
@@ -324,6 +326,9 @@ def cmd_create(args, today):
 
     JSON на входе: {"title": "...", "tags": [...], "steps": [{"title": "...",
     "control_date": "2026-08-20"}], "body": "..."}
+
+    Проверка, сборка meta и запись — `core.tasks.create_task`; здесь только
+    разбор JSON и перевод исключения в прежнюю форму CLI.
     """
     raw = sys.stdin.read() if args.json == "-" else args.json
     try:
@@ -331,28 +336,25 @@ def cmd_create(args, today):
     except json.JSONDecodeError as e:
         return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
 
-    existing = [t["path"].stem for t in load_tasks()]
-    errors = validate_new_task(data, existing, today)
-    if errors:
-        return {"ok": False, "errors": errors}
-
-    meta = build_task(data, today)
-    # `path` — раньше был предвычисленный путь к файлу, теперь задачи ещё нет
-    # в БД, значит нет и id. save() увидит path=None, заведёт новую строку и
-    # сам подставит сюда TaskRef с настоящим id.
-    task = {"path": None, "meta": meta, "body": (data.get("body") or "").strip() + "\n"}
     try:
-        save(task, today)
-    except store.DuplicateTitle:
-        return {"ok": False, "errors": [
-            {"field": "title", "error": "Задача с таким названием уже есть"}]}
-    return {"ok": True, "task": task["path"].stem,
-            "steps": len(meta["steps"]), "status": task["meta"]["status"]}
+        task = core_tasks.create_task(_ctx(), data, today)
+    except ValidationError as e:
+        return {"ok": False, "errors": e.errors}
+    return {"ok": True, "task": task["path"].stem, "task_id": task["path"].id,
+            "steps": len(task["meta"]["steps"]), "status": task["meta"]["status"]}
 
 
 def cmd_update(args, today):
     """Правка задачи из карточки: заголовок, даты, теги, заметка, состав и
     порядок шагов. Статусы шагов через `done`/`notdone`/`defer`/`fail`/`skip`.
+
+    Проверка, применение правки, запись и перенос владения вложениями/базы
+    знаний при переименовании — `core.tasks.update_task`. Поля из сырого JSON
+    подставляются в `TaskEditIn` со значениями по умолчанию для отсутствующих
+    ключей (`title`/`steps`), а не напрямую `TaskEditIn(**data)`: CLI и старая
+    форма годами присылали неполные словари, и `validate_task_edit` сама
+    превращает пустое название или пустой список шагов в обычную ошибку поля,
+    а не в необработанное исключение Pydantic.
     """
     raw = sys.stdin.read() if args.json == "-" else args.json
     try:
@@ -360,43 +362,18 @@ def cmd_update(args, today):
     except json.JSONDecodeError as e:
         return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
 
-    task = find_task(args.task)
-    прежнее_имя = task["path"].stem
-    existing = [t["path"].stem for t in load_tasks()]
-    errors = validate_task_edit(task, data, existing, today)
-    if errors:
-        return {"ok": False, "errors": errors}
-
-    пропали = apply_task_edit(task, data, today)
-    if пропали and not getattr(args, "force", False):
-        # Шаг исчез из данных без явного «снять». Скорее всего баг интерфейса
-        # или случайное перетаскивание мимо списка — молча терять историю шага
-        # нельзя, поэтому здесь отказ, а не тихое удаление.
-        return {"ok": False, "errors": [{
-            "field": "steps",
-            "error": f"Шаг {sid} пропал из данных — сначала «снять», не убирать так"}
-            for sid in пропали]}
-
-    # Переименование раньше значило перенос файла — os.replace после записи,
-    # отдельная проверка «файл уже существует» до неё. У задачи-строки id не
-    # меняется от смены title, так что переименование — то же самое save(),
-    # что и любая другая правка; `validate_task_edit` уже проверила название
-    # на совпадение с другими задачами, UNIQUE(title) в БД — подстраховка от
-    # гонки, а не источник этой проверки.
+    task_id = find_task_id(args.task)
+    edit = TaskEditIn(
+        title=data.get("title") or "", start_date=data.get("start_date"),
+        tags=data.get("tags"), body=data.get("body"), steps=data.get("steps") or [],
+        force=bool(getattr(args, "force", False)))
     try:
-        save(task, today)
-    except store.DuplicateTitle:
-        return {"ok": False, "errors": [
-            {"field": "title", "error": "Задача с таким названием уже есть"}]}
-
-    # Строку индекса адресует название, поэтому переименованная задача оставила
-    # бы позади себя старую: она находилась бы по прежнему слову и вела в
-    # никуда. `save` уже записал новую — снимаем только прежнюю.
-    if task["path"].stem != прежнее_имя:
-        get_store().search_forget("task", прежнее_имя)
-
-    return {"ok": True, "task": task["path"].stem, "status": task["meta"]["status"],
-            "steps": len(task["meta"]["steps"])}
+        result = core_tasks.update_task(
+            _ctx(), task_id, edit, today, _now(args, today), _work(args))
+    except ValidationError as e:
+        return {"ok": False, "errors": e.errors}
+    return {"ok": True, "task": result.task, "task_id": result.task_id,
+            "status": result.card.status_ru, "steps": result.steps}
 
 
 def cmd_cancel(args, today):
@@ -406,13 +383,13 @@ def cmd_cancel(args, today):
     Отменённая задача перестаёт быть просроченной или ждущей: её статус
     вычисляется первым делом в `task_status`, раньше любого правила про шаги.
     """
-    task = find_task(args.task)
-    if task["meta"].get("cancelled"):
-        sys.exit(f"задача «{task['path'].stem}» уже отменена")
-    task["meta"]["cancelled"] = True
-    task["meta"]["cancelled_reason"] = (getattr(args, "reason", None) or "").strip() or None
-    save(task, today)
-    return {"ok": True, "task": task["path"].stem, "status": task["meta"]["status"]}
+    task_id = find_task_id(args.task)
+    try:
+        card = core_tasks.cancel(_ctx(), task_id, getattr(args, "reason", None), today,
+                                 _now(args, today), _work(args))
+    except CoreError as e:
+        sys.exit(str(e))
+    return {"ok": True, "task": card.task, "task_id": card.task_id, "status": card.status_ru}
 
 
 def cmd_close(args, today):
@@ -426,38 +403,26 @@ def cmd_close(args, today):
     нужна и её довели до конца, просто не оставляя записи о каждом шаге.
 
     Отменённую задачу так не закрыть — это два разных исхода одной задачи, а
-    не последовательность. Уже полностью закрытая — не ошибка: `активные`
-    пусто с первого шага, и повтор ничего не портит (та же идемпотентность,
+    не последовательность. Уже полностью закрытая — не ошибка: активных шагов
+    нет с первого шага, и повтор ничего не портит (та же идемпотентность,
     что у `delete_attachment`).
     """
-    task = find_task(args.task)
-    if task["meta"].get("cancelled"):
-        sys.exit(f"задача «{task['path'].stem}» отменена, а не открыта")
-    закрыто = 0
-    while True:
-        активные = current_steps(task)
-        if not активные:
-            break
-        for s in активные:
-            s["status"] = DONE
-            s["completed_date"] = today
-            log_event(s, "done", today, reason=None)
-            закрыто += 1
-    save(task, today)
-    return {"ok": True, "task": task["path"].stem, "closed_steps": закрыто,
-            "task_status": task_status(task, today)}
+    task_id = find_task_id(args.task)
+    try:
+        result = core_tasks.close(_ctx(), task_id, today, _now(args, today), _work(args))
+    except CoreError as e:
+        sys.exit(str(e))
+    return {"ok": True, "task": result.card.task, "task_id": result.task_id,
+            "closed_steps": result.closed_steps, "task_status": result.card.task_status}
 
 
 def cmd_delete(args, today):
     """Удалить задачу насовсем. Подтверждение — дело интерфейса, не движка:
     здесь только сам необратимый шаг."""
-    task = find_task(args.task)
-    склад = get_store()
-    склад.delete_task(task["path"].id)
-    # Из индекса тоже: иначе удалённая задача продолжает находиться поиском, и
-    # клик по ней ведёт в никуда.
-    склад.search_forget("task", task["path"].stem)
-    return {"ok": True, "task": task["path"].stem, "deleted": True}
+    task_id = find_task_id(args.task)
+    result = core_tasks.delete(_ctx(), task_id)
+    return {"ok": True, "task": result.task, "task_id": result.task_id,
+            "deleted": result.deleted}
 
 
 def cmd_reopen(args, today):
@@ -467,16 +432,14 @@ def cmd_reopen(args, today):
     порядок закрытия и порядок в списке могут не совпасть при провале/снятии
     более раннего шага.
     """
-    task = find_task(args.task)
-    step = get_step(task, args.step)
-    if step.get("status") != DONE:
-        sys.exit(f"шаг {args.step} не был сделан (сейчас: {step.get('status')})")
-    step["status"] = OPEN
-    step["completed_date"] = None
-    log_event(step, "reopened", today)
-    save(task, today)
-    return {"ok": True, "task": task["path"].stem, "step": args.step,
-            "task_status": task["meta"]["status"]}
+    task_id = find_task_id(args.task)
+    try:
+        card = core_tasks.reopen(_ctx(), task_id, args.step, today,
+                                 _now(args, today), _work(args))
+    except CoreError as e:
+        sys.exit(str(e))
+    return {"ok": True, "task": card.task, "task_id": card.task_id, "step": args.step,
+            "task_status": card.status_ru}
 
 
 def _recurrence_view(шаблон):
@@ -663,22 +626,12 @@ def _create_task_from_data(данные, today, existing=None):
     список задач уже прочитан вызывающим (движок повторений создаёт несколько
     задач подряд, и читать стор заново перед каждой — лишний проход по файлам).
     """
-    существующие = existing if existing is not None else [t["path"].stem for t in load_tasks()]
-    errors = validate_new_task(данные, существующие, today)
-    if errors:
-        return None, errors
-
-    meta = build_task(данные, today)
-    # Происхождение проставляется до записи и только здесь: `build_task` про
-    # шаблоны не знает и знать не должен, а `save` пишет то, что в meta.
-    if данные.get("template_name"):
-        meta["template_name"] = данные["template_name"]
-        meta["cycle_key"] = данные.get("cycle_key")
-    задача = {"path": None, "meta": meta, "body": (данные.get("body") or "").strip() + "\n"}
     try:
-        save(задача, today)
-    except store.DuplicateTitle:
-        return None, [{"field": "title", "error": "Задача с таким названием уже есть"}]
+        задача = core_tasks.create_task(
+            _ctx(), данные, today, existing=existing,
+            template_name=данные.get("template_name"), cycle_key=данные.get("cycle_key"))
+    except ValidationError as e:
+        return None, e.errors
     return задача, None
 
 
@@ -1150,6 +1103,12 @@ def cmd_show(args, today):
     (см. save()), значит `task["meta"]` из Store.load_tasks() её не несёт —
     домешиваем `task_summary()` тем же приёмом, что и save(), иначе карточка
     получала бы задачу без срока и прогресса.
+
+    Форма ответа CLI-адаптера отдельная от `core.tasks.card` (`TaskCard`):
+    здесь плоский список шагов «как в БД» плюс вычисленные поля, там дерево
+    `CardStep` под HTTP-контракт (§2.1, дерево, `row`/`actions` для формы).
+    Переписывать пиннутую golden-снимком форму ради переиспользования кода
+    не входит в задачу переноса — добавлен только `task_id`.
     """
     task = find_task(args.task)
     now = _now(args, today)
@@ -1160,6 +1119,7 @@ def cmd_show(args, today):
     активные_id = {s["id"] for s in current_steps(task)}
     return {
         "task": task["path"].stem,
+        "task_id": task["path"].id,
         "status": task_status(task, today),   # английский, для сравнений в JS
         "body": заметка.strip(),
         "meta": {k: v for k, v in meta.items() if k != "steps"},  # meta["status"] — русский

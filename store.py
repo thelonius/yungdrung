@@ -590,6 +590,56 @@ class Store:
         with self._connect() as conn:
             conn.execute("DELETE FROM attachments WHERE id=?", (attachment_id,))
 
+    # --- владелец вложения / ссылки базы знаний по названию задачи -------
+    #
+    # Владельцем остаётся название, не `task_id` (Р3, срез 2, §8 В1): миграция
+    # схемы с перезаписью `source_id` через JOIN отложена — докстринг
+    # `migrate_schema` обещает, что данные миграция не переписывает никогда, а
+    # стор заказчика лежит под OneDrive. Взамен `core.tasks.update_task`/`delete`
+    # переносят и забывают строки владения сами, при каждом переименовании и
+    # удалении задачи.
+
+    def _step_owner_rows(self, conn, table, prefix):
+        """(id, source_id) строк `table` с source_type='step', чей source_id
+        начинается с `prefix` ("название:"). Сравнение в Python, не SQL LIKE:
+        название задачи не запрещает `%`/`_`, и LIKE-паттерн из произвольного
+        названия читал бы их как метасимволы."""
+        rows = conn.execute(
+            f"SELECT id, source_id FROM {table} WHERE source_type='step'").fetchall()
+        return [(r["id"], r["source_id"]) for r in rows if r["source_id"].startswith(prefix)]
+
+    def rename_owner(self, old_title, new_title):
+        """Задача переименована: строки владения (вложения, ссылки базы
+        знаний) её самой и всех её шагов переезжают на новое название. Файлы
+        на диске не трогаются — вложение адресуется своим sha256, теряется
+        только строка-ссылка, не байты."""
+        prefix = f"{old_title}:"
+        with self._connect() as conn:
+            for table in ("attachments", "kb_links"):
+                conn.execute(
+                    f"UPDATE {table} SET source_id=? "
+                    "WHERE source_type='task' AND source_id=?",
+                    (new_title, old_title))
+                for row_id, старый in self._step_owner_rows(conn, table, prefix):
+                    conn.execute(
+                        f"UPDATE {table} SET source_id=? WHERE id=?",
+                        (f"{new_title}:{старый[len(prefix):]}", row_id))
+
+    def forget_owner(self, title):
+        """Задача удалена: строки владения её самой и всех её шагов удаляются
+        вместе с ней — та же пара таблиц, что и `rename_owner`. Файлы на диске
+        не трогаются, как и у `delete_attachment`."""
+        prefix = f"{title}:"
+        with self._connect() as conn:
+            for table in ("attachments", "kb_links"):
+                conn.execute(
+                    f"DELETE FROM {table} WHERE source_type='task' AND source_id=?",
+                    (title,))
+                ids = [row_id for row_id, _ in self._step_owner_rows(conn, table, prefix)]
+                if ids:
+                    места = ",".join("?" * len(ids))
+                    conn.execute(f"DELETE FROM {table} WHERE id IN ({места})", ids)
+
     # --- база знаний ----------------------------------------------------
     #
     # Этап (b) переезда: записи, ссылки и исключения перебираются из
