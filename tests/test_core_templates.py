@@ -9,12 +9,8 @@
 шаблон» (риск 7).
 
 `instantiate`/`run` зовут `core.tasks.create_task` и
-`core.attachments.copy_template_to_task` — сигнатуры B1/B3 (§3.3, §3.5
-спецификации среза 2). До мержа их веток `core.tasks`/`core.attachments` —
-пустые заготовки; здесь они подменяются monkeypatch-заглушками, которые внутри
-зовут ещё работающий `engine._create_task_from_data`/
-`copy_template_attachments` — приём, который спецификация прямо разрешает для
-кода, написанного против ещё не смерженного интерфейса (см. задание B2).
+`core.attachments.copy_template_to_task` (сигнатуры B1/B3, §3.3, §3.5
+спецификации среза 2) напрямую — после слияния веток обе функции настоящие.
 """
 import sys
 from datetime import date, datetime
@@ -27,49 +23,16 @@ sys.path.insert(0, str(ROOT))
 
 import engine  # noqa: E402
 import settings as cfg  # noqa: E402
-from core import attachments as core_attachments  # noqa: E402
 from core import persist as core_persist  # noqa: E402
 from core import recur as core_recur  # noqa: E402
-from core import tasks as core_tasks  # noqa: E402
 from core import templates as core_templates  # noqa: E402
 from core.context import Context  # noqa: E402
 from core.errors import NotFound, ValidationError  # noqa: E402
 
 
 @pytest.fixture
-def ctx(tmp_path, monkeypatch):
-    # Заглушки ниже до мержа пишут задачу через ещё работающий
-    # `engine._create_task_from_data`, а он читает/пишет по `engine.VAULT` —
-    # синхронизируем его с тем же стором, что видит `ctx`.
-    monkeypatch.setattr(engine, "VAULT", tmp_path)
+def ctx(tmp_path):
     return Context(tmp_path)
-
-
-@pytest.fixture
-def stub_create(monkeypatch):
-    """Заглушка `core.tasks.create_task` по сигнатуре B1 (§3.3)."""
-    def create_task(ctx, data, today, *, existing=None, template_name=None, cycle_key=None):
-        данные = dict(data)
-        if template_name:
-            данные["template_name"] = template_name
-            данные["cycle_key"] = cycle_key
-        задача, errors = engine._create_task_from_data(данные, today, existing=existing)
-        if errors:
-            raise ValidationError(errors)
-        return задача
-    # `raising=False`: `core.tasks` в этом дереве — пустая заготовка B1, атрибута
-    # ещё нет (§3.3 спецификации среза 2).
-    monkeypatch.setattr(core_tasks, "create_task", create_task, raising=False)
-
-
-@pytest.fixture
-def stub_attachments(monkeypatch):
-    """Заглушка `core.attachments.copy_template_to_task` (§3.5)."""
-    def copy_template_to_task(ctx, template_name, task_title, today):
-        return engine.copy_template_attachments(template_name, task_title, today)
-    # `raising=False`: `core.attachments` — пустая заготовка B3 (§3.5).
-    monkeypatch.setattr(core_attachments, "copy_template_to_task",
-                        copy_template_to_task, raising=False)
 
 
 def _template(name="Отчёт", **extra):
@@ -170,7 +133,7 @@ def test_from_task_несуществующей_задачи_даёт_NotFound(c
 
 # --- instantiate: файлы шаблона и журнал повторений -------------------------
 
-def test_instantiate_копирует_вложения_и_пишет_журнал(ctx, stub_create, stub_attachments):
+def test_instantiate_копирует_вложения_и_пишет_журнал(ctx):
     сегодня = date(2026, 8, 1)
     core_templates.save(ctx, {
         **_template(), "recurrence": {"anchor": "2026-08-01", "freq": "daily"},
@@ -192,13 +155,13 @@ def test_instantiate_копирует_вложения_и_пишет_журна�
     assert состояние["Отчёт"]["previous"]["task"] == результат.task
 
 
-def test_instantiate_несуществующего_шаблона_даёт_NotFound(ctx, stub_create, stub_attachments):
+def test_instantiate_несуществующего_шаблона_даёт_NotFound(ctx):
     with pytest.raises(NotFound):
         core_templates.instantiate(ctx, "Нет такого", None, None,
                                    date(2026, 8, 1), datetime(2026, 8, 1), ctx.work())
 
 
-def test_instantiate_плохой_даты_старта_даёт_ValidationError(ctx, stub_create, stub_attachments):
+def test_instantiate_плохой_даты_старта_даёт_ValidationError(ctx):
     core_templates.save(ctx, _template(), date(2026, 8, 1))
     with pytest.raises(ValidationError) as excinfo:
         core_templates.instantiate(ctx, "Отчёт", "чепуха", None,
@@ -208,7 +171,7 @@ def test_instantiate_плохой_даты_старта_даёт_ValidationError
 
 # --- core.recur.run: цикл создаётся один раз --------------------------------
 
-def test_run_создаёт_цикл_и_второй_раз_не_дублирует(ctx, stub_create, stub_attachments):
+def test_run_создаёт_цикл_и_второй_раз_не_дублирует(ctx):
     core_templates.save(ctx, {
         **_template("Полив"), "recurrence": {"anchor": "2026-08-01", "freq": "daily"},
     }, date(2026, 8, 1))

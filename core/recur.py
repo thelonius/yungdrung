@@ -198,9 +198,7 @@ def run(ctx: Context, today, *, name=None, force=False, limit=12) -> dict:
             # `решение["key"]` это `recurrence.cycle_key`, тот же ключ, которым
             # журнал повторений отличает уже записанный цикл от нового.
             try:
-                # Сигнатура B1 (§3.3): до мержа `core.tasks` — пустая заготовка,
-                # mypy не видит атрибута. Снять `type: ignore` вместе с мержем.
-                задача = core_tasks.create_task(  # type: ignore[attr-defined]
+                задача = core_tasks.create_task(
                     ctx, данные, today, existing=задачи_кэш,
                     template_name=имя, cycle_key=решение["key"])
             except ValidationError as e:
@@ -211,8 +209,7 @@ def run(ctx: Context, today, *, name=None, force=False, limit=12) -> dict:
                 сбой = e.errors
                 break
             задачи_кэш.append(задача["path"].stem)
-            # Сигнатура B3 (§3.5): та же временная заглушка, что выше.
-            core_attachments.copy_template_to_task(  # type: ignore[attr-defined]
+            core_attachments.copy_template_to_task(
                 ctx, имя, задача["path"].stem, today)
             созданы.append({"date": решение["date"].isoformat(), "task": задача["path"].stem})
             запись["previous"] = {"date": решение["date"].isoformat(), "closed": False,

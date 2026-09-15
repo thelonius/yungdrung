@@ -25,9 +25,6 @@ import engine  # noqa: E402
 from api import errors as api_errors  # noqa: E402
 from api.v1 import tasks as tasks_router  # noqa: E402
 from api.v1 import templates as templates_router  # noqa: E402
-from core import attachments as core_attachments  # noqa: E402
-from core import tasks as core_tasks  # noqa: E402
-from core.errors import ValidationError  # noqa: E402
 
 NOW = "2026-08-05 09:00"
 
@@ -38,30 +35,12 @@ def client(tmp_path, monkeypatch):
     app = FastAPI()
     api_errors.install(app)
     app.include_router(templates_router.router)
+    # `instantiate` зовёт `core.tasks.create_task`/`core.attachments.
+    # copy_template_to_task` напрямую (после слияния веток B1/B3 обе функции
+    # настоящие) — роутер задач подключён тут же, чтобы карточку заведённой
+    # задачи можно было прочитать тем же клиентом (см. test_instantiate_затем_GET_задачи).
+    app.include_router(tasks_router.router)
     return TestClient(app)
-
-
-@pytest.fixture
-def stub_task_creation(monkeypatch):
-    """`instantiate` зовёт `core.tasks.create_task`/`core.attachments.
-    copy_template_to_task` — сигнатуры B1/B3 (§3.3, §3.5), до мержа их веток
-    пустые заготовки. Тот же приём, что в `test_core_templates.py`: заглушка
-    поверх ещё работающего `engine._create_task_from_data`."""
-    def create_task(ctx, data, today, *, existing=None, template_name=None, cycle_key=None):
-        данные = dict(data)
-        if template_name:
-            данные["template_name"] = template_name
-            данные["cycle_key"] = cycle_key
-        задача, errors = engine._create_task_from_data(данные, today, existing=existing)
-        if errors:
-            raise ValidationError(errors)
-        return задача
-    monkeypatch.setattr(core_tasks, "create_task", create_task, raising=False)
-
-    def copy_template_to_task(ctx, template_name, task_title, today):
-        return engine.copy_template_attachments(template_name, task_title, today)
-    monkeypatch.setattr(core_attachments, "copy_template_to_task",
-                        copy_template_to_task, raising=False)
 
 
 def шаблон(name="Отчёт", **extra):
@@ -269,32 +248,26 @@ def test_from_task_несуществующей_задачи_404(client):
 
 # --- заведение задачи из шаблона ---------------------------------------------
 
-def test_instantiate_несуществующего_шаблона_404(client, stub_task_creation):
+def test_instantiate_несуществующего_шаблона_404(client):
     r = client.post("/api/v1/templates/Нет такого/instantiate", json={})
     assert r.status_code == 404
 
 
-def test_instantiate_плохой_даты_422(client, stub_task_creation):
+def test_instantiate_плохой_даты_422(client):
     client.post("/api/v1/templates", json=шаблон())
     r = client.post("/api/v1/templates/Отчёт/instantiate", json={"start": "чепуха"})
     assert r.status_code == 422
     assert r.json()["errors"][0]["field"] == "start"
 
 
-@pytest.mark.xfail(strict=False, reason="api/v1/tasks.py — заготовка B1, "
-                                        "GET /api/v1/tasks/{id} появится после мержа")
-def test_instantiate_затем_GET_задачи(client, stub_task_creation):
-    """После мержа B1: `task_id` из ответа `instantiate` обязан открываться
-    карточкой той же задачи. До мержа `api/v1/tasks.py` пуст — 404 ожидаем,
-    тест помечен нестрогим xfail, чтобы не блокировать сдачу B2."""
+def test_instantiate_затем_GET_задачи(client):
+    """`task_id` из ответа `instantiate` обязан открываться карточкой той же
+    задачи через уже смерженный `api/v1/tasks.py` (B1)."""
     client.post("/api/v1/templates", json=шаблон())
     r = client.post("/api/v1/templates/Отчёт/instantiate",
                     json={"title": "Отчёт за август"})
     assert r.status_code == 200
     task_id = r.json()["task_id"]
 
-    app2 = FastAPI()
-    api_errors.install(app2)
-    app2.include_router(tasks_router.router)
-    r2 = TestClient(app2).get(f"/api/v1/tasks/{task_id}")
+    r2 = client.get(f"/api/v1/tasks/{task_id}")
     assert r2.status_code == 200

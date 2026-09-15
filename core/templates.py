@@ -239,14 +239,10 @@ def instantiate(ctx: Context, name, start, title, today, now, work) -> FromTempl
     except (ValueError, TypeError):
         raise ValidationError.single("start", НЕ_ПОНЯЛ) from None
     данные = tpl.expand(шаблон, старт, title=title)
-    # `core.tasks.create_task`/`core.attachments.copy_template_to_task` — сигнатуры
-    # B1/B3 (§3.3, §3.5 спецификации среза 2), реализация приедет их ветками;
-    # до мержа `core.tasks`/`core.attachments` — пустые заготовки, и mypy не видит
-    # атрибута. Снять `type: ignore` вместе с мержем.
-    задача = core_tasks.create_task(  # type: ignore[attr-defined]
+    задача = core_tasks.create_task(
         ctx, данные, today, template_name=шаблон["name"])
     название = задача["path"].stem
-    файлы = core_attachments.copy_template_to_task(  # type: ignore[attr-defined]
+    файлы = core_attachments.copy_template_to_task(
         ctx, шаблон["name"], название, today)
     core_recur.record_manual_cycle(ctx, шаблон, название, today)
     return FromTemplateResult(
