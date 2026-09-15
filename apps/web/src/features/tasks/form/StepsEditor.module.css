@@ -1,0 +1,86 @@
+/* Перенесено из static/style.css (.step*, .substeps*, .drop) как CSS Module —
+   тот же вид, что был у старой формы (SLICE2_SPEC.md §5.4). */
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.step {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.num, .numSub {
+  flex: 0 0 26px;
+  height: 26px;
+  margin-top: 8px;
+  border-radius: 100px;
+  border: 1.5px solid var(--line-strong);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  display: grid;
+  place-items: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.numSub { flex-basis: 40px; border-style: dashed; }
+
+.fields {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.titleRow { display: flex; gap: 6px; align-items: center; }
+.titleRow input[type="text"] { flex: 1 1 auto; }
+
+.drop {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border: 1.5px solid transparent;
+  background: none;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.drop:hover { color: var(--danger); border-color: var(--line); }
+
+.subBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 2px;
+  padding-left: 12px;
+  border-left: 2px solid var(--line);
+}
+
+.subList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.modeSelect {
+  align-self: flex-start;
+  font-size: 13px;
+  color: var(--muted);
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 4px 6px;
+}
