@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict
 
 import engine
 from api.deps import moment
+from api.errors import bracket_path
 from core.errors import NotFound
 from core.models_tasks import FieldError, OkResult
 
@@ -118,4 +119,12 @@ def confirm(task_id: int, body: KbConfirmIn, now: datetime = Depends(moment)):
         SimpleNamespace(source_type=source_type, source_id=source_id,
                         mentions=[m.model_dump() for m in body.mentions]),
         now.date())
-    return KbConfirmResult(ok=raw["ok"], links=raw["links"], errors=raw["errors"])
+    # `engine.cmd_kb_confirm` строит путь поля точками (`mentions.0.matched`,
+    # как везде в ядре, Р1) — это ответ 200 с `ok: false`, а не исключение, и
+    # общий обработчик `api/errors.py` его не видит. Перевод в скобки нужен
+    # здесь же, как у `api/v1/tasks.py`/`templates.py` (находка ревью среза
+    # 2, api/v1/kb.py:114): иначе форма, разбирающая только скобочный путь,
+    # не подсветит нужное поле у частично отклонённой гипотезы.
+    errors = [FieldError(field=bracket_path(e.get("field")), error=e.get("error"))
+             for e in raw["errors"]]
+    return KbConfirmResult(ok=raw["ok"], links=raw["links"], errors=errors)

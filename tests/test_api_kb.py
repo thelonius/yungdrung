@@ -115,3 +115,29 @@ def test_kb_confirm_на_задаче_подчёркивает_и_возвращ
 def test_kb_confirm_чужой_задачи_404(client):
     r = client.post("/api/v1/tasks/999999/kb-confirm", json={"mentions": []})
     assert r.status_code == 404
+
+
+def test_kb_confirm_ошибка_поля_в_скобочном_пути(client, tmp_path):
+    """Находка ревью среза 2 (api/v1/kb.py:114): `engine.cmd_kb_confirm`
+    строит путь поля точками (`mentions.0.offset_end`, Р1) — HTTP-слой
+    обязан перевести его в скобки, как для `tasks`/`templates`, иначе форма
+    не подсветит гипотезу с ошибкой."""
+    _kb_note(tmp_path, "Василий Говнов")
+    создана = client.post("/api/v1/tasks", params={"now": NOW}, json={
+        "title": "Отдать деньги", "body": "Отдать Василию Говнову деньги",
+        "steps": [{"title": "Раз", "control_date": "10.09"}]})
+    tid = создана.json()["task_id"]
+
+    # `offset_end < offset_start` проходит модель (оба просто `int`), но
+    # `kb.validate_link` бракует запись уже после разбора — этим и ловится
+    # ветка `errors[]`, не задетая штатным сканом.
+    сломанная_гипотеза = {
+        "entry_id": "Василий Говнов", "title": "Василий Говнов", "via": None,
+        "source": None, "matched": "Василию Говнову", "offset_start": 20,
+        "offset_end": 5, "confirmed": False,
+    }
+    r = client.post(f"/api/v1/tasks/{tid}/kb-confirm",
+                    json={"mentions": [сломанная_гипотеза]})
+    d = r.json()
+    assert r.status_code == 200 and d["ok"] is False
+    assert d["errors"][0]["field"] == "mentions[0].offset_end"
