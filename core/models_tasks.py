@@ -52,7 +52,7 @@ class StepEditIn(StepIn):
     # своих подшагов (унаследованный `StepIn.steps` типизирован `list[StepIn]`,
     # там `id` нет вовсе) — правка состава внутри группы не смогла бы удержать
     # отметки на месте. Отклонение от §2.1 записано в отчёте B1.
-    steps: list[StepEditIn] = []
+    steps: list[StepEditIn] = []  # type: ignore[assignment]  # намеренная замена типа детей, см. выше
 
 
 class TaskIn(BaseModel):
@@ -129,8 +129,9 @@ class CardStep(BaseModel):
     stalled: int
     state: str | None                    # worktime.due_state; None у группы и закрытого
     row: FeedRow | None = None           # у открытого листа: для ControlDialog
-    actions: list[str] = []              # 'done','notdone','defer','fail','skip' у открытого листа;
-                                          # 'reopen' у done; 'undo' если журнал сегодняшний и отменяемый
+    # 'done','notdone','defer','fail','skip' у открытого листа; 'reopen' у
+    # done; 'undo' если журнал сегодняшний и отменяемый.
+    actions: list[str] = []
     steps: list[CardStep] = []
 
 
@@ -154,7 +155,8 @@ class TaskCard(BaseModel):
     stalled: int                         # из domain.steps.task_summary
     steps: list[CardStep]
     history: list[LogEntry]              # все события всех шагов, по убыванию даты
-    actions: list[str]                   # 'close' (открытая), 'cancel' (не отменённая), 'delete', 'to_template'
+    # 'close' (открытая), 'cancel' (не отменённая), 'delete', 'to_template'.
+    actions: list[str]
 
 
 class TaskSaveResult(BaseModel):

@@ -75,7 +75,7 @@ def quick_create(ctx: Context, text: str, today, now, work) -> TaskSaveResult:
     control = format_control(moment) if moment is not None else format_control(today)
     data = {"title": title, "steps": [{"title": title, "control_date": control}]}
     task = create_task(ctx, data, today)
-    return _save_result(ctx, task, today, now, work, created=True)
+    return save_result(ctx, task, today, now, work, created=True)
 
 
 # --- карточка ----------------------------------------------------------------
@@ -248,7 +248,7 @@ def plan(ctx: Context, data: PlanIn, today, now) -> PlanResult:
 
 # --- правка, отмена, закрытие, переоткрытие, удаление ------------------------
 
-def _save_result(ctx: Context, task, today, now, work, *, created: bool,
+def save_result(ctx: Context, task, today, now, work, *, created: bool,
                  renamed_from: str | None = None,
                  warnings: list[dict] | None = None) -> TaskSaveResult:
     return TaskSaveResult(
@@ -306,7 +306,7 @@ def update_task(ctx: Context, task_id: int, data: TaskEditIn, today, now, work) 
         ctx.store.rename_owner(прежнее_имя, новое_имя)
         renamed_from = прежнее_имя
 
-    return _save_result(ctx, task, today, now, work, created=False,
+    return save_result(ctx, task, today, now, work, created=False,
                         renamed_from=renamed_from, warnings=warnings)
 
 
