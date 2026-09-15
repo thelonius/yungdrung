@@ -2204,7 +2204,6 @@
      "attachments"
     ],
     "summary": "Attachment Bytes",
-    "description": "Байты вложения — не JSON. `FileResponse`, а не `read_bytes()` в\nпамять: файл до 15 МБ уходит потоком. `nosniff` запрещает браузеру\nпереугадывать тип: для всего вне белого списка это `octet-stream` на\nскачивание, и переугадывание вернуло бы html со скриптом шанс исполниться.",
     "operationId": "attachment_bytes_api_v1_attachments__id__bytes_get",
     "parameters": [
      {
@@ -3959,10 +3958,9 @@
       "title": "Paused"
      }
     },
-    "additionalProperties": false,
     "type": "object",
     "title": "RuleIn",
-    "description": "Правило повторения как его вводит форма. В ядро уходит\n`model_dump(exclude_unset=True)`: незаданное поле не затирает дефолты\n`recurrence.normalize_rule`, а поля без виджета (`holiday_shift`,\n`lead_days`, `until`, `paused`) возвращаются такими, какими пришли из\n`GET` — `describe` их проговаривает, терять нельзя."
+    "description": "Правило повторения как его вводит форма. В ядро уходит\n`model_dump(exclude_unset=True)`: незаданное поле не затирает дефолты\n`recurrence.normalize_rule`, а поля без виджета (`holiday_shift`,\n`lead_days`, `until`, `paused`) возвращаются такими, какими пришли из\n`GET` — `describe` их проговаривает, терять нельзя.\n\n`extra=\"ignore\"`, не `\"forbid\"`: комментарий у `PUT /templates/{name}`\n(«клиент шлёт то, что получил в `GET`») буквально предлагает подставить\nсюда `RecurrenceView` из ответа как есть, а в нём есть `description`,\nкоторого у `RuleIn` нет. `forbid` ронял такой честный round-trip 422‑й\n(находка ревью среза 2, core/models_templates.py:41); полю всё равно\nнекуда деться дальше `_payload`/`_rule_payload`, они разбирают только\nизвестные ключи."
    },
    "RuleParseResult": {
     "properties": {

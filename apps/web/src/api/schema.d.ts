@@ -564,13 +564,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /**
-         * Attachment Bytes
-         * @description Байты вложения — не JSON. `FileResponse`, а не `read_bytes()` в
-         *     память: файл до 15 МБ уходит потоком. `nosniff` запрещает браузеру
-         *     переугадывать тип: для всего вне белого списка это `octet-stream` на
-         *     скачивание, и переугадывание вернуло бы html со скриптом шанс исполниться.
-         */
+        /** Attachment Bytes */
         get: operations["attachment_bytes_api_v1_attachments__id__bytes_get"];
         put?: never;
         post?: never;
@@ -1136,6 +1130,14 @@ export interface components {
          *     `recurrence.normalize_rule`, а поля без виджета (`holiday_shift`,
          *     `lead_days`, `until`, `paused`) возвращаются такими, какими пришли из
          *     `GET` — `describe` их проговаривает, терять нельзя.
+         *
+         *     `extra="ignore"`, не `"forbid"`: комментарий у `PUT /templates/{name}`
+         *     («клиент шлёт то, что получил в `GET`») буквально предлагает подставить
+         *     сюда `RecurrenceView` из ответа как есть, а в нём есть `description`,
+         *     которого у `RuleIn` нет. `forbid` ронял такой честный round-trip 422‑й
+         *     (находка ревью среза 2, core/models_templates.py:41); полю всё равно
+         *     некуда деться дальше `_payload`/`_rule_payload`, они разбирают только
+         *     известные ключи.
          */
         RuleIn: {
             /** Anchor */
