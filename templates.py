@@ -17,13 +17,13 @@
 наследника рядом с `MemoryStore` и `JsonStore`, а в расчётах ни одной правки.
 
 Выходные, рабочие часы и момент показа считает `worktime`; правила имени задачи
-и разбор времени приходят из `engine`. Своего календаря выходных и своего списка
+и разбор времени приходят из `domain`. Своего календаря выходных и своего списка
 запрещённых символов здесь нет намеренно: по контракту считает ядро, и считает в
 одном месте. Разъехавшись, две копии дают предпросмотр, который метит шаг
 субботним и тут же назначает показ на ту же субботу.
 
 Даты наружу уходят строкой «2026-08-18 14:00», а не ISO с «T». Так надо: разбор
-даты в движке (`engine.parse_date_input`) видит в «2026-08-18T14:00» двоеточие,
+даты в движке (`domain.ru_dates.parse_date_input`) видит в «2026-08-18T14:00» двоеточие,
 считает всю строку временем и падает с «не время». Пробел он разбирает верно, и
 именно в этом виде дата доезжает до задачи.
 """
@@ -36,14 +36,14 @@ import time
 from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
-# Движок импортируется рядом с `worktime`, а не внутри функций. Отложенный импорт
-# был нужен прошлому заходу, чтобы пережить отсутствие pyyaml, но pyyaml стоит и
-# записан в requirements.txt: движок читает им весь стор. Если его всё-таки нет,
-# `engine` зовёт sys.exit прямо при импорте — тогда упасть на старте честнее, чем
-# подсунуть расчёту запасную копию правил имени и разойтись с движком.
-import engine
+# Правила имени и разбор дат берутся из `domain`, а не из `engine`: движок
+# тянет за собой весь стор и CLI, а расчёту шаблонов нужны две константы и три
+# чистые функции. Заодно исчезает кольцо `core → templates → engine → core`,
+# из-за которого прикладной слой не мог зависеть от этого модуля.
 import recurrence as rec
 import worktime
+from domain import names
+from domain.ru_dates import as_date, parse_date_input, parse_time_part
 
 SCHEMA = 1
 
@@ -104,7 +104,7 @@ def parse_offset(value):
 def parse_time_of_day(value):
     """Время контроля: «14:00», «9.30», «18-45» → time. Пусто → None.
 
-    Разбирает `engine.parse_time_part`, а не своя регулярка: заказчик набирает
+    Разбирает `domain.ru_dates.parse_time_part`, а не своя регулярка: заказчик набирает
     время одинаково в быстром вводе и в поле шага, и понимать их должно одно
     место. Расходится только трактовка непонятного значения: в «позвонить утром»
     движок времени не находит и ошибкой это не считает, а возвращает None и
@@ -120,7 +120,7 @@ def parse_time_of_day(value):
     s = str(value).strip()
     if not s:
         return None
-    время = engine.parse_time_part(s)
+    время = parse_time_part(s)
     if время is None:
         raise ValueError(f"не время: {value!r}")
     return время
@@ -224,7 +224,7 @@ def validate_template(data, existing_names=()):
     с путями во входных данных (`steps.1.offset_days`), чтобы форма нашла нужный
     ввод, ничего не переводя.
 
-    Предел длины и список запрещённых символов берутся у движка константами:
+    Предел длины и список запрещённых символов берутся из `domain.names` константами:
     название шаблона становится названием задачи, то есть именем файла в сторе.
     Второй такой список разошёлся бы с первым, и шаблон начал бы выдавать задачи,
     которые движок отказывается записать.
@@ -234,19 +234,19 @@ def validate_template(data, existing_names=()):
     name = str(data.get("name") or "").strip()
     if not name:
         errors.append({"field": "name", "error": "Название шаблона обязательно"})
-    elif len(name) > engine.MAX_TITLE:
+    elif len(name) > names.MAX_TITLE:
         errors.append({"field": "name",
-                       "error": f"Название длиннее {engine.MAX_TITLE} символов"})
-    elif set(name) & engine.FORBIDDEN_IN_NAME:
-        плохие = "".join(sorted(set(name) & engine.FORBIDDEN_IN_NAME))
+                       "error": f"Название длиннее {names.MAX_TITLE} символов"})
+    elif set(name) & names.FORBIDDEN_IN_NAME:
+        плохие = "".join(sorted(set(name) & names.FORBIDDEN_IN_NAME))
         errors.append({"field": "name",
                        "error": f"В названии нельзя символы {плохие} — "
                                 f"из шаблона получится имя файла"})
     elif any(name.lower() == str(n).strip().lower() for n in existing_names):
         errors.append({"field": "name", "error": "Шаблон с таким названием уже есть"})
     elif name != name.strip(". "):
-        # Правило переписано с engine.validate_new_task: константы для него
-        # движок не отдаёт, а сам метод требует уже развёрнутую задачу с датами.
+        # Правило повторяет `domain.names.title_error`, но с текстами про шаблон:
+        # тот метод сравнивает на дубль с задачами, а здесь список шаблонов.
         # Совпадение сторожит тест «имя с точкой отвергается как и в движке».
         # Без правила шаблон «Отчёт за квартал.» сохраняется, а созданная из него
         # задача падает у движка — через два экрана после опечатки.
@@ -361,7 +361,7 @@ def validate_template(data, existing_names=()):
                                "error": "Нужна дата, от которой считать первый цикл"})
             else:
                 try:
-                    анкер_дата = engine.as_date(engine.parse_date_input(якорь, engine.date.today()))
+                    анкер_дата = as_date(parse_date_input(якорь, date.today()))
                 except (ValueError, TypeError):
                     errors.append({"field": "recurrence.anchor",
                                    "error": "Дату не понял, нужен формат 2026-08-18"})
@@ -412,8 +412,7 @@ def normalize_template(data):
     повтор = None
     сырое_повторение = data.get("recurrence")
     if сырое_повторение:
-        якорь = engine.as_date(engine.parse_date_input(сырое_повторение["anchor"],
-                                                        engine.date.today()))
+        якорь = as_date(parse_date_input(сырое_повторение["anchor"], date.today()))
         правило = rec.normalize_rule(
             {k: v for k, v in сырое_повторение.items() if k != "anchor"}, start=якорь)
         # `until` возвращается объектом date — JSON его не сериализует. В строку

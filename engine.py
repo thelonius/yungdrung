@@ -60,6 +60,7 @@ import worktime  # noqa: E402
 # Здесь они реэкспортируются: тесты, `server.py` и `templates.py` зовут их как
 # `engine.parse_date_input` и `engine.is_closed`, и ломать эти адреса ради
 # переезда файла незачем — они уйдут вместе с самим `engine.py` в срезе 5.
+from domain.names import FORBIDDEN_IN_NAME, MAX_TITLE, title_error  # noqa: E402,F401
 from domain.ru_dates import (  # noqa: E402,F401
     ДНИ_НЕДЕЛИ, ОТНОСИТЕЛЬНЫЕ, as_date, parse_date_input, parse_stored_control,
     parse_time_part,
@@ -310,22 +311,6 @@ def cmd_next(args, today):
             "broken": list(BROKEN)}
 
 
-# После переезда на SQLite название задачи больше не имя файла — ограничение
-# сохранено, но теперь по другой причине. `|` занят синтаксисом piped-ссылок
-# базы знаний (`[[Название|как написано]]`), `\/:*?"<>` в названии задачи
-# нечитаемы и мешали бы будущим выгрузкам (Excel режет такие символы в именах
-# листов). Осознанное продуктовое правило, не отпечаток файловой системы.
-FORBIDDEN_IN_NAME = set('\\/:*?"<>|')
-
-# До 200 символов — раздел 6.3 ТЗ, число оттуда, не наша прикидка. Раньше здесь
-# стояло 120 «пока экран не резиновый» — соображение о вёрстке ленты, подменившее
-# собой число из требования. Вёрстку это не решало правильно: длинное название
-# просто переносилось на несколько строк, а не переставало влезать совсем. Кому
-# длинное название мешает — решает CSS обрезкой с многоточием (`.row-title` в
-# feed.css), а не запрет заказчику назвать задачу подробно.
-MAX_TITLE = 200
-
-
 def _parse_optional_date(raw, today, поле, errors):
     """Разобрать необязательную дату, добавить ошибку в список при провале.
 
@@ -458,22 +443,9 @@ def validate_new_task(data, existing_names, today):
     """
     errors = []
 
-    title = (data.get("title") or "").strip()
-    if not title:
-        errors.append({"field": "title", "error": "Название задачи обязательно"})
-    elif len(title) > MAX_TITLE:
-        errors.append({"field": "title",
-                       "error": f"Название длиннее {MAX_TITLE} символов"})
-    elif set(title) & FORBIDDEN_IN_NAME:
-        плохие = "".join(sorted(set(title) & FORBIDDEN_IN_NAME))
-        errors.append({"field": "title",
-                       "error": f"В названии нельзя символы {плохие}"})
-    elif title.lower() in {n.lower() for n in existing_names}:
-        errors.append({"field": "title",
-                       "error": "Задача с таким названием уже есть"})
-    elif title != title.strip(". "):
-        errors.append({"field": "title",
-                       "error": "Название не должно кончаться точкой или пробелом"})
+    ошибка_имени = title_error(data.get("title") or "", existing_names)
+    if ошибка_имени:
+        errors.append({"field": "title", "error": ошибка_имени})
 
     старт_задачи = _parse_optional_date(data.get("start_date"), today,
                                         "start_date", errors) or today
@@ -603,23 +575,12 @@ def validate_task_edit(task, data, existing_names, today):
     шагов и на чистой перестановке без единой правки дат ошибалась бы сама.
     """
     errors = []
-    title = (data.get("title") or "").strip()
+    # Дубль считается среди чужих названий: своё, вернувшееся из карточки
+    # без изменений, дублем не является.
     свои = {n for n in existing_names if n.lower() != task["path"].stem.lower()}
-    if not title:
-        errors.append({"field": "title", "error": "Название задачи обязательно"})
-    elif len(title) > MAX_TITLE:
-        errors.append({"field": "title",
-                       "error": f"Название длиннее {MAX_TITLE} символов"})
-    elif set(title) & FORBIDDEN_IN_NAME:
-        плохие = "".join(sorted(set(title) & FORBIDDEN_IN_NAME))
-        errors.append({"field": "title",
-                       "error": f"В названии нельзя символы {плохие}"})
-    elif title.lower() in {n.lower() for n in свои}:
-        errors.append({"field": "title",
-                       "error": "Задача с таким названием уже есть"})
-    elif title != title.strip(". "):
-        errors.append({"field": "title",
-                       "error": "Название не должно кончаться точкой или пробелом"})
+    ошибка_имени = title_error(data.get("title") or "", свои)
+    if ошибка_имени:
+        errors.append({"field": "title", "error": ошибка_имени})
 
     старт_задачи = _parse_optional_date(data.get("start_date"), today, "start_date",
                                         errors) or as_date(task["meta"].get("start_date")) \
