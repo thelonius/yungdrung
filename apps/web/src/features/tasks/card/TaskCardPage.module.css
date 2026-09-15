@@ -1,0 +1,54 @@
+.head { margin-bottom: 20px; display: flex; flex-direction: column; gap: 10px; }
+.headMeta { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; font-size: 14px; }
+.statusPill {
+  font-size: 12px; font-weight: 650; padding: 3px 10px; border-radius: 999px;
+  background: var(--focus); color: var(--muted); text-transform: none;
+}
+.statusPill[data-status="overdue"] { background: var(--danger-bg); color: var(--danger); }
+.statusPill[data-status="done"] { background: var(--ok); color: var(--accent-ink); }
+.statusPill[data-status="cancelled"] { background: var(--line); color: var(--muted); text-decoration: line-through; }
+.headActions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.cancelGroup { display: flex; gap: 6px; align-items: center; }
+.cancelGroup input { width: 220px; }
+.danger { border-color: var(--danger); color: var(--danger); }
+
+.fields { display: flex; flex-direction: column; gap: 14px; margin: 20px 0; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+
+.checklist, .checklist ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.checklist ol { padding-left: 22px; margin-top: 4px; }
+.row {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 8px 10px; cursor: pointer;
+}
+.row.focused { border-color: var(--accent); background: var(--focus); }
+.row.closed { opacity: .65; }
+.row.overdue { border-color: var(--danger); }
+.row.active:not(.closed) { border-left: 3px solid var(--accent); }
+.row.group { font-weight: 600; }
+.row.invalidRow { border-color: var(--danger); background: var(--danger-bg); }
+.groupMark { width: 18px; text-align: center; color: var(--muted); }
+.stepTitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stepMeta { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); white-space: nowrap; }
+.stalledTag { color: var(--danger); }
+.rowActions { display: flex; gap: 2px; }
+.editorRow { list-style: none; }
+.editor {
+  display: flex; flex-direction: column; gap: 12px;
+  background: var(--focus); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 12px; margin: 2px 0 6px;
+}
+.substepList { list-style: none; }
+
+.saveBar { display: flex; align-items: center; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
+.forceBox {
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-start;
+  background: var(--danger-bg); border: 1px solid var(--danger); border-radius: var(--radius);
+  padding: 10px 12px; margin: 12px 0;
+}
+
+.history { margin-top: 24px; }
+.historyList { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+
+.footer { margin-top: 28px; font-size: 13px; color: var(--muted); display: flex; gap: 14px; flex-wrap: wrap; }
