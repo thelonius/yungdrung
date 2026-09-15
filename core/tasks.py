@@ -62,6 +62,24 @@ def create_task(ctx: Context, data: dict, today, *, existing: list[str] | None =
     return task
 
 
+def create(ctx: Context, data: dict, today, now, work) -> TaskSaveResult:
+    """`POST /tasks`: `create_task` плюс карточка и мягкие предупреждения
+    (`steps_plan.soft_warnings`) в одном результате — как у `update_task`.
+
+    Раньше HTTP-слой (`api/v1/tasks.py`) считал `soft_warnings` сам, напрямую
+    импортируя `domain.steps_plan` — единственный обработчик среди
+    `api/v1/*.py`, так делавший, и единственный клиент `core.tasks.create_task`
+    (CLI, бот), которому эти предупреждения тоже нужны, был бы обязан
+    повторить тот же вызов у себя (находка ревью среза 2, api/v1/tasks.py:274).
+    Порядок как в исходном HTTP-коде: предупреждения считаются уже после
+    успешной записи, не раньше — ошибка валидации не должна тратить время на
+    них.
+    """
+    task = create_task(ctx, data, today)
+    warnings = steps_plan.soft_warnings(data, today)
+    return save_result(ctx, task, today, now, work, created=True, warnings=warnings)
+
+
 def quick_create(ctx: Context, text: str, today, now, work) -> TaskSaveResult:
     """Быстрый ввод одной строкой (Р8): один шаг, название шага = название
     задачи, дата — из `extract_when`, без распознанной — контроль сегодня.

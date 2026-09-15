@@ -56,6 +56,16 @@ def test_create_200_и_control_date_строкой_с_пробелом(client):
     assert d["card"]["steps"][0]["control_date"] == "2026-09-10 10:00"
 
 
+def test_create_200_несёт_мягкие_предупреждения_в_скобочном_пути(client):
+    r = client.post("/api/v1/tasks", params={"now": NOW}, json={
+        "title": "Заявка", "start_date": "2026-09-10",
+        "steps": [{"title": "A", "start_date": "2026-09-05", "control_date": "2026-09-12"}],
+    })
+    assert r.status_code == 200
+    assert r.json()["warnings"] == [{"field": "steps[0].start_date",
+                                     "warning": "Шаг начинается раньше даты начала задачи"}]
+
+
 def test_create_422_путь_ошибки_в_скобках(client):
     r = client.post("/api/v1/tasks", params={"now": NOW}, json={
         "title": "Задача", "steps": [
@@ -143,3 +153,61 @@ def test_resolve_404_на_чужом_названии(client):
 def test_quick_422_на_пустом_тексте(client):
     r = client.post("/api/v1/tasks/quick", params={"now": NOW}, json={"text": "  "})
     assert r.status_code == 422 and r.json()["errors"][0]["field"] == "text"
+
+
+# --- дубль названия: create и rename, на уровне HTTP -------------------------
+# §1.1 контракта требует «422 дубль названия (title)» и на `POST /tasks`, и
+# на `PUT /tasks/{task_id}` — раньше это было проверено только на уровне
+# `core.tasks` (`test_core_tasks.py`), мимо самого роутера (находка ревью
+# среза 2, tests/test_api_tasks.py:42).
+
+def test_create_дубль_названия_422_по_полю_title(client):
+    _create(client)
+    r = _create(client)
+    assert r.status_code == 422
+    assert r.json()["errors"][0]["field"] == "title"
+
+
+def test_put_переименование_в_занятое_имя_422_по_полю_title(client):
+    _create(client)
+    другая = _create(client, title="Второй грант").json()["task_id"]
+    r = client.put(f"/api/v1/tasks/{другая}", params={"now": NOW}, json={
+        "title": "Заявка на грант", "force": True,
+        "steps": [{"title": "Собрать документы", "control_date": "10.09"},
+                  {"title": "Отправить", "control_date": "15.09"}]})
+    assert r.status_code == 422
+    assert r.json()["errors"][0]["field"] == "title"
+
+
+# --- PUT без tags/body не трогает сохранённые значения -----------------------
+# `_edit_dict` (core/tasks.py) вырезает `tags`/`body`, когда они `None`, чтобы
+# правка карточки без этих полей не затирала прежние — контрактное поведение
+# (core/models_tasks.py), не проверенное ни одним тестом до сих пор (находка
+# ревью среза 2, core/tasks.py:262).
+
+def test_put_без_tags_и_body_сохраняет_прежние_значения(client):
+    tid = _create(client, tags=["важное"], body="Заметка про грант").json()["task_id"]
+    r = client.put(f"/api/v1/tasks/{tid}", params={"now": NOW}, json={
+        "title": "Заявка на грант", "force": True,
+        # ни "tags", ни "body" не переданы вовсе
+        "steps": [{"title": "Собрать документы", "control_date": "10.09"},
+                  {"title": "Отправить", "control_date": "15.09"}]})
+    assert r.status_code == 200, r.json()
+    card = r.json()["card"]
+    assert card["tags"] == ["важное"]
+    assert card["body"] == "Заметка про грант"
+
+
+# --- reopen: 404 на несуществующей задаче/шаге --------------------------------
+# §1.1 перечисляет «404 задача/шаг» отдельно от 422/409 — ни один тест не
+# проверял его на HTTP-уровне (находка ревью среза 2, tests/test_api_tasks.py:110).
+
+def test_reopen_несуществующей_задачи_404(client):
+    r = client.post("/api/v1/tasks/999999/steps/1/reopen", params={"now": NOW})
+    assert r.status_code == 404
+
+
+def test_reopen_несуществующего_шага_404(client):
+    tid = _create(client).json()["task_id"]
+    r = client.post(f"/api/v1/tasks/{tid}/steps/999999/reopen", params={"now": NOW})
+    assert r.status_code == 404

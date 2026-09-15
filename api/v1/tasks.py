@@ -20,7 +20,6 @@ from core.models_tasks import (
     CancelIn, CloseResult, PlanIn, PlanResult, PlannedStep, QuickIn, TaskCard, TaskDeleteResult,
     TaskEditIn, TaskIn, TaskRef, TaskSaveResult,
 )
-from domain import steps_plan
 
 router = APIRouter(prefix="/api/v1", tags=["tasks"])
 
@@ -48,12 +47,11 @@ def _bracket_plan(result: PlanResult) -> PlanResult:
 
 @router.post("/tasks", response_model=TaskSaveResult)
 def create(body: TaskIn, c: Context = Depends(ctx), now: datetime = Depends(moment)):
-    today = now.date()
-    data = body.model_dump()
-    task = core_tasks.create_task(c, data, today)
-    warnings = steps_plan.soft_warnings(data, today)
-    return _bracket_save_result(
-        core_tasks.save_result(c, task, today, now, c.work(), created=True, warnings=warnings))
+    # `core.tasks.create` считает мягкие предупреждения сама (Р1: оболочка не
+    # вычисляет) — этот маршрут раньше был единственным в `api/v1/*.py`,
+    # тянувшим `domain` напрямую ради этого (находка ревью среза 2,
+    # api/v1/tasks.py:274).
+    return _bracket_save_result(core_tasks.create(c, body.model_dump(), now.date(), now, c.work()))
 
 
 @router.post("/tasks/quick", response_model=TaskSaveResult)

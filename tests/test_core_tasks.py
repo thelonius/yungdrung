@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 from core import tasks as core_tasks  # noqa: E402
 from core.context import Context  # noqa: E402
 from core.errors import Conflict, NotFound, ValidationError  # noqa: E402
-from core.models_tasks import StepEditIn, TaskEditIn  # noqa: E402
+from core.models_tasks import PlanIn, StepEditIn, TaskEditIn  # noqa: E402
 
 TODAY = date(2026, 9, 8)
 NOW = datetime(2026, 9, 8, 11, 0)
@@ -34,6 +34,21 @@ def _create(ctx, title="Заявка на грант", steps=None, **fields):
                                                  "control_date": "10.09"}]}
     data.update(fields)
     return core_tasks.create_task(ctx, data, TODAY)
+
+
+def test_create_несёт_мягкие_предупреждения(ctx):
+    """`core.tasks.create` (не `create_task`) — путь `POST /tasks`: карточка
+    плюс `soft_warnings`, посчитанные здесь же, а не в HTTP-слое (находка
+    ревью среза 2, api/v1/tasks.py:274 — там раньше жил единственный прямой
+    импорт `domain` среди `api/v1/*.py`)."""
+    result = core_tasks.create(ctx, {
+        "title": "Заявка", "start_date": "2026-09-10",
+        "steps": [{"title": "A", "start_date": "2026-09-05", "control_date": "2026-09-12"}],
+    }, TODAY, NOW, ctx.work())
+    assert result.created
+    assert [w.model_dump() for w in result.warnings] == [
+        {"field": "steps.0.start_date",
+         "warning": "Шаг начинается раньше даты начала задачи"}]
 
 
 def test_create_task_возвращает_задачу_с_id(ctx):
@@ -179,3 +194,51 @@ def test_resolve_title_точное_совпадение(ctx):
     assert ref.task_id == task["path"].id
     with pytest.raises(NotFound):
         core_tasks.resolve_title(ctx, "грант")  # не точное — не находится
+
+
+def test_resolve_title_пустой_title_422(ctx):
+    """Ветка 422 §1.1 SLICE2_SPEC.md, не задетая ни одним из двух других
+    тестов на `resolve_title` (находка ревью среза 2, core/tasks.py:203)."""
+    with pytest.raises(ValidationError) as excinfo:
+        core_tasks.resolve_title(ctx, "   ")
+    assert excinfo.value.errors[0]["field"] == "title"
+
+
+# --- plan: режим правки (task_id) --------------------------------------------
+# Находка ревью среза 2 (core/tasks.py:225): ни один тест не вызывал
+# `core.tasks.plan` с заданным `task_id` — путь, который карточка задачи
+# держит стабильным при перетаскивании шагов (§5.5.10 SLICE2_SPEC.md). Тест
+# на `domain.steps_plan.plan(..., old=...)` (`test_steps_plan.py`) проверяет
+# только чистую функцию с готовым `old`, а не его сборку из загруженной
+# задачи и не дефолт `start` от `task['meta']['start_date']` — обе эти
+# склейки здесь.
+
+def test_plan_режима_правки_берёт_старт_задачи_и_старые_даты_начала(ctx):
+    task = _create(ctx, start_date="2026-09-01", steps=[
+        {"title": "Первый", "control_date": "2026-09-05"},
+        {"title": "Второй", "control_date": "2026-09-10"},
+    ])
+    sid1, sid2 = (s["id"] for s in task["meta"]["steps"])
+    assert task["meta"]["steps"][1]["start_date"] == date(2026, 9, 5), (
+        "предпосылка теста: старт второго шага изначально — контроль первого")
+
+    # `start_date` в запросе не задан: дефолт обязан взяться из сохранённого
+    # старта задачи (2026-09-01), а не из `today` вызова (module-level TODAY,
+    # 2026-09-08) — иначе форма правки молча подвинула бы начало задачи.
+    итог = core_tasks.plan(ctx, PlanIn(task_id=task["path"].id, steps=[
+        StepEditIn(id=sid1, title="Первый", control_date="2026-09-20"),
+        StepEditIn(id=sid2, title="Второй", control_date="2026-09-25"),
+    ]), TODAY, NOW)
+
+    assert итог.ok, итог.errors
+    первый, второй = итог.steps
+    assert первый.start == "2026-09-01"
+    # Второй лист держит СВОЙ сохранённый старт (2026-09-05), а не дефолт по
+    # новому порядку (который сдвинулся бы на новый контроль первого,
+    # 2026-09-20) — ровно то, ради чего `plan` собирает `old` из задачи.
+    assert второй.start == "2026-09-05"
+
+
+def test_plan_режима_правки_чужой_задачи_даёт_NotFound(ctx):
+    with pytest.raises(NotFound):
+        core_tasks.plan(ctx, PlanIn(task_id=999999, steps=[]), TODAY, NOW)
