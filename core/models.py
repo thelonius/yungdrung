@@ -116,3 +116,17 @@ class ReasonsResult(BaseModel):
     архивная причина для новой записи не годится, а в истории остаётся."""
 
     reasons: list[str]
+
+
+class CalendarDay(BaseModel):
+    """Клетка сетки месяца. `weekend` — по настройкам рабочего времени, а не по
+    номеру дня недели: при работе по выходным суббота рабочая. `controls` —
+    сколько активных шагов ждут контроля в этот день, по счёту ленты."""
+
+    date: str
+    weekend: bool
+    controls: int
+
+
+class CalendarResult(BaseModel):
+    days: list[CalendarDay]
