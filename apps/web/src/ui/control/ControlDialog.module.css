@@ -5,6 +5,9 @@
   background: var(--card); color: var(--ink);
   border: 1px solid var(--line); border-radius: 12px;
   padding: 20px 22px; box-shadow: 0 16px 48px rgba(0,0,0,.25);
+  /* С открытым календарём окно перерастает экран, и кнопка «Сохранить»
+     оказывалась за нижним краем. */
+  max-height: 76vh; overflow-y: auto;
 }
 .head { margin-bottom: 16px; }
 .progress { margin: 0 0 6px; font-size: 13px; color: var(--muted); }

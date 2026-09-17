@@ -101,11 +101,15 @@ export function MonthGrid({ value, onPick, onEscape, onCursor, today, containerR
     const цель = шаг(e, фокус, week.firstDay);
     if (цель) {
       e.preventDefault();
+      e.stopPropagation();
       перейти(цель);
       return;
     }
     if (e.key === 'Enter' || e.key === ' ') {
+      // Наверх не пускаем: поле даты живёт в диалоге, где Enter сохраняет, а
+      // здесь он означает «выбрать этот день», и только это.
       e.preventDefault();
+      e.stopPropagation();
       выбрать(фокус);
       return;
     }

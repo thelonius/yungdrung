@@ -7,7 +7,6 @@ import { FeedPage } from '@/features/feed/FeedPage';
 import { NewTaskPage } from '@/features/tasks/form/NewTaskPage';
 import { TaskCardPage } from '@/features/tasks/card/TaskCardPage';
 import { TemplatesPage } from '@/features/templates/TemplatesPage';
-import { PickerLabPage } from '@/features/lab/PickerLabPage';
 import { Layout } from './Layout';
 import { ResolveTaskRoute } from './ResolveTaskRoute';
 
@@ -23,8 +22,6 @@ export function AppRouter() {
         <Route path="/задача/:id" element={<TaskCardPage />} />
         <Route path="/задача" element={<ResolveTaskRoute />} />
         <Route path="/шаблоны" element={<TemplatesPage />} />
-        {/* Временный стенд выбора пикера даты, в шапку не вынесен. */}
-        <Route path="/пикеры" element={<PickerLabPage />} />
       </Route>
     </Routes>
   );
