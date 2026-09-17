@@ -104,6 +104,58 @@
     }
    }
   },
+  "/api/v1/calendar": {
+   "get": {
+    "tags": [
+     "v1"
+    ],
+    "summary": "Calendar",
+    "description": "Сетка для пикера даты. Диапазон приходит машинными датами, потому что\nего считает сам пикер, а не человек.",
+    "operationId": "calendar_api_v1_calendar_get",
+    "parameters": [
+     {
+      "name": "from",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "From"
+      }
+     },
+     {
+      "name": "to",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "To"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/CalendarResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
   "/api/v1/tasks/{task_id}/steps/{step_id}/mark": {
    "post": {
     "tags": [
@@ -2442,6 +2494,46 @@
      "file"
     ],
     "title": "Body_template_attach_api_v1_templates__name__attachments_post"
+   },
+   "CalendarDay": {
+    "properties": {
+     "date": {
+      "type": "string",
+      "title": "Date"
+     },
+     "weekend": {
+      "type": "boolean",
+      "title": "Weekend"
+     },
+     "controls": {
+      "type": "integer",
+      "title": "Controls"
+     }
+    },
+    "type": "object",
+    "required": [
+     "date",
+     "weekend",
+     "controls"
+    ],
+    "title": "CalendarDay",
+    "description": "Клетка сетки месяца. `weekend` — по настройкам рабочего времени, а не по\nномеру дня недели: при работе по выходным суббота рабочая. `controls` —\nсколько активных шагов ждут контроля в этот день, по счёту ленты."
+   },
+   "CalendarResult": {
+    "properties": {
+     "days": {
+      "items": {
+       "$ref": "#/components/schemas/CalendarDay"
+      },
+      "type": "array",
+      "title": "Days"
+     }
+    },
+    "type": "object",
+    "required": [
+     "days"
+    ],
+    "title": "CalendarResult"
    },
    "CancelIn": {
     "properties": {

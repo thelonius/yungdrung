@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from api.deps import ctx, moment
+from core import calendar as core_calendar
 from core import dates as core_dates
 from core import feed as core_feed
 from core import mark as core_mark
@@ -11,8 +12,8 @@ from core import search as core_search
 from core.context import Context
 from core.errors import ValidationError
 from core.models import (
-    BacklogResult, ExtractResult, FeedResult, MarkResult, ReasonsResult, SearchResult,
-    WhenResult,
+    BacklogResult, CalendarResult, ExtractResult, FeedResult, MarkResult, ReasonsResult,
+    SearchResult, WhenResult,
 )
 from domain.ru_dates import parse_date_input
 
@@ -52,6 +53,14 @@ def feed(c: Context = Depends(ctx), now: datetime = Depends(moment)):
 @router.get("/backlog", response_model=BacklogResult)
 def backlog(c: Context = Depends(ctx), now: datetime = Depends(moment)):
     return core_feed.backlog(c, now, c.work())
+
+
+@router.get("/calendar", response_model=CalendarResult)
+def calendar(from_: str = Query(alias="from"), to: str = Query(),
+             c: Context = Depends(ctx)):
+    """Сетка для пикера даты. Диапазон приходит машинными датами, потому что
+    его считает сам пикер, а не человек."""
+    return core_calendar.days(c, from_, to, c.work())
 
 
 @router.post("/tasks/{task_id}/steps/{step_id}/mark", response_model=MarkResult)
