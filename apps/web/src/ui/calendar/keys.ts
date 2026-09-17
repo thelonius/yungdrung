@@ -11,20 +11,28 @@
 import { addDays, nextMonday } from './days';
 
 export type Быстрая = {
+  /** Место на клавиатуре. По нему и опознаём: раскладку переключать не надо. */
   code: string;
   keys: string[];
+  /** Что написано на кнопке в латинской раскладке и в русской. */
   label: string;
+  ru: string;
   hint: string;
   from: (today: Date) => Date;
 };
 
 export const БЫСТРЫЕ: Быстрая[] = [
-  { code: 'KeyS', keys: ['s', 'ы'], label: 's', hint: 'сегодня', from: (t) => t },
-  { code: 'KeyZ', keys: ['z', 'я'], label: 'z', hint: 'завтра', from: (t) => addDays(t, 1) },
-  { code: 'KeyP', keys: ['p', 'з'], label: 'p', hint: 'понедельник', from: nextMonday },
-  { code: 'KeyW', keys: ['w', 'ц'], label: 'w', hint: 'через неделю', from: (t) => addDays(t, 7) },
+  { code: 'KeyS', keys: ['s', 'ы'], label: 's', ru: 'ы', hint: 'сегодня', from: (t) => t },
+  { code: 'KeyZ', keys: ['z', 'я'], label: 'z', ru: 'я', hint: 'завтра', from: (t) => addDays(t, 1) },
+  { code: 'KeyP', keys: ['p', 'з'], label: 'p', ru: 'з', hint: 'понедельник', from: nextMonday },
+  { code: 'KeyW', keys: ['w', 'ц'], label: 'w', ru: 'ц', hint: 'через неделю', from: (t) => addDays(t, 7) },
 ];
 
 export function быстраяПоСобытию(e: { code?: string; key: string }): Быстрая | undefined {
   return БЫСТРЫЕ.find((б) => (e.code ? б.code === e.code : б.keys.includes(e.key.toLowerCase())));
 }
+
+/** Строки для `useHotkeys`: он сравнивает по `event.code`, поэтому раскладка
+ *  роли не играет — это то же правило, по которому работают клавиши ленты. */
+export const СТРОКА_БЫСТРЫХ = БЫСТРЫЕ.map((б) => б.label).join(', ');
+export const СТРОКА_БЫСТРЫХ_ALT = БЫСТРЫЕ.map((б) => `alt+${б.label}`).join(', ');

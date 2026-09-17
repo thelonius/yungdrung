@@ -27,3 +27,8 @@
 .rdpBox :global(.rdp-caption_label) { font-weight: 650; }
 .rdpWeekend:not(:global(.rdp-selected)) { color: var(--danger); }
 .live { margin: 6px 0 0; font-size: 13px; color: var(--ink); }
+
+.badge {
+  font-size: 11px; font-weight: 600; color: var(--accent-ink); background: var(--accent);
+  border-radius: 100px; padding: 2px 8px; vertical-align: middle; margin-left: 6px;
+}

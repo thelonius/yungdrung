@@ -20,4 +20,5 @@
 .picked { background: var(--accent); border-color: var(--accent); }
 .picked, .picked.weekend { color: var(--accent-ink); }
 .live { margin: 2px 0 0; font-size: 13px; color: var(--ink); }
+.slash { opacity: .5; margin: 0 1px; }
 .keys { display: flex; flex-wrap: wrap; gap: 3px 10px; margin: 2px 0 0; font-size: 12px; color: var(--muted); }

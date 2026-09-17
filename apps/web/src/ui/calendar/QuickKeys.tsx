@@ -1,6 +1,10 @@
 // Легенда быстрых клавиш под сеткой: человек не обязан помнить буквы, он их
 // видит. Отдельным файлом от `keys.ts` — там только данные, и смешанный
 // экспорт ломал бы горячую перезагрузку (react-refresh).
+//
+// На кнопке подписаны обе крышки, латинская и русская: опознаётся место на
+// клавиатуре, поэтому раскладку переключать не нужно, а глазами человек
+// ищет ту букву, которая у него сейчас нарисована.
 import { БЫСТРЫЕ } from './keys';
 import styles from './MonthGrid.module.css';
 
@@ -9,7 +13,9 @@ export function QuickKeys() {
     <>
       <p className={styles.keys}>
         {БЫСТРЫЕ.map((б) => (
-          <span key={б.label}><kbd>{б.label}</kbd> {б.hint}</span>
+          <span key={б.label}>
+            <kbd>{б.label}</kbd><span className={styles.slash}>/</span><kbd>{б.ru}</kbd> {б.hint}
+          </span>
         ))}
       </p>
       <p className={styles.keys}>
@@ -19,7 +25,8 @@ export function QuickKeys() {
         <span><kbd>Esc</kbd> назад в поле</span>
       </p>
       <p className={styles.keys}>
-        <span>пока курсор в поле, те же буквы работают с <kbd>Alt</kbd></span>
+        <span>буквы работают с любым фокусом и любой раскладкой; пока курсор
+          в поле — те же кнопки с <kbd>Alt</kbd></span>
       </p>
     </>
   );

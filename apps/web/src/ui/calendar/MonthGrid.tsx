@@ -11,7 +11,6 @@ import {
   monthGrid, weekdayNames, weekInfo, weekStart,
 } from './days';
 import { QuickKeys } from './QuickKeys';
-import { быстраяПоСобытию } from './keys';
 import styles from './MonthGrid.module.css';
 
 type Props = {
@@ -54,8 +53,13 @@ export function MonthGrid({ value, onPick, onEscape, today, containerRef }: Prop
   const дата = выбрано ? iso(выбрано) : null;
   useEffect(() => {
     const d = fromIso(дата);
-    if (d) setФокус(d);
-  }, [дата]);
+    if (!d) return;
+    setФокус(d);
+    // Дату могли выбрать снаружи — быстрой клавишей, которую ловит обвязка.
+    // Если курсор при этом стоял в сетке, он обязан переехать на новый день:
+    // иначе стрелки поедут от прежнего, а подсвечен будет новый.
+    if (коробка.current?.contains(document.activeElement)) вести.current = true;
+  }, [дата, коробка]);
 
   // Фокус в DOM переносим только после клавиши. Иначе сетка отбирала бы его
   // у текстового поля на каждое нажатие, пока человек печатает дату.
@@ -97,15 +101,7 @@ export function MonthGrid({ value, onPick, onEscape, today, containerRef }: Prop
       выбрать(фокус);
       return;
     }
-    if (e.key === 'Escape') {
-      onEscape?.();
-      return;
-    }
-    const быстрая = быстраяПоСобытию(e);
-    if (быстрая) {
-      e.preventDefault();
-      выбрать(быстрая.from(сегодня));
-    }
+    if (e.key === 'Escape') onEscape?.();
   }
 
   const дни = monthGrid(фокус, week.firstDay);

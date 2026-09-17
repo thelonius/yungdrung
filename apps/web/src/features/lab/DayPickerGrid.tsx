@@ -10,7 +10,6 @@ import { ru } from 'react-day-picker/locale';
 import 'react-day-picker/style.css';
 import { dayLabel, fromIso, iso } from '@/ui/calendar/days';
 import { QuickKeys } from '@/ui/calendar/QuickKeys';
-import { быстраяПоСобытию } from '@/ui/calendar/keys';
 import styles from './PickerLab.module.css';
 
 type Props = {
@@ -40,18 +39,7 @@ export function DayPickerGrid({ value, onPick, onEscape, today, containerRef }: 
   }, [ключ]);
 
   function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
-    if (e.key === 'Escape') {
-      onEscape?.();
-      return;
-    }
-    if (e.altKey || e.ctrlKey || e.metaKey) return;  // Alt-сочетания у родителя
-    const быстрая = быстраяПоСобытию(e);
-    if (быстрая) {
-      e.preventDefault();
-      const d = быстрая.from(сегодня);
-      setМесяц(d);
-      onPick(iso(d));
-    }
+    if (e.key === 'Escape') onEscape?.();
   }
 
   return (

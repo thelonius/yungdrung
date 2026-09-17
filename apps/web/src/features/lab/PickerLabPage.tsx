@@ -7,11 +7,12 @@
 // поле. Сравнивается ровно сетка месяца.
 import { Suspense, lazy, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useHotkeys } from 'react-hotkeys-hook';
 import type { WhenResult } from '@/api/client';
 import { DateField } from '@/ui/DateField';
 import { MonthGrid } from '@/ui/calendar/MonthGrid';
 import { iso } from '@/ui/calendar/days';
-import { быстраяПоСобытию } from '@/ui/calendar/keys';
+import { БЫСТРЫЕ, СТРОКА_БЫСТРЫХ, СТРОКА_БЫСТРЫХ_ALT } from '@/ui/calendar/keys';
 import styles from './PickerLab.module.css';
 
 const DayPickerGrid = lazy(() =>
@@ -24,8 +25,9 @@ type GridProps = {
   containerRef?: React.RefObject<HTMLDivElement | null>;
 };
 
-function Колонка({ title, note, cost, grid }: {
+function Колонка({ title, note, cost, grid, активна, onActivate }: {
   title: string; note: string; cost: string; grid: (p: GridProps) => ReactNode;
+  активна: boolean; onActivate: () => void;
 }) {
   const [текст, setТекст] = useState('');
   const [разбор, setРазбор] = useState<WhenResult | null>(null);
@@ -33,29 +35,39 @@ function Колонка({ title, note, cost, grid }: {
   const коробка = useRef<HTMLDivElement>(null);
   const id = useId();
 
-  /** Клавиши всей колонки, а не только сетки.
+  /** Быстрые клавиши ловим на документе, как ленты и карточка ловят свои:
+   *  раньше они висели на календаре, и пока фокус не побывал внутри него,
+   *  ловить нажатие было некому — открыл страницу, жмёшь буквы, тишина.
    *
-   *  Стрелка вниз из поля уводит в календарь — обычный приём для поля с
-   *  выпадающим списком; обратно оттуда Escape. Быстрые буквы с Alt работают
-   *  где угодно, включая само поле: голая буква там — это буква, её нельзя
-   *  отнять у ввода «завтра в полдесятого». */
-  function клавиши(e: React.KeyboardEvent<HTMLElement>) {
-    if (e.altKey && !e.ctrlKey && !e.metaKey) {
-      const быстрая = быстраяПоСобытию(e);
-      if (быстрая) {
-        e.preventDefault();
-        setТекст(iso(быстрая.from(new Date())));
-      }
-      return;
-    }
+   *  `useHotkeys` сравнивает `event.code`, то есть место на клавиатуре:
+   *  раскладку переключать не нужно ни здесь, ни в остальном приложении.
+   *  Голая буква молчит, пока курсор в текстовом поле (там она буква — ввод
+   *  «завтра в полдесятого» важнее), и для этого случая есть Alt. */
+  const выбратьБыструю = (label: string) => {
+    const быстрая = БЫСТРЫЕ.find((б) => б.label === label);
+    if (быстрая) setТекст(iso(быстрая.from(new Date())));
+  };
+  useHotkeys(СТРОКА_БЫСТРЫХ, (_, h) => выбратьБыструю(String(h.keys?.[0] ?? '')),
+             { enabled: активна, preventDefault: true }, [активна]);
+  useHotkeys(СТРОКА_БЫСТРЫХ_ALT, (_, h) => выбратьБыструю(String(h.keys?.[0] ?? '')),
+             { enabled: активна, preventDefault: true, enableOnFormTags: true }, [активна]);
+
+  /** Стрелка вниз из поля уводит в календарь — обычный приём для поля с
+   *  выпадающим списком; обратно оттуда Escape. */
+  function вниз(e: React.KeyboardEvent<HTMLElement>) {
     if (e.key !== 'ArrowDown' || e.target !== поле.current) return;
     e.preventDefault();
     коробка.current?.querySelector<HTMLButtonElement>('button[tabindex="0"]')?.focus();
   }
 
   return (
-    <section className={styles.col} onKeyDownCapture={клавиши}>
-      <h2>{title}</h2>
+    <section
+      className={styles.col}
+      onKeyDownCapture={вниз}
+      onFocusCapture={onActivate}
+      onMouseDown={onActivate}
+    >
+      <h2>{title} {активна && <span className={styles.badge}>клавиши сюда</span>}</h2>
       <p className="note">{note}</p>
       <DateField
         id={id}
@@ -84,6 +96,9 @@ function Колонка({ title, note, cost, grid }: {
 }
 
 export function PickerLabPage() {
+  // На стенде два пикера сразу, а в бою он один. Чтобы буквы не срабатывали
+  // в обеих колонках разом, они уходят в ту, которой последний раз касались.
+  const [активная, setАктивная] = useState(0);
   return (
     <div className="wrap" style={{ maxWidth: 1040 }}>
       <h1>Пикер даты: два прототипа</h1>
@@ -95,12 +110,16 @@ export function PickerLabPage() {
       </p>
       <div className={styles.cols}>
         <Колонка
+          активна={активная === 0}
+          onActivate={() => setАктивная(0)}
           title="Свой на Intl"
           note="250 строк, ноль зависимостей. Названия месяцев и дней — из браузера."
           cost="Цена: наш код. Клавиатуру и роли пишем и чиним сами."
           grid={(p) => <MonthGrid {...p} />}
         />
         <Колонка
+          активна={активная === 1}
+          onActivate={() => setАктивная(1)}
           title="react-day-picker 10"
           note="30 млн загрузок в неделю, тянет date-fns и @date-fns/tz."
           cost="Цена: 23 КБ в gzip и ломающий мажор примерно раз в два года."
