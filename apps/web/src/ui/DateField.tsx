@@ -13,6 +13,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 import { api } from '@/api/client';
 import type { WhenResult } from '@/api/client';
+import { useCalendar } from '@/api/hooks';
 import { MonthGrid } from './calendar/MonthGrid';
 import { fromIso, iso } from './calendar/days';
 import { СТРОКА_БЫСТРЫХ, СТРОКА_БЫСТРЫХ_ALT, быстраяПоКнопке } from './calendar/keys';
@@ -74,6 +75,11 @@ export function DateField({
   // ответа сервера на предыдущее, и два «+неделя» подряд дали бы один день.
   const курсор = useRef<string | null>(null);
   const подсказкаId = useId();
+  // Какие дни показывает сетка: по ним спрашиваем у ядра выходные заказчика и
+  // занятость. Пока календарь закрыт, не спрашиваем вовсе.
+  const [диапазон, setДиапазон] = useState<{ от: string; до: string } | null>(null);
+  const раскраска = useCalendar(открыт ? диапазон?.от ?? null : null,
+                                открыт ? диапазон?.до ?? null : null);
 
   useEffect(() => {
     window.clearTimeout(timer.current);
@@ -219,6 +225,8 @@ export function DateField({
           value={разобрано}
           onPick={(d) => { поставить(new Date(`${d}T00:00:00`)); закрыть(); }}
           onCursor={(d) => { курсор.current = d; }}
+          onRange={(от, до) => setДиапазон({ от, до })}
+          marks={раскраска.data}
           containerRef={сетка}
         />
       )}

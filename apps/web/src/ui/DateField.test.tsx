@@ -2,10 +2,23 @@
 // таймера в `DateField` не хватало — улетевший запрос доживал до ответа.
 // Поймано на стенде пикеров: очередь быстрых клавиш (z, потом w) оставляла
 // в поле «2026-09-24», а под полем «завтра».
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, render as renderRaw, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ReactNode } from 'react';
 import { DateField } from './DateField';
+
+/** Поле спрашивает у ядра раскраску сетки, поэтому ему нужен клиент запросов.
+ *  Повторов не делаем: тест не должен ждать их впустую. */
+function render(ui: ReactNode) {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const обёртка = (что: ReactNode) => <QueryClientProvider client={qc}>{что}</QueryClientProvider>;
+  const итог = renderRaw(обёртка(ui));
+  // `rerender` из библиотеки подменяет корень целиком, вместе с провайдером,
+  // поэтому оборачиваем и его.
+  return { ...итог, rerender: (следующий: ReactNode) => итог.rerender(обёртка(следующий)) };
+}
 
 type Ответ = { текст: string; задержка: number };
 

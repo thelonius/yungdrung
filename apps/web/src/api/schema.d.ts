@@ -38,6 +38,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/calendar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Calendar
+         * @description Сетка для пикера даты. Диапазон приходит машинными датами, потому что
+         *     его считает сам пикер, а не человек.
+         */
+        get: operations["calendar_api_v1_calendar_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tasks/{task_id}/steps/{step_id}/mark": {
         parameters: {
             query?: never;
@@ -650,6 +671,25 @@ export interface components {
             file: string;
             /** Caption */
             caption?: string | null;
+        };
+        /**
+         * CalendarDay
+         * @description Клетка сетки месяца. `weekend` — по настройкам рабочего времени, а не по
+         *     номеру дня недели: при работе по выходным суббота рабочая. `controls` —
+         *     сколько активных шагов ждут контроля в этот день, по счёту ленты.
+         */
+        CalendarDay: {
+            /** Date */
+            date: string;
+            /** Weekend */
+            weekend: boolean;
+            /** Controls */
+            controls: number;
+        };
+        /** CalendarResult */
+        CalendarResult: {
+            /** Days */
+            days: components["schemas"]["CalendarDay"][];
         };
         /** CancelIn */
         CancelIn: {
@@ -1605,6 +1645,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BacklogResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    calendar_api_v1_calendar_get: {
+        parameters: {
+            query: {
+                from: string;
+                to: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CalendarResult"];
                 };
             };
             /** @description Validation Error */

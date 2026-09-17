@@ -10,9 +10,15 @@
 .grid th { font-size: 12px; font-weight: 600; color: var(--muted); padding-bottom: 4px; }
 .grid td { padding: 1px; }
 .day {
-  width: 100%; padding: 7px 0; border: 1px solid transparent; border-radius: 6px;
+  width: 100%; padding: 5px 0 3px; border: 1px solid transparent; border-radius: 6px;
   background: transparent; font-variant-numeric: tabular-nums; line-height: 1.1;
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
 }
+/* Сколько контролей уже стоит на этом дне: видно, что на четверг навешано
+   пять штук, и лучше выбрать пятницу. */
+.count { font-size: 9px; line-height: 1; color: var(--muted); }
+.picked .count { color: var(--accent-ink); }
+.day:not(:has(.count)) { padding-bottom: 13px; }
 .day:hover { background: var(--focus); }
 .outside { opacity: .45; }
 .weekend { color: var(--danger); }

@@ -21,6 +21,13 @@ type Props = {
   /** Где стоит курсор — наружу, чтобы шаговые клавиши («+неделя») считались
    *  от него, а не от сегодня. Клавиши ловит обвязка, сетка их не знает. */
   onCursor?: (date: string) => void;
+  /** Какие дни сейчас видны: по этому диапазону обвязка спрашивает у ядра
+   *  раскраску. */
+  onRange?: (from: string, to: string) => void;
+  /** Что ядро знает про эти дни: выходной ли он по настройкам заказчика
+   *  (а не по номеру дня недели) и сколько контролей уже стоит. Пока ответа
+   *  нет, выходные показываются календарные — из локали. */
+  marks?: Map<string, { weekend: boolean; controls: number }>;
   today?: Date;
   containerRef?: React.RefObject<HTMLDivElement | null>;
 };
@@ -41,7 +48,9 @@ function шаг(e: React.KeyboardEvent, от: Date, firstDay: number): Date | nu
   }
 }
 
-export function MonthGrid({ value, onPick, onEscape, onCursor, today, containerRef }: Props) {
+export function MonthGrid({
+  value, onPick, onEscape, onCursor, onRange, marks, today, containerRef,
+}: Props) {
   const week = useMemo(() => weekInfo('ru'), []);
   const сегодня = useMemo(() => today ?? new Date(), [today]);
   const выбрано = fromIso(value);
@@ -65,8 +74,8 @@ export function MonthGrid({ value, onPick, onEscape, onCursor, today, containerR
   }, [дата, коробка]);
 
   const место = iso(фокус);
-  // Следим только за самим днём: onCursor — колбэк родителя, он меняется на
-  // каждом рендере, и гонять эффект из-за этого незачем.
+  // Следим только за самими днями: onCursor и onRange — колбэки родителя, они
+  // меняются на каждом рендере, и гонять эффект из-за этого незачем.
   useEffect(() => { onCursor?.(место); }, [место]);
 
   // Фокус в DOM переносим только после клавиши. Иначе сетка отбирала бы его
@@ -118,6 +127,11 @@ export function MonthGrid({ value, onPick, onEscape, onCursor, today, containerR
 
   const дни = monthGrid(фокус, week.firstDay);
   const недели = Array.from({ length: 6 }, (_, i) => дни.slice(i * 7, i * 7 + 7));
+  const от = iso(дни[0]);
+  const до = iso(дни[41]);
+  // Ранних выходов в компоненте нет, поэтому эффект здесь — после того, как
+  // стало известно, какие дни видны.
+  useEffect(() => { onRange?.(от, до); }, [от, до]);
 
   return (
     <div className={styles.box} ref={коробка} onKeyDown={onKeyDown}>
@@ -144,10 +158,15 @@ export function MonthGrid({ value, onPick, onEscape, onCursor, today, containerR
                 const ключ = iso(d);
                 const выбран = ключ === дата;
                 const нынешний = ключ === iso(сегодня);
+                const знает = marks?.get(ключ);
+                // Выходной по настройкам заказчика, если ядро уже ответило;
+                // до ответа — календарный, из локали.
+                const выходной = знает?.weekend ?? week.weekend.includes(isoDay(d));
+                const занят = знает?.controls ?? 0;
                 const класс = [
                   styles.day,
                   d.getMonth() === фокус.getMonth() ? '' : styles.outside,
-                  week.weekend.includes(isoDay(d)) ? styles.weekend : '',
+                  выходной ? styles.weekend : '',
                   нынешний ? styles.today : '',
                   выбран ? styles.picked : '',
                 ].filter(Boolean).join(' ');
@@ -158,11 +177,16 @@ export function MonthGrid({ value, onPick, onEscape, onCursor, today, containerR
                       data-day={ключ}
                       className={класс}
                       tabIndex={ключ === iso(фокус) ? 0 : -1}
-                      aria-label={dayLabel(d)}
+                      aria-label={
+                        dayLabel(d)
+                        + (выходной ? ', выходной' : '')
+                        + (занят ? `, контролей: ${занят}` : '')
+                      }
                       aria-current={нынешний ? 'date' : undefined}
                       onClick={() => выбрать(d)}
                     >
                       {d.getDate()}
+                      {занят > 0 && <span className={styles.count}>{занят}</span>}
                     </button>
                   </td>
                 );
