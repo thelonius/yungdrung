@@ -1,0 +1,28 @@
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px; align-items: start; }
+.col { display: flex; flex-direction: column; gap: 10px; }
+.col h2 { margin: 0; font-size: 17px; }
+.col > .note { margin: 0; }
+.out { margin: 0; font-size: 14px; }
+.out b { font-weight: 650; }
+.cost { font-size: 13px; color: var(--muted); margin: 0; }
+
+/* Палитра react-day-picker сведена к нашим токенам: иначе сравнение
+   превратилось бы в спор о цвете, а не о клавиатуре. */
+.rdpBox { border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 12px 12px; background: var(--card); }
+.rdpBox :global(.rdp-root) {
+  --rdp-accent-color: var(--accent);
+  --rdp-accent-background-color: var(--accent);
+  --rdp-today-color: var(--ink);
+  --rdp-day-height: 34px;
+  --rdp-day-width: 34px;
+  --rdp-day_button-height: 32px;
+  --rdp-day_button-width: 32px;
+  --rdp-selected-border: 1px solid var(--accent);
+  font-size: 15px;
+}
+.rdpBox :global(.rdp-selected .rdp-day_button) { background: var(--accent); color: var(--accent-ink); border-radius: 6px; }
+.rdpBox :global(.rdp-outside) { opacity: .45; }
+.rdpBox :global(.rdp-weekday) { color: var(--muted); font-size: 12px; text-transform: none; }
+.rdpBox :global(.rdp-caption_label) { font-weight: 650; }
+.rdpWeekend:not(:global(.rdp-selected)) { color: var(--danger); }
+.live { margin: 6px 0 0; font-size: 13px; color: var(--ink); }

@@ -1,0 +1,22 @@
+.box {
+  display: flex; flex-direction: column; gap: 8px;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 10px 12px 12px; background: var(--card);
+}
+.head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.caption { font-weight: 650; }
+.grid { border-collapse: collapse; width: 100%; table-layout: fixed; }
+.grid th { font-size: 12px; font-weight: 600; color: var(--muted); padding-bottom: 4px; }
+.grid td { padding: 1px; }
+.day {
+  width: 100%; padding: 7px 0; border: 1px solid transparent; border-radius: 6px;
+  background: transparent; font-variant-numeric: tabular-nums; line-height: 1.1;
+}
+.day:hover { background: var(--focus); }
+.outside { opacity: .45; }
+.weekend { color: var(--danger); }
+.today { border-color: var(--line-strong); font-weight: 700; }
+.picked { background: var(--accent); border-color: var(--accent); }
+.picked, .picked.weekend { color: var(--accent-ink); }
+.live { margin: 2px 0 0; font-size: 13px; color: var(--ink); }
+.keys { display: flex; flex-wrap: wrap; gap: 3px 10px; margin: 2px 0 0; font-size: 12px; color: var(--muted); }
