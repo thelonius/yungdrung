@@ -7,23 +7,29 @@
 from datetime import date, datetime
 
 from core.models import ExtractResult, WhenResult
-from domain.ru_dates import as_date, extract_when, parse_date_input
+from domain.ru_dates import as_date, extract_when, parse_date_input, weekday_name
 
 НЕ_ПОНЯЛ = "Дату не понял. Можно: 18.08 · 15 марта · завтра · +3 · пн · полдесятого · через час"
 
 
 def describe(parsed, today: date) -> tuple[str, bool]:
     """Подпись к разобранной дате: «сегодня», «завтра», иначе число и сколько
-    дней до него; время добавляется, если было."""
+    дней до него; время добавляется, если было.
+
+    День недели называется всегда. Вопрос «а какой это день» человек задаёт
+    себе на каждом контроле: попасть им в субботу или на день, когда и так
+    некуда, видно только по названию. Считается здесь, а не в браузере, —
+    оболочка не пересказывает данные ядра своими словами (CONTRACT.md).
+    """
     день = as_date(parsed)
     дни = (день - today).days
-    подпись = {0: "сегодня", 1: "завтра", 2: "послезавтра"}.get(дни)
-    if подпись is None:
-        подпись = f"{день:%d.%m.%Y}, " + (
-            f"через {дни} дн." if дни > 0 else f"{-дни} дн. назад")
+    имя = {0: "сегодня", 1: "завтра", 2: "послезавтра"}.get(дни)
+    части = [имя or f"{день:%d.%m.%Y}", weekday_name(день)]
     if isinstance(parsed, datetime):
-        подпись = f"{подпись} в {parsed:%H:%M}"
-    return подпись, дни < 0
+        части.append(f"в {parsed:%H:%M}")
+    if имя is None:
+        части.append(f"через {дни} дн." if дни > 0 else f"{-дни} дн. назад")
+    return ", ".join(части), дни < 0
 
 
 def parse_when(text, today: date, now: datetime | None = None) -> WhenResult:

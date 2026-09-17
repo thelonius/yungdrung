@@ -25,18 +25,26 @@ STATIC = Path(__file__).resolve().parent.parent / "static"
 DIST = Path(__file__).resolve().parent.parent / "apps" / "web" / "dist"
 
 # Пользовательские маршруты по-русски — их видит человек, они не меняются
-# (решение в REFACTOR.md). Пока страницы старые; новое приложение занимает `/`
-# в срезе 1c, старая лента переезжает на `/старая`.
+# (решение в REFACTOR.md). Здесь — те разделы, что ещё живут страницами из
+# `static/`; переехавшие в `apps/web` перечислены ниже.
 PAGES = {
-    "/старая": "feed.html", "/новая": "index.html",
-    "/шаблоны": "templates.html", "/задача": "task.html", "/настройки": "settings.html",
+    "/старая": "feed.html", "/настройки": "settings.html",
     "/архив": "archive.html", "/задачи": "list.html", "/база": "kb.html",
     "/база/запись": "kb-note.html",
 }
-# Лента — новое приложение (`apps/web/dist`, срез 1c принят 2026-09-08). Нет
-# сборки — отдаётся прежняя страница: трекер работает и до первого
-# `tools/update.py`, просто без клавиатуры и отмены.
-FEED_ROUTES = ("/", "/лента")
+# Разделы нового клиента: лента переехала в срезе 1c, форма, карточка и
+# шаблоны — в срезе 2. На все отдаётся одна и та же страница приложения,
+# адрес дальше разбирает роутер в браузере.
+#
+# Значение — прежняя страница на случай, когда сборки ещё нет: трекер должен
+# работать и до первого `tools/update.py`, просто без клавиатуры и отмены.
+SPA_ROUTES = {
+    "/": "feed.html", "/лента": "feed.html",
+    "/новая": "index.html", "/шаблоны": "templates.html",
+    # Без сегмента — старые ссылки вида `/задача?name=...`, их разбирает
+    # `ResolveTaskRoute` и меняет адрес на `/задача/<id>` первым переходом.
+    "/задача": "task.html",
+}
 
 app = FastAPI(title="Yungdrung", version="1",
               description="Трекер задач с последовательными шагами и контрольным временем. "
@@ -71,15 +79,27 @@ def _static(name: str, media_type: str):
                         headers={"X-Content-Type-Options": "nosniff"})
 
 
-def _feed_page():
+def _app_page(fallback: str):
     if (DIST / "index.html").is_file():
         return FileResponse(DIST / "index.html", media_type="text/html; charset=utf-8",
                             headers={"X-Content-Type-Options": "nosniff"})
-    return _static("feed.html", "text/html; charset=utf-8")
+    return _static(fallback, "text/html; charset=utf-8")
 
 
-for _route in FEED_ROUTES:
-    app.add_api_route(_route, _feed_page, methods=["GET"], include_in_schema=False)
+for _route, _fallback in SPA_ROUTES.items():
+    app.add_api_route(_route, (lambda f: (lambda: _app_page(f)))(_fallback),
+                      methods=["GET"], include_in_schema=False)
+
+# Карточка по id. Ради неё это и переписано: до сих пор `/задача/12` отвечала
+# 404, то есть перезагрузка страницы и ссылка из уведомления роняли человека в
+# ошибку, а карточка открывалась только переходом из ленты.
+#
+# `task_id` строкой, а не числом: на мусорный id приложение покажет своё «нет
+# такой задачи», тогда как FastAPI отдал бы 422 голым JSON. Сама проверка id
+# — дело маршрутов `/api/v1`, страница же одна на все адреса.
+app.add_api_route("/задача/{task_id}",
+                  lambda task_id: _app_page("task.html"),
+                  methods=["GET"], include_in_schema=False)
 
 if (DIST / "assets").is_dir():
     app.mount("/assets", StaticFiles(directory=str(DIST / "assets")), name="assets")

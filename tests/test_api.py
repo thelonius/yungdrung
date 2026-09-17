@@ -117,15 +117,15 @@ def test_undo_через_v1(client):
 
 def test_parse_date_и_extract_when(client):
     r = client.post("/api/v1/parse-date", params={"now": NOW}, json={"text": "завтра в 9"})
-    assert r.json() == {"ok": True, "date": "2026-09-09T09:00:00", "label": "завтра в 09:00",
-                        "past": False, "error": None}
+    assert r.json() == {"ok": True, "date": "2026-09-09T09:00:00",
+                        "label": "завтра, среда, в 09:00", "past": False, "error": None}
     r = client.post("/api/v1/parse-date", json={"text": "мусор"})
     assert r.status_code == 200 and r.json()["ok"] is False and r.json()["error"]
     r = client.post("/api/v1/extract-when", params={"now": NOW},
                     json={"text": "позвонить Василию завтра в полдесятого"})
     d = r.json()
     assert d["title"] == "позвонить Василию" and d["date"] == "2026-09-09T09:30:00"
-    assert d["span"] == [18, 38] and d["label"] == "завтра в 09:30"
+    assert d["span"] == [18, 38] and d["label"] == "завтра, среда, в 09:30"
 
 
 def test_search_пустой_запрос_422(client):
