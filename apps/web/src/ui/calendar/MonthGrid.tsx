@@ -11,7 +11,7 @@ import {
   monthGrid, weekdayNames, weekInfo, weekStart,
 } from './days';
 import { QuickKeys } from './QuickKeys';
-import { быстраяПоКлавише } from './keys';
+import { быстраяПоСобытию } from './keys';
 import styles from './MonthGrid.module.css';
 
 type Props = {
@@ -72,15 +72,20 @@ export function MonthGrid({ value, onPick, onEscape, today, containerRef }: Prop
     setФокус(d);
   }
 
-  // Выбор не тащит фокус за собой: дальше распоряжается родитель — в окне
-  // контроля он закрывает календарь и возвращает курсор в поле. `перейти`
-  // здесь звало бы `focus()` уже после родителя и отбирало бы фокус обратно.
+  /** Выбор удерживает фокус там, где он был. Внутри сетки — остаётся в
+   *  сетке, иначе после первой же быстрой клавиши курсор улетал бы в поле и
+   *  следующая буква уходила в текст («2026-09-18p»). Снаружи (Alt+буква из
+   *  поля) фокус не трогаем вовсе: человек продолжает печатать. */
   function выбрать(d: Date) {
-    setФокус(d);
+    if (коробка.current?.contains(document.activeElement)) перейти(d);
+    else setФокус(d);
     onPick(iso(d));
   }
 
-  function onKeyDown(e: React.KeyboardEvent<HTMLTableElement>) {
+  function onKeyDown(e: React.KeyboardEvent<HTMLElement>) {
+    // Alt-сочетания ловит родитель: они работают и в поле, где голая буква —
+    // это буква. Здесь они не нужны и не должны сработать дважды.
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
     const цель = шаг(e, фокус, week.firstDay);
     if (цель) {
       e.preventDefault();
@@ -96,7 +101,7 @@ export function MonthGrid({ value, onPick, onEscape, today, containerRef }: Prop
       onEscape?.();
       return;
     }
-    const быстрая = быстраяПоКлавише(e.key);
+    const быстрая = быстраяПоСобытию(e);
     if (быстрая) {
       e.preventDefault();
       выбрать(быстрая.from(сегодня));
@@ -107,7 +112,7 @@ export function MonthGrid({ value, onPick, onEscape, today, containerRef }: Prop
   const недели = Array.from({ length: 6 }, (_, i) => дни.slice(i * 7, i * 7 + 7));
 
   return (
-    <div className={styles.box} ref={коробка}>
+    <div className={styles.box} ref={коробка} onKeyDown={onKeyDown}>
       <div className={styles.head}>
         <button type="button" className="quiet" aria-label="предыдущий месяц"
                 onClick={() => перейти(addMonths(фокус, -1))}>‹</button>
@@ -116,7 +121,7 @@ export function MonthGrid({ value, onPick, onEscape, today, containerRef }: Prop
                 onClick={() => перейти(addMonths(фокус, 1))}>›</button>
       </div>
 
-      <table role="grid" aria-labelledby={capId} className={styles.grid} onKeyDown={onKeyDown}>
+      <table role="grid" aria-labelledby={capId} className={styles.grid}>
         <thead>
           <tr>
             {weekdayNames(week.firstDay).map((w) => (

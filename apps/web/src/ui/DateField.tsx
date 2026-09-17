@@ -49,16 +49,24 @@ export function DateField({
 }: Props) {
   const [parsed, setParsed] = useState<WhenResult | null>(null);
   const timer = useRef<number | undefined>(undefined);
+  // Номер последнего запроса. Снятия таймера мало: запрос, который успел
+  // уйти, продолжает лететь, и его ответ приходит уже после ответа на более
+  // свежий текст — под полем оставалась подпись от позапрошлого ввода.
+  // Ловится быстрым вводом подряд (в стенде пикеров — очередью хоткеев).
+  const запрос = useRef(0);
 
   useEffect(() => {
     window.clearTimeout(timer.current);
     if (!value.trim()) {
+      запрос.current += 1;  // и висящий ответ уже не воскресит подпись
       setParsed(null);
       onParsed(null);
       return;
     }
     timer.current = window.setTimeout(async () => {
+      const мой = ++запрос.current;
       const { data } = await api.POST('/api/v1/parse-date', { body: { text: value } });
+      if (мой !== запрос.current) return;
       setParsed(data ?? null);
       onParsed(data ?? null);
     }, 200);

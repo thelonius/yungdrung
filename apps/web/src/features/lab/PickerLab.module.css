@@ -8,6 +8,7 @@
 
 /* Палитра react-day-picker сведена к нашим токенам: иначе сравнение
    превратилось бы в спор о цвете, а не о клавиатуре. */
+.rdpBox:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .rdpBox { border: 1px solid var(--line); border-radius: var(--radius); padding: 4px 12px 12px; background: var(--card); }
 .rdpBox :global(.rdp-root) {
   --rdp-accent-color: var(--accent);

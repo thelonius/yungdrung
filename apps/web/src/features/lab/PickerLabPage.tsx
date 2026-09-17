@@ -10,6 +10,8 @@ import type { ReactNode } from 'react';
 import type { WhenResult } from '@/api/client';
 import { DateField } from '@/ui/DateField';
 import { MonthGrid } from '@/ui/calendar/MonthGrid';
+import { iso } from '@/ui/calendar/days';
+import { быстраяПоСобытию } from '@/ui/calendar/keys';
 import styles from './PickerLab.module.css';
 
 const DayPickerGrid = lazy(() =>
@@ -31,16 +33,28 @@ function Колонка({ title, note, cost, grid }: {
   const коробка = useRef<HTMLDivElement>(null);
   const id = useId();
 
-  // Стрелка вниз из поля уводит в сетку — обычный приём для поля с
-  // выпадающим списком. Обратно из сетки — Escape.
-  function вниз(e: React.KeyboardEvent<HTMLElement>) {
+  /** Клавиши всей колонки, а не только сетки.
+   *
+   *  Стрелка вниз из поля уводит в календарь — обычный приём для поля с
+   *  выпадающим списком; обратно оттуда Escape. Быстрые буквы с Alt работают
+   *  где угодно, включая само поле: голая буква там — это буква, её нельзя
+   *  отнять у ввода «завтра в полдесятого». */
+  function клавиши(e: React.KeyboardEvent<HTMLElement>) {
+    if (e.altKey && !e.ctrlKey && !e.metaKey) {
+      const быстрая = быстраяПоСобытию(e);
+      if (быстрая) {
+        e.preventDefault();
+        setТекст(iso(быстрая.from(new Date())));
+      }
+      return;
+    }
     if (e.key !== 'ArrowDown' || e.target !== поле.current) return;
     e.preventDefault();
     коробка.current?.querySelector<HTMLButtonElement>('button[tabindex="0"]')?.focus();
   }
 
   return (
-    <section className={styles.col} onKeyDownCapture={вниз}>
+    <section className={styles.col} onKeyDownCapture={клавиши}>
       <h2>{title}</h2>
       <p className="note">{note}</p>
       <DateField
@@ -55,7 +69,7 @@ function Колонка({ title, note, cost, grid }: {
       />
       {grid({
         value: разбор?.date ?? null,
-        onPick: (d) => { setТекст(d); поле.current?.focus(); },
+        onPick: setТекст,
         onEscape: () => поле.current?.focus(),
         containerRef: коробка,
       })}

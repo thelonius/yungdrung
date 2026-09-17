@@ -3,6 +3,7 @@
   border: 1px solid var(--line); border-radius: var(--radius);
   padding: 10px 12px 12px; background: var(--card);
 }
+.box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .caption { font-weight: 650; }
 .grid { border-collapse: collapse; width: 100%; table-layout: fixed; }
