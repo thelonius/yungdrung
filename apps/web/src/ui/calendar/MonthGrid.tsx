@@ -18,6 +18,9 @@ type Props = {
   value: string | null;
   onPick: (date: string) => void;
   onEscape?: () => void;
+  /** Где стоит курсор — наружу, чтобы шаговые клавиши («+неделя») считались
+   *  от него, а не от сегодня. Клавиши ловит обвязка, сетка их не знает. */
+  onCursor?: (date: string) => void;
   today?: Date;
   containerRef?: React.RefObject<HTMLDivElement | null>;
 };
@@ -38,7 +41,7 @@ function шаг(e: React.KeyboardEvent, от: Date, firstDay: number): Date | nu
   }
 }
 
-export function MonthGrid({ value, onPick, onEscape, today, containerRef }: Props) {
+export function MonthGrid({ value, onPick, onEscape, onCursor, today, containerRef }: Props) {
   const week = useMemo(() => weekInfo('ru'), []);
   const сегодня = useMemo(() => today ?? new Date(), [today]);
   const выбрано = fromIso(value);
@@ -60,6 +63,11 @@ export function MonthGrid({ value, onPick, onEscape, today, containerRef }: Prop
     // иначе стрелки поедут от прежнего, а подсвечен будет новый.
     if (коробка.current?.contains(document.activeElement)) вести.current = true;
   }, [дата, коробка]);
+
+  const место = iso(фокус);
+  // Следим только за самим днём: onCursor — колбэк родителя, он меняется на
+  // каждом рендере, и гонять эффект из-за этого незачем.
+  useEffect(() => { onCursor?.(место); }, [место]);
 
   // Фокус в DOM переносим только после клавиши. Иначе сетка отбирала бы его
   // у текстового поля на каждое нажатие, пока человек печатает дату.

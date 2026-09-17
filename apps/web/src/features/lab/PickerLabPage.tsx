@@ -11,8 +11,8 @@ import { useHotkeys } from 'react-hotkeys-hook';
 import type { WhenResult } from '@/api/client';
 import { DateField } from '@/ui/DateField';
 import { MonthGrid } from '@/ui/calendar/MonthGrid';
-import { iso } from '@/ui/calendar/days';
-import { БЫСТРЫЕ, СТРОКА_БЫСТРЫХ, СТРОКА_БЫСТРЫХ_ALT } from '@/ui/calendar/keys';
+import { fromIso, iso } from '@/ui/calendar/days';
+import { СТРОКА_БЫСТРЫХ, СТРОКА_БЫСТРЫХ_ALT, быстраяПоКнопке } from '@/ui/calendar/keys';
 import styles from './PickerLab.module.css';
 
 const DayPickerGrid = lazy(() =>
@@ -22,6 +22,7 @@ type GridProps = {
   value: string | null;
   onPick: (date: string) => void;
   onEscape?: () => void;
+  onCursor?: (date: string) => void;
   containerRef?: React.RefObject<HTMLDivElement | null>;
 };
 
@@ -31,6 +32,10 @@ function Колонка({ title, note, cost, grid, активна, onActivate }:
 }) {
   const [текст, setТекст] = useState('');
   const [разбор, setРазбор] = useState<WhenResult | null>(null);
+  // Курсор в ref, а не в состоянии: он нужен только следующему нажатию, и
+  // ждать ради него перерисовки (а с ней и ответа сервера) нельзя — два
+  // быстрых «+неделя» подряд считались бы от одного и того же дня.
+  const курсор = useRef<string | null>(null);
   const поле = useRef<HTMLInputElement>(null);
   const коробка = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -43,14 +48,23 @@ function Колонка({ title, note, cost, grid, активна, onActivate }:
    *  раскладку переключать не нужно ни здесь, ни в остальном приложении.
    *  Голая буква молчит, пока курсор в текстовом поле (там она буква — ввод
    *  «завтра в полдесятого» важнее), и для этого случая есть Alt. */
-  const выбратьБыструю = (label: string) => {
-    const быстрая = БЫСТРЫЕ.find((б) => б.label === label);
-    if (быстрая) setТекст(iso(быстрая.from(new Date())));
+  const выбратьБыструю = (кнопка: string) => {
+    const быстрая = быстраяПоКнопке(кнопка);
+    if (!быстрая) return;
+    // Шаговые клавиши считаются от курсора — от того дня, где он стоит в
+    // сетке. Без курсора (в календарь ещё не заходили) шагаем от разобранной
+    // даты, а если нет и её — от сегодня.
+    const сегодня = new Date();
+    const откуда = fromIso(курсор.current) ?? fromIso(разбор?.date ?? null) ?? сегодня;
+    const куда = iso(быстрая.from(сегодня, откуда));
+    курсор.current = куда;
+    setТекст(куда);
   };
   useHotkeys(СТРОКА_БЫСТРЫХ, (_, h) => выбратьБыструю(String(h.keys?.[0] ?? '')),
-             { enabled: активна, preventDefault: true }, [активна]);
+             { enabled: активна, preventDefault: true }, [активна, разбор?.date]);
   useHotkeys(СТРОКА_БЫСТРЫХ_ALT, (_, h) => выбратьБыструю(String(h.keys?.[0] ?? '')),
-             { enabled: активна, preventDefault: true, enableOnFormTags: true }, [активна]);
+             { enabled: активна, preventDefault: true, enableOnFormTags: true },
+             [активна, разбор?.date]);
 
   /** Стрелка вниз из поля уводит в календарь — обычный приём для поля с
    *  выпадающим списком; обратно оттуда Escape. */
@@ -83,6 +97,7 @@ function Колонка({ title, note, cost, grid, активна, onActivate }:
         value: разбор?.date ?? null,
         onPick: setТекст,
         onEscape: () => поле.current?.focus(),
+        onCursor: (d) => { курсор.current = d; },
         containerRef: коробка,
       })}
       <p className={styles.out}>

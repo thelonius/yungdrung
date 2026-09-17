@@ -16,11 +16,12 @@ type Props = {
   value: string | null;
   onPick: (date: string) => void;
   onEscape?: () => void;
+  onCursor?: (date: string) => void;
   today?: Date;
   containerRef?: React.RefObject<HTMLDivElement | null>;
 };
 
-export function DayPickerGrid({ value, onPick, onEscape, today, containerRef }: Props) {
+export function DayPickerGrid({ value, onPick, onEscape, onCursor, today, containerRef }: Props) {
   const сегодня = useMemo(() => today ?? new Date(), [today]);
   const выбрано = fromIso(value);
   const [месяц, setМесяц] = useState<Date>(() => выбрано ?? сегодня);
@@ -57,7 +58,7 @@ export function DayPickerGrid({ value, onPick, onEscape, today, containerRef }: 
         today={сегодня}
         modifiers={{ выходной: { dayOfWeek: [0, 6] } }}
         modifiersClassNames={{ выходной: styles.rdpWeekend }}
-        onDayFocus={(d) => setПодсвечен(d)}
+        onDayFocus={(d) => { setПодсвечен(d); onCursor?.(iso(d)); }}
         onDayBlur={() => setПодсвечен(null)}
       />
       <p className={styles.live} role="status">{dayLabel(подсвечен ?? выбрано ?? сегодня)}</p>

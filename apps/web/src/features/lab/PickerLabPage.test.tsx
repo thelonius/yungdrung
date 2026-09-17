@@ -1,7 +1,9 @@
-// Регрессия на две находки подряд: быстрые клавиши не ловились, пока фокус
-// не побывал внутри календаря (открыл страницу — буквы в пустоту), и должны
-// работать на любой раскладке. Опознаётся место на клавиатуре (`event.code`),
-// поэтому русские «я» и «з» на тех же кнопках обязаны делать то же самое.
+// Регрессии, найденные подряд на живом стенде:
+//  1) быстрые клавиши не ловились, пока фокус не побывал внутри календаря —
+//     открыл страницу, жмёшь буквы, тишина;
+//  2) они обязаны работать на любой раскладке (опознаётся `event.code`);
+//  3) шаговые клавиши считаются от курсора и жмутся подряд, иначе «+неделя»
+//     всё время возвращала одну и ту же дату от сегодня.
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PickerLabPage } from './PickerLabPage';
@@ -43,18 +45,43 @@ describe('быстрые клавиши пикера', () => {
     render(<PickerLabPage />);
     expect(document.activeElement).toBe(document.body);
 
-    нажать('KeyZ', 'z');
+    нажать('KeyP', 'p');  // «з» — завтра
     await waitFor(() => expect(левоеПоле().value).toBe('2026-09-18'));
   });
 
   it('работают на русской раскладке теми же кнопками', async () => {
     render(<PickerLabPage />);
 
-    нажать('KeyP', 'з');  // там, где в латинской «p» — понедельник
+    нажать('KeyG', 'п');  // понедельник
     await waitFor(() => expect(левоеПоле().value).toBe('2026-09-21'));
 
-    нажать('KeyW', 'ц');  // там, где «w» — через неделю
+    нажать('KeyC', 'с');  // сегодня
+    await waitFor(() => expect(левоеПоле().value).toBe('2026-09-17'));
+  });
+
+  it('«+неделя» шагает от курсора и жмётся подряд', async () => {
+    render(<PickerLabPage />);
+
+    нажать('KeyY', 'н');
     await waitFor(() => expect(левоеПоле().value).toBe('2026-09-24'));
+
+    // Второе нажатие считает уже от новой даты, а не снова от сегодня.
+    нажать('KeyY', 'н');
+    await waitFor(() => expect(левоеПоле().value).toBe('2026-10-01'));
+
+    // И месяц шагает оттуда же, куда доехал курсор.
+    нажать('KeyV', 'м');
+    await waitFor(() => expect(левоеПоле().value).toBe('2026-11-01'));
+  });
+
+  it('якорные клавиши считаются от сегодня, куда бы ни уехал курсор', async () => {
+    render(<PickerLabPage />);
+
+    нажать('KeyV', 'м');
+    await waitFor(() => expect(левоеПоле().value).toBe('2026-10-17'));
+
+    нажать('KeyP', 'з');  // завтра — всё равно от сегодня
+    await waitFor(() => expect(левоеПоле().value).toBe('2026-09-18'));
   });
 
   it('пока курсор в поле, голая буква остаётся буквой, а с Alt работает', async () => {
@@ -63,12 +90,14 @@ describe('быстрые клавиши пикера', () => {
     поле.focus();
 
     act(() => {
-      поле.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyZ', key: 'я', bubbles: true }));
+      поле.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyP', key: 'з', bubbles: true }));
     });
     expect(поле.value).toBe('');
 
     act(() => {
-      поле.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyZ', key: 'я', altKey: true, bubbles: true }));
+      поле.dispatchEvent(new KeyboardEvent('keydown', {
+        code: 'KeyP', key: 'з', altKey: true, bubbles: true,
+      }));
     });
     await waitFor(() => expect(левоеПоле().value).toBe('2026-09-18'));
   });
