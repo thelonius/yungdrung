@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import engine  # noqa: E402
 import templates  # noqa: E402
 import worktime  # noqa: E402
+from domain import names, ru_dates  # noqa: E402
 
 
 ШАГИ = [
@@ -417,14 +418,17 @@ def test_развёрнутый_шаблон_принимается_движко
 
 
 def test_правила_имени_взяты_у_движка_а_не_переписаны():
-    """Предел длины и запрещённые символы приходят константами из engine.
-    Своя копия рано или поздно разойдётся с оригиналом, и шаблон начнёт выдавать
-    задачи, которые движок отказывается записать."""
-    assert templates.validate_template(шаблон(name="О" * engine.MAX_TITLE)) == []
-    слишком_длинное = "О" * (engine.MAX_TITLE + 1)
+    """Предел длины и запрещённые символы приходят константами из `domain.names`,
+    теми же, что читает движок. Своя копия рано или поздно разойдётся с
+    оригиналом, и шаблон начнёт выдавать задачи, которые движок отказывается
+    записать."""
+    assert engine.MAX_TITLE is names.MAX_TITLE
+    assert engine.FORBIDDEN_IN_NAME is names.FORBIDDEN_IN_NAME
+    assert templates.validate_template(шаблон(name="О" * names.MAX_TITLE)) == []
+    слишком_длинное = "О" * (names.MAX_TITLE + 1)
     assert [e["field"] for e in
             templates.validate_template(шаблон(name=слишком_длинное))] == ["name"]
-    for символ in sorted(engine.FORBIDDEN_IN_NAME):
+    for символ in sorted(names.FORBIDDEN_IN_NAME):
         имя = f"Отчёт{символ}квартал"
         assert [e["field"] for e in
                 templates.validate_template(шаблон(name=имя))] == ["name"], имя
@@ -432,10 +436,11 @@ def test_правила_имени_взяты_у_движка_а_не_переп
 
 def test_запасной_копии_правил_имени_нет():
     """Прошлый заход обходил `sys.exit` из движка через
-    `except (ImportError, SystemExit)` и подставлял свои списки. Такая ветка
-    молчком расходится с движком, а pyyaml, ради которого она появилась, стоит и
-    записан в requirements.txt."""
-    assert templates.engine is engine
+    `except (ImportError, SystemExit)` и подставлял свои списки. Теперь правила
+    лежат в `domain.names`, и шаблоны берут их оттуда, а не через `engine`:
+    иначе `core` не мог бы зависеть от `templates` без кольца импортов."""
+    assert templates.names is names
+    assert not hasattr(templates, "engine")
     assert not hasattr(templates, "_name_rules")
 
 
@@ -448,7 +453,7 @@ def test_время_шага_разбирает_движок(текст, ожи�
     """Заказчик набирает время одинаково в быстром вводе и в поле шага, значит
     разбирать его должно одно место."""
     assert templates.parse_time_of_day(текст) == ожидаем
-    assert engine.parse_time_part(текст) == ожидаем
+    assert ru_dates.parse_time_part(текст) == ожидаем
 
 
 def test_движок_не_понимает_iso_с_буквой_t():

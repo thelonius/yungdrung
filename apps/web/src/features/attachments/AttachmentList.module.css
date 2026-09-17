@@ -1,0 +1,93 @@
+/* Перенесено из static/style.css `.attach-*` (SLICE2_SPEC.md §5.7): та же
+   разметка строки — превью, имя, размер, «×» — на тех же токенах. */
+.root { display: flex; flex-direction: column; gap: 8px; }
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 13px;
+  background: var(--card);
+}
+
+.row.hasThumb { padding: 5px 8px; }
+
+.thumb {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1.5px solid var(--line);
+  background: var(--bg);
+}
+
+.row a {
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row a:hover { text-decoration: underline; }
+
+.size {
+  color: var(--muted);
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+.remove {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  border-radius: 100px;
+}
+
+.remove:hover { background: var(--danger-bg); color: var(--danger); }
+
+.add {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  background: var(--card);
+}
+
+.add:hover { background: var(--focus); }
+
+.error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* Компактный режим: раскрытый список файлов внутри карточки шаблона/шага, а
+   не отдельная секция страницы — меньше воздуха вокруг строк. */
+.compact .list { gap: 4px; }
+.compact .row { padding: 4px 6px; font-size: 12px; }
+.compact .thumb { width: 32px; height: 32px; }

@@ -1,0 +1,22 @@
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.35); }
+.content {
+  position: fixed; top: 10vh; left: 50%; transform: translateX(-50%);
+  width: min(600px, calc(100vw - 32px));
+  background: var(--card); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0,0,0,.25); overflow: hidden;
+}
+.dialog {}
+.input {
+  width: 100%; font: inherit; font-size: 17px; padding: 14px 16px; border: 0;
+  border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); outline: none;
+}
+.list { max-height: 60vh; overflow: auto; padding: 8px; }
+.empty { padding: 14px; color: var(--muted); font-size: 14px; }
+.group [cmdk-group-heading] { font-size: 12px; color: var(--muted); padding: 8px 8px 4px; }
+.group [cmdk-item] {
+  display: flex; justify-content: space-between; gap: 12px; align-items: center;
+  padding: 8px 10px; border-radius: 6px; cursor: pointer;
+}
+.group [cmdk-item][data-selected="true"] { background: var(--focus); }
+.preview { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }

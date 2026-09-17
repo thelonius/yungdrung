@@ -1,32 +1,30 @@
 'use strict';
 
+const { $, $$, get, post, toast, dateField } = Yd;
+
 // Лента «Что сегодня», окно контроля и разбор завала. Раздел 6.1, 6.4, R20 ТЗ.
 //
 // Страница не вычисляет ничего: просрочку, состояние и время показа считает ядро,
 // здесь только показ и отправка ответа. Это правило из КОНТРАКТ.md — иначе лента
 // и завал однажды разойдутся, посчитав одно и то же по-разному.
 
-const $ = (s, r = document) => r.querySelector(s);
-const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const dlg = $('#control');
 
-let текущий = null;     // шаг, про который открыто окно
-let режим = null;       // 'notdone' | 'defer' | 'fail'
+let текущий = null;
+let режим = null;
 let причины = [];
 
-async function get(url) {
-  const r = await fetch(url);
-  return r.json();
-}
+const cDateField = dateField({
+  text: '#c-date',
+  preview: '#c-date-preview',
+  presets: '#c-presets',
+});
 
-async function post(url, body) {
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return r.json();
-}
+const bulkDateField = dateField({
+  text: '#bulk-date',
+  preview: '#bulk-date-preview',
+  presets: '#bulk-presets',
+});
 
 // --- отрисовка ленты --------------------------------------------------------
 
@@ -313,9 +311,7 @@ function формуПачки(показать) {
   $('#bulk-err').hidden = true;
   $('#bulk-reason').classList.remove('invalid');
   if (показать) {
-    $('#bulk-date').value = '';
-    $('#bulk-date-preview').textContent = '';
-    $$('#bulk-presets button').forEach((b) => b.classList.remove('on'));
+    bulkDateField.clear();
     $('#bulk-date-field').hidden = режимПачки === 'fail';
     $('#bulk-reason').focus();
   }
@@ -326,28 +322,7 @@ $('#bulk-defer').addEventListener('click', () => { режимПачки = 'defer
 $('#bulk-fail').addEventListener('click', () => { режимПачки = 'fail'; формуПачки(true); });
 $('#bulk-cancel').addEventListener('click', () => формуПачки(false));
 
-$('#bulk-date').addEventListener('input', превьюПачки);
 
-for (const b of $$('#bulk-presets button')) {
-  b.addEventListener('click', () => {
-    $$('#bulk-presets button').forEach((x) => x.classList.remove('on'));
-    b.classList.add('on');
-    $('#bulk-date').value = b.dataset.when;
-    превьюПачки();
-  });
-}
-
-let таймерПачки;
-async function превьюПачки() {
-  clearTimeout(таймерПачки);
-  таймерПачки = setTimeout(async () => {
-    const текст = $('#bulk-date').value.trim();
-    const out = $('#bulk-date-preview');
-    if (!текст) return (out.textContent = '');
-    const r = await post('/api/parse-date', { text: текст });
-    out.textContent = r.ok ? (r.label || '') : 'не понял дату';
-  }, 220);
-}
 
 $('#bulk-save').addEventListener('click', () => {
   const причина = $('#bulk-reason').value;
@@ -385,14 +360,14 @@ async function действиеПачкой(op, extra = {}) {
   // пачки целиком (неизвестная операция, не разобраны причина/дата).
   if (r.errors) {
     const текст = r.errors.map((e) => e.error).join('; ');
-    if ($('#bulk-form').hidden) return всплывашка(текст);
+    if ($('#bulk-form').hidden) return toast(текст);
     $('#bulk-err').textContent = текст;
     $('#bulk-err').hidden = false;
     return;
   }
 
   формуПачки(false);
-  всплывашка(итогПачки(op, r));
+  toast(итогПачки(op, r));
   // Пачка меняет и то, что попадает в завал, и то, что видно в шапке ленты
   // (просрочено/сегодня/ждут) — без этого счётчики держат старые числа, пока
   // не закроешь разбор или не перезагрузишь страницу.
@@ -449,9 +424,7 @@ function форму(показать) {
   $('#c-err').hidden = true;
   $('#c-reason').classList.remove('invalid');
   if (показать) {
-    $('#c-date').value = '';
-    $('#c-date-preview').textContent = '';
-    $('.presets').querySelectorAll('button').forEach((b) => b.classList.remove('on'));
+    cDateField.clear();
     // «Не будет сделано» закрывает шаг: новая дата ему не нужна, нужна причина.
     $('#c-date-field').hidden = режим === 'fail';
     $('#c-reason').focus();
@@ -464,12 +437,12 @@ async function действие(op, item, extra = {}) {
   });
   if (!r.ok) {
     const текст = (r.errors || []).map((e) => e.error).join('; ') || 'не получилось';
-    if ($('#c-form').hidden) return всплывашка(текст);
+    if ($('#c-form').hidden) return toast(текст);
     $('#c-err').textContent = текст;
     $('#c-err').hidden = false;
     return false;
   }
-  всплывашка(итог(op, r));
+  toast(итог(op, r));
 
   if (последовательно) {
     // R20: любой из четырёх ответов продвигает очередь на следующий элемент.
@@ -515,27 +488,6 @@ function итог(op, r) {
   return 'Готово';
 }
 
-function всплывашка(текст) {
-  const el = document.createElement('div');
-  el.className = 'toast';
-  el.textContent = текст;
-  document.body.append(el);
-  setTimeout(() => el.remove(), 3500);
-}
-
-// --- дата в форме одиночного окна --------------------------------------------
-
-let таймер;
-async function превью() {
-  clearTimeout(таймер);
-  таймер = setTimeout(async () => {
-    const текст = $('#c-date').value.trim();
-    const out = $('#c-date-preview');
-    if (!текст) return (out.textContent = '');
-    const r = await post('/api/parse-date', { text: текст });
-    out.textContent = r.ok ? (r.label || '') : 'не понял дату';
-  }, 220);
-}
 
 // --- события одиночного окна --------------------------------------------------
 
@@ -549,16 +501,7 @@ for (const b of document.querySelectorAll('[data-op]')) {
 }
 
 $('#c-back').addEventListener('click', () => форму(false));
-$('#c-date').addEventListener('input', превью);
 
-for (const b of $('#c-presets').querySelectorAll('button')) {
-  b.addEventListener('click', () => {
-    $('#c-presets').querySelectorAll('button').forEach((x) => x.classList.remove('on'));
-    b.classList.add('on');
-    $('#c-date').value = b.dataset.when;
-    превью();
-  });
-}
 
 $('#c-save').addEventListener('click', () => {
   const причина = $('#c-reason').value;

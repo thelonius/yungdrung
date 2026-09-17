@@ -1,0 +1,5148 @@
+{
+ "openapi": "3.1.0",
+ "info": {
+  "title": "Yungdrung",
+  "description": "Трекер задач с последовательными шагами и контрольным временем. Пишет только ядро, считает только ядро; оболочка показывает то, что пришло (CONTRACT.md).",
+  "version": "1"
+ },
+ "paths": {
+  "/api/v1/feed": {
+   "get": {
+    "tags": [
+     "v1"
+    ],
+    "summary": "Feed",
+    "operationId": "feed_api_v1_feed_get",
+    "parameters": [
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/FeedResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/backlog": {
+   "get": {
+    "tags": [
+     "v1"
+    ],
+    "summary": "Backlog",
+    "operationId": "backlog_api_v1_backlog_get",
+    "parameters": [
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/BacklogResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/calendar": {
+   "get": {
+    "tags": [
+     "v1"
+    ],
+    "summary": "Calendar",
+    "description": "Сетка для пикера даты. Диапазон приходит машинными датами, потому что\nего считает сам пикер, а не человек.",
+    "operationId": "calendar_api_v1_calendar_get",
+    "parameters": [
+     {
+      "name": "from",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "From"
+      }
+     },
+     {
+      "name": "to",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "To"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/CalendarResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/tasks/{task_id}/steps/{step_id}/mark": {
+   "post": {
+    "tags": [
+     "v1"
+    ],
+    "summary": "Mark",
+    "operationId": "mark_api_v1_tasks__task_id__steps__step_id__mark_post",
+    "parameters": [
+     {
+      "name": "task_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Task Id"
+      }
+     },
+     {
+      "name": "step_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Step Id"
+      }
+     },
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/MarkIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MarkResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/tasks/{task_id}/steps/{step_id}/undo": {
+   "post": {
+    "tags": [
+     "v1"
+    ],
+    "summary": "Undo",
+    "operationId": "undo_api_v1_tasks__task_id__steps__step_id__undo_post",
+    "parameters": [
+     {
+      "name": "task_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Task Id"
+      }
+     },
+     {
+      "name": "step_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Step Id"
+      }
+     },
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/MarkResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/parse-date": {
+   "post": {
+    "tags": [
+     "v1"
+    ],
+    "summary": "Parse Date",
+    "operationId": "parse_date_api_v1_parse_date_post",
+    "parameters": [
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/api__v1__router__TextIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/WhenResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/extract-when": {
+   "post": {
+    "tags": [
+     "v1"
+    ],
+    "summary": "Extract When",
+    "operationId": "extract_when_api_v1_extract_when_post",
+    "parameters": [
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/api__v1__router__TextIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ExtractResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/search": {
+   "get": {
+    "tags": [
+     "v1"
+    ],
+    "summary": "Search",
+    "operationId": "search_api_v1_search_get",
+    "parameters": [
+     {
+      "name": "q",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Q"
+      }
+     },
+     {
+      "name": "kind",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Kind"
+      }
+     },
+     {
+      "name": "limit",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "integer",
+       "maximum": 500,
+       "minimum": 1,
+       "default": 50,
+       "title": "Limit"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/SearchResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/reasons": {
+   "get": {
+    "tags": [
+     "v1"
+    ],
+    "summary": "Reasons",
+    "operationId": "reasons_api_v1_reasons_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ReasonsResult"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/tasks": {
+   "post": {
+    "tags": [
+     "tasks"
+    ],
+    "summary": "Create",
+    "operationId": "create_api_v1_tasks_post",
+    "parameters": [
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TaskIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TaskSaveResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/tasks/quick": {
+   "post": {
+    "tags": [
+     "tasks"
+    ],
+    "summary": "Quick",
+    "operationId": "quick_api_v1_tasks_quick_post",
+    "parameters": [
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/QuickIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TaskSaveResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/tasks/plan": {
+   "post": {
+    "tags": [
+     "tasks"
+    ],
+    "summary": "Plan",
+    "operationId": "plan_api_v1_tasks_plan_post",
+    "parameters": [
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/PlanIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/PlanResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/tasks/resolve": {
+   "get": {
+    "tags": [
+     "tasks"
+    ],
+    "summary": "Resolve",
+    "operationId": "resolve_api_v1_tasks_resolve_get",
+    "parameters": [
+     {
+      "name": "title",
+      "in": "query",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Title"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TaskRef"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/tasks/{task_id}": {
+   "get": {
+    "tags": [
+     "tasks"
+    ],
+    "summary": "Show",
+    "operationId": "show_api_v1_tasks__task_id__get",
+    "parameters": [
+     {
+      "name": "task_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Task Id"
+      }
+     },
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TaskCard"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "tags": [
+     "tasks"
+    ],
+    "summary": "Update",
+    "operationId": "update_api_v1_tasks__task_id__put",
+    "parameters": [
+     {
+      "name": "task_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Task Id"
+      }
+     },
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TaskEditIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TaskSaveResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "tags": [
+     "tasks"
+    ],
+    "summary": "Delete",
+    "operationId": "delete_api_v1_tasks__task_id__delete",
+    "parameters": [
+     {
+      "name": "task_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Task Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TaskDeleteResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/tasks/{task_id}/cancel": {
+   "post": {
+    "tags": [
+     "tasks"
+    ],
+    "summary": "Cancel",
+    "operationId": "cancel_api_v1_tasks__task_id__cancel_post",
+    "parameters": [
+     {
+      "name": "task_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Task Id"
+      }
+     },
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/CancelIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TaskCard"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/tasks/{task_id}/close": {
+   "post": {
+    "tags": [
+     "tasks"
+    ],
+    "summary": "Close",
+    "operationId": "close_api_v1_tasks__task_id__close_post",
+    "parameters": [
+     {
+      "name": "task_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Task Id"
+      }
+     },
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/CloseResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/tasks/{task_id}/steps/{step_id}/reopen": {
+   "post": {
+    "tags": [
+     "tasks"
+    ],
+    "summary": "Reopen",
+    "operationId": "reopen_api_v1_tasks__task_id__steps__step_id__reopen_post",
+    "parameters": [
+     {
+      "name": "task_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Task Id"
+      }
+     },
+     {
+      "name": "step_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Step Id"
+      }
+     },
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TaskCard"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/kb/scan": {
+   "post": {
+    "tags": [
+     "kb"
+    ],
+    "summary": "Scan",
+    "operationId": "scan_api_v1_kb_scan_post",
+    "parameters": [
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/KbScanIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/KbScanResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/kb/reject": {
+   "post": {
+    "tags": [
+     "kb"
+    ],
+    "summary": "Reject",
+    "operationId": "reject_api_v1_kb_reject_post",
+    "parameters": [
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/KbRejectIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/OkResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/tasks/{task_id}/kb-confirm": {
+   "post": {
+    "tags": [
+     "kb"
+    ],
+    "summary": "Confirm",
+    "operationId": "confirm_api_v1_tasks__task_id__kb_confirm_post",
+    "parameters": [
+     {
+      "name": "task_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Task Id"
+      }
+     },
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/KbConfirmIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/KbConfirmResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/templates": {
+   "get": {
+    "tags": [
+     "templates"
+    ],
+    "summary": "List Templates",
+    "operationId": "list_templates_api_v1_templates_get",
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TemplateList"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "templates"
+    ],
+    "summary": "Create Template",
+    "operationId": "create_template_api_v1_templates_post",
+    "parameters": [
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TemplateIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TemplateCard"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/templates/{name}": {
+   "get": {
+    "tags": [
+     "templates"
+    ],
+    "summary": "Get Template",
+    "operationId": "get_template_api_v1_templates__name__get",
+    "parameters": [
+     {
+      "name": "name",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Name"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TemplateCard"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "put": {
+    "tags": [
+     "templates"
+    ],
+    "summary": "Replace Template",
+    "description": "Переписать шаблон целиком. Переименование через `PUT` отвергается\n(Р4): `name` в теле обязан совпасть с `name` в пути. `recurrence` из тела\nзаменяет сохранённое — клиент шлёт то, что получил в `GET`, снятое\nправило доезжает как `null`.",
+    "operationId": "replace_template_api_v1_templates__name__put",
+    "parameters": [
+     {
+      "name": "name",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Name"
+      }
+     },
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TemplateIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TemplateCard"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "tags": [
+     "templates"
+    ],
+    "summary": "Delete Template",
+    "operationId": "delete_template_api_v1_templates__name__delete",
+    "parameters": [
+     {
+      "name": "name",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Name"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TemplateDeleteResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/templates/{name}/preview": {
+   "get": {
+    "tags": [
+     "templates"
+    ],
+    "summary": "Preview Saved",
+    "description": "Предпросмотр уже сохранённого шаблона на дату `start` (по умолчанию\nсегодня). Шаблона нет — 404; плохая дата — 200 `ok: false` (Р9: живая\nпроверка опрашивается на каждое нажатие, а не рвёт форму ошибкой запроса).",
+    "operationId": "preview_saved_api_v1_templates__name__preview_get",
+    "parameters": [
+     {
+      "name": "name",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Name"
+      }
+     },
+     {
+      "name": "start",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Start"
+      }
+     },
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TemplatePreview"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/templates/preview": {
+   "post": {
+    "tags": [
+     "templates"
+    ],
+    "summary": "Preview Draft",
+    "description": "Предпросмотр ещё не сохранённого шаблона — форма шлёт черновик целиком,\nимя не проверяется (человек набирает шаги раньше, чем придумывает имя).",
+    "operationId": "preview_draft_api_v1_templates_preview_post",
+    "parameters": [
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/TemplatePreviewIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TemplatePreview"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/templates/{name}/instantiate": {
+   "post": {
+    "tags": [
+     "templates"
+    ],
+    "summary": "Instantiate Template",
+    "operationId": "instantiate_template_api_v1_templates__name__instantiate_post",
+    "parameters": [
+     {
+      "name": "name",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Name"
+      }
+     },
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/InstantiateIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/FromTemplateResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/templates/from-task": {
+   "post": {
+    "tags": [
+     "templates"
+    ],
+    "summary": "Template From Task",
+    "operationId": "template_from_task_api_v1_templates_from_task_post",
+    "parameters": [
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/FromTaskIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TemplateCard"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/templates/{name}/recurrence": {
+   "put": {
+    "tags": [
+     "templates"
+    ],
+    "summary": "Set Recurrence",
+    "operationId": "set_recurrence_api_v1_templates__name__recurrence_put",
+    "parameters": [
+     {
+      "name": "name",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Name"
+      }
+     },
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RuleIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TemplateCard"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "delete": {
+    "tags": [
+     "templates"
+    ],
+    "summary": "Clear Recurrence",
+    "operationId": "clear_recurrence_api_v1_templates__name__recurrence_delete",
+    "parameters": [
+     {
+      "name": "name",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Name"
+      }
+     },
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/TemplateCard"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/recurrence/parse": {
+   "post": {
+    "tags": [
+     "templates"
+    ],
+    "summary": "Parse Recurrence",
+    "operationId": "parse_recurrence_api_v1_recurrence_parse_post",
+    "requestBody": {
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/api__v1__templates__TextIn"
+       }
+      }
+     },
+     "required": true
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/RuleParseResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/recurrence/preview": {
+   "post": {
+    "tags": [
+     "templates"
+    ],
+    "summary": "Preview Recurrence",
+    "operationId": "preview_recurrence_api_v1_recurrence_preview_post",
+    "parameters": [
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/RulePreviewIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/RulePreviewResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/tasks/{task_id}/attachments": {
+   "get": {
+    "tags": [
+     "attachments"
+    ],
+    "summary": "Task Attachments",
+    "description": "Файлы задачи и всех её шагов одним списком, у строк шагов — `step_id`.",
+    "operationId": "task_attachments_api_v1_tasks__task_id__attachments_get",
+    "parameters": [
+     {
+      "name": "task_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Task Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AttachmentList"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "attachments"
+    ],
+    "summary": "Task Attach",
+    "operationId": "task_attach_api_v1_tasks__task_id__attachments_post",
+    "parameters": [
+     {
+      "name": "task_id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Task Id"
+      }
+     },
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_task_attach_api_v1_tasks__task_id__attachments_post"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AttachResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/templates/{name}/attachments": {
+   "get": {
+    "tags": [
+     "attachments"
+    ],
+    "summary": "Template Attachments",
+    "operationId": "template_attachments_api_v1_templates__name__attachments_get",
+    "parameters": [
+     {
+      "name": "name",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Name"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AttachmentList"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   },
+   "post": {
+    "tags": [
+     "attachments"
+    ],
+    "summary": "Template Attach",
+    "operationId": "template_attach_api_v1_templates__name__attachments_post",
+    "parameters": [
+     {
+      "name": "name",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "title": "Name"
+      }
+     },
+     {
+      "name": "now",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Now"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "$ref": "#/components/schemas/Body_template_attach_api_v1_templates__name__attachments_post"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AttachResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/attachments/{id}": {
+   "delete": {
+    "tags": [
+     "attachments"
+    ],
+    "summary": "Attachment Delete",
+    "operationId": "attachment_delete_api_v1_attachments__id__delete",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/AttachmentDeleteResult"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/attachments/{id}/bytes": {
+   "get": {
+    "tags": [
+     "attachments"
+    ],
+    "summary": "Attachment Bytes",
+    "operationId": "attachment_bytes_api_v1_attachments__id__bytes_get",
+    "parameters": [
+     {
+      "name": "id",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "integer",
+       "title": "Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response"
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ },
+ "components": {
+  "schemas": {
+   "AttachResult": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok",
+      "default": true
+     },
+     "attachment": {
+      "$ref": "#/components/schemas/AttachmentInfo"
+     }
+    },
+    "type": "object",
+    "required": [
+     "attachment"
+    ],
+    "title": "AttachResult"
+   },
+   "AttachmentDeleteResult": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok",
+      "default": true
+     },
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id"
+    ],
+    "title": "AttachmentDeleteResult"
+   },
+   "AttachmentInfo": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "filename": {
+      "type": "string",
+      "title": "Filename"
+     },
+     "mime": {
+      "type": "string",
+      "title": "Mime"
+     },
+     "bytes": {
+      "type": "integer",
+      "title": "Bytes"
+     },
+     "caption": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Caption"
+     },
+     "added": {
+      "type": "string",
+      "format": "date",
+      "title": "Added"
+     },
+     "step_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Step Id"
+     },
+     "url": {
+      "type": "string",
+      "title": "Url"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "filename",
+     "mime",
+     "bytes",
+     "caption",
+     "added",
+     "url"
+    ],
+    "title": "AttachmentInfo"
+   },
+   "AttachmentList": {
+    "properties": {
+     "attachments": {
+      "items": {
+       "$ref": "#/components/schemas/AttachmentInfo"
+      },
+      "type": "array",
+      "title": "Attachments"
+     }
+    },
+    "type": "object",
+    "required": [
+     "attachments"
+    ],
+    "title": "AttachmentList"
+   },
+   "BacklogResult": {
+    "properties": {
+     "now": {
+      "type": "string",
+      "title": "Now"
+     },
+     "backlog": {
+      "items": {
+       "$ref": "#/components/schemas/FeedRow"
+      },
+      "type": "array",
+      "title": "Backlog"
+     },
+     "count": {
+      "type": "integer",
+      "title": "Count"
+     },
+     "broken": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Broken"
+     }
+    },
+    "type": "object",
+    "required": [
+     "now",
+     "backlog",
+     "count"
+    ],
+    "title": "BacklogResult"
+   },
+   "Body_task_attach_api_v1_tasks__task_id__attachments_post": {
+    "properties": {
+     "file": {
+      "type": "string",
+      "contentMediaType": "application/octet-stream",
+      "title": "File"
+     },
+     "step_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Step Id"
+     },
+     "caption": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Caption"
+     }
+    },
+    "type": "object",
+    "required": [
+     "file"
+    ],
+    "title": "Body_task_attach_api_v1_tasks__task_id__attachments_post"
+   },
+   "Body_template_attach_api_v1_templates__name__attachments_post": {
+    "properties": {
+     "file": {
+      "type": "string",
+      "contentMediaType": "application/octet-stream",
+      "title": "File"
+     },
+     "caption": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Caption"
+     }
+    },
+    "type": "object",
+    "required": [
+     "file"
+    ],
+    "title": "Body_template_attach_api_v1_templates__name__attachments_post"
+   },
+   "CalendarDay": {
+    "properties": {
+     "date": {
+      "type": "string",
+      "title": "Date"
+     },
+     "weekend": {
+      "type": "boolean",
+      "title": "Weekend"
+     },
+     "controls": {
+      "type": "integer",
+      "title": "Controls"
+     }
+    },
+    "type": "object",
+    "required": [
+     "date",
+     "weekend",
+     "controls"
+    ],
+    "title": "CalendarDay",
+    "description": "Клетка сетки месяца. `weekend` — по настройкам рабочего времени, а не по\nномеру дня недели: при работе по выходным суббота рабочая. `controls` —\nсколько активных шагов ждут контроля в этот день, по счёту ленты."
+   },
+   "CalendarResult": {
+    "properties": {
+     "days": {
+      "items": {
+       "$ref": "#/components/schemas/CalendarDay"
+      },
+      "type": "array",
+      "title": "Days"
+     }
+    },
+    "type": "object",
+    "required": [
+     "days"
+    ],
+    "title": "CalendarResult"
+   },
+   "CancelIn": {
+    "properties": {
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     }
+    },
+    "type": "object",
+    "title": "CancelIn"
+   },
+   "CardStep": {
+    "properties": {
+     "id": {
+      "type": "integer",
+      "title": "Id"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Title"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "start_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start Date"
+     },
+     "control_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Control Date"
+     },
+     "completed_date": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Completed Date"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mode"
+     },
+     "closed": {
+      "type": "boolean",
+      "title": "Closed"
+     },
+     "active": {
+      "type": "boolean",
+      "title": "Active"
+     },
+     "stalled": {
+      "type": "integer",
+      "title": "Stalled"
+     },
+     "state": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "State"
+     },
+     "row": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/FeedRow"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "actions": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Actions",
+      "default": []
+     },
+     "steps": {
+      "items": {
+       "$ref": "#/components/schemas/CardStep"
+      },
+      "type": "array",
+      "title": "Steps",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "title",
+     "status",
+     "start_date",
+     "control_date",
+     "completed_date",
+     "note",
+     "mode",
+     "closed",
+     "active",
+     "stalled",
+     "state"
+    ],
+    "title": "CardStep"
+   },
+   "CloseResult": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok",
+      "default": true
+     },
+     "task_id": {
+      "type": "integer",
+      "title": "Task Id"
+     },
+     "closed_steps": {
+      "type": "integer",
+      "title": "Closed Steps"
+     },
+     "card": {
+      "$ref": "#/components/schemas/TaskCard"
+     }
+    },
+    "type": "object",
+    "required": [
+     "task_id",
+     "closed_steps",
+     "card"
+    ],
+    "title": "CloseResult"
+   },
+   "Counts": {
+    "properties": {
+     "overdue": {
+      "type": "integer",
+      "title": "Overdue"
+     },
+     "today": {
+      "type": "integer",
+      "title": "Today"
+     },
+     "waiting": {
+      "type": "integer",
+      "title": "Waiting"
+     }
+    },
+    "type": "object",
+    "required": [
+     "overdue",
+     "today",
+     "waiting"
+    ],
+    "title": "Counts"
+   },
+   "ExtractResult": {
+    "properties": {
+     "title": {
+      "type": "string",
+      "title": "Title"
+     },
+     "date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Date"
+     },
+     "label": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Label"
+     },
+     "past": {
+      "type": "boolean",
+      "title": "Past",
+      "default": false
+     },
+     "span": {
+      "anyOf": [
+       {
+        "prefixItems": [
+         {
+          "type": "integer"
+         },
+         {
+          "type": "integer"
+         }
+        ],
+        "type": "array",
+        "maxItems": 2,
+        "minItems": 2
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Span"
+     }
+    },
+    "type": "object",
+    "required": [
+     "title"
+    ],
+    "title": "ExtractResult",
+    "description": "Быстрый ввод одной строкой: название, дата и границы распознанного куска\nв исходном тексте — для подсветки и вырезания из названия."
+   },
+   "FeedResult": {
+    "properties": {
+     "now": {
+      "type": "string",
+      "title": "Now"
+     },
+     "feed": {
+      "items": {
+       "$ref": "#/components/schemas/FeedRow"
+      },
+      "type": "array",
+      "title": "Feed"
+     },
+     "overdue_count": {
+      "type": "integer",
+      "title": "Overdue Count"
+     },
+     "counts": {
+      "$ref": "#/components/schemas/Counts"
+     },
+     "next_ahead": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/FeedRow"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "stalled_count": {
+      "type": "integer",
+      "title": "Stalled Count"
+     },
+     "broken": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Broken"
+     }
+    },
+    "type": "object",
+    "required": [
+     "now",
+     "feed",
+     "overdue_count",
+     "counts",
+     "next_ahead",
+     "stalled_count"
+    ],
+    "title": "FeedResult",
+    "description": "Лента «Что сегодня». Просроченное в строки не попадает: по 6.1 оно живёт\nотдельной плашкой — пятнадцать красных строк парализуют экран."
+   },
+   "FeedRow": {
+    "properties": {
+     "task_id": {
+      "type": "integer",
+      "title": "Task Id"
+     },
+     "task": {
+      "type": "string",
+      "title": "Task"
+     },
+     "step": {
+      "type": "integer",
+      "title": "Step"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Title"
+     },
+     "group": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Group"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
+     },
+     "control_at": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Control At"
+     },
+     "show_at": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Show At"
+     },
+     "state": {
+      "type": "string",
+      "title": "State"
+     },
+     "postponed": {
+      "type": "integer",
+      "title": "Postponed"
+     },
+     "stalled": {
+      "type": "boolean",
+      "title": "Stalled"
+     },
+     "tags": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Tags"
+     },
+     "last_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Last Reason"
+     },
+     "actions": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Actions"
+     }
+    },
+    "type": "object",
+    "required": [
+     "task_id",
+     "task",
+     "step",
+     "title",
+     "control_at",
+     "show_at",
+     "state",
+     "postponed",
+     "stalled",
+     "tags",
+     "last_reason",
+     "actions"
+    ],
+    "title": "FeedRow",
+    "description": "Строка ленты или завала. Всё вычислено здесь: оболочка только показывает.\nРаздел 6.1 ТЗ перечисляет, что видно в строке: название шага, название\nзадачи, время контроля, теги, счётчик переносов, если больше нуля."
+   },
+   "FieldError": {
+    "properties": {
+     "field": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Field"
+     },
+     "error": {
+      "type": "string",
+      "title": "Error"
+     }
+    },
+    "type": "object",
+    "required": [
+     "field",
+     "error"
+    ],
+    "title": "FieldError"
+   },
+   "FieldWarning": {
+    "properties": {
+     "field": {
+      "type": "string",
+      "title": "Field"
+     },
+     "warning": {
+      "type": "string",
+      "title": "Warning"
+     }
+    },
+    "type": "object",
+    "required": [
+     "field",
+     "warning"
+    ],
+    "title": "FieldWarning"
+   },
+   "FromTaskIn": {
+    "properties": {
+     "task_id": {
+      "type": "integer",
+      "title": "Task Id"
+     },
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Name"
+     }
+    },
+    "type": "object",
+    "required": [
+     "task_id"
+    ],
+    "title": "FromTaskIn"
+   },
+   "FromTemplateResult": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok",
+      "default": true
+     },
+     "task_id": {
+      "type": "integer",
+      "title": "Task Id"
+     },
+     "task": {
+      "type": "string",
+      "title": "Task"
+     },
+     "template": {
+      "type": "string",
+      "title": "Template"
+     },
+     "steps": {
+      "type": "integer",
+      "title": "Steps"
+     },
+     "attachments": {
+      "type": "integer",
+      "title": "Attachments"
+     },
+     "task_status": {
+      "type": "string",
+      "title": "Task Status"
+     }
+    },
+    "type": "object",
+    "required": [
+     "task_id",
+     "task",
+     "template",
+     "steps",
+     "attachments",
+     "task_status"
+    ],
+    "title": "FromTemplateResult"
+   },
+   "HTTPValidationError": {
+    "properties": {
+     "detail": {
+      "items": {
+       "$ref": "#/components/schemas/ValidationError"
+      },
+      "type": "array",
+      "title": "Detail"
+     }
+    },
+    "type": "object",
+    "title": "HTTPValidationError"
+   },
+   "Hypothesis": {
+    "properties": {
+     "entry_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ],
+      "title": "Entry Id"
+     },
+     "title": {
+      "type": "string",
+      "title": "Title"
+     },
+     "via": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Via"
+     },
+     "source": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Source"
+     },
+     "matched": {
+      "type": "string",
+      "title": "Matched"
+     },
+     "offset_start": {
+      "type": "integer",
+      "title": "Offset Start"
+     },
+     "offset_end": {
+      "type": "integer",
+      "title": "Offset End"
+     },
+     "confirmed": {
+      "type": "boolean",
+      "title": "Confirmed",
+      "default": false
+     }
+    },
+    "additionalProperties": true,
+    "type": "object",
+    "required": [
+     "entry_id",
+     "title",
+     "matched",
+     "offset_start",
+     "offset_end"
+    ],
+    "title": "Hypothesis",
+    "description": "Форма из `kb.py:373-383` (`_hypothesis`). `extra=\"allow\"`, чтобы поля,\nо которых этот файл не знает, не терялись при обратной пересылке —\n`reject`/`confirm` шлют гипотезу назад ровно такой, какой её показал `scan`."
+   },
+   "InstantiateIn": {
+    "properties": {
+     "start": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Title"
+     }
+    },
+    "type": "object",
+    "title": "InstantiateIn"
+   },
+   "KbConfirmIn": {
+    "properties": {
+     "mentions": {
+      "items": {
+       "$ref": "#/components/schemas/Hypothesis"
+      },
+      "type": "array",
+      "title": "Mentions"
+     }
+    },
+    "type": "object",
+    "required": [
+     "mentions"
+    ],
+    "title": "KbConfirmIn"
+   },
+   "KbConfirmResult": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok"
+     },
+     "links": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "title": "Links"
+     },
+     "errors": {
+      "items": {
+       "$ref": "#/components/schemas/FieldError"
+      },
+      "type": "array",
+      "title": "Errors"
+     }
+    },
+    "type": "object",
+    "required": [
+     "ok",
+     "links",
+     "errors"
+    ],
+    "title": "KbConfirmResult"
+   },
+   "KbRejectIn": {
+    "properties": {
+     "mention": {
+      "$ref": "#/components/schemas/Hypothesis"
+     },
+     "mute": {
+      "type": "boolean",
+      "title": "Mute",
+      "default": false
+     }
+    },
+    "type": "object",
+    "required": [
+     "mention"
+    ],
+    "title": "KbRejectIn"
+   },
+   "KbScanIn": {
+    "properties": {
+     "text": {
+      "type": "string",
+      "title": "Text"
+     },
+     "task_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Task Id"
+     }
+    },
+    "type": "object",
+    "required": [
+     "text"
+    ],
+    "title": "KbScanIn"
+   },
+   "KbScanResult": {
+    "properties": {
+     "hypotheses": {
+      "items": {
+       "$ref": "#/components/schemas/Hypothesis"
+      },
+      "type": "array",
+      "title": "Hypotheses"
+     },
+     "confirmed": {
+      "items": {
+       "$ref": "#/components/schemas/Hypothesis"
+      },
+      "type": "array",
+      "title": "Confirmed"
+     },
+     "kb_broken": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Kb Broken"
+     }
+    },
+    "type": "object",
+    "required": [
+     "hypotheses",
+     "confirmed",
+     "kb_broken"
+    ],
+    "title": "KbScanResult"
+   },
+   "LogEntry": {
+    "properties": {
+     "step_id": {
+      "type": "integer",
+      "title": "Step Id"
+     },
+     "step_title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Step Title"
+     },
+     "date": {
+      "type": "string",
+      "format": "date",
+      "title": "Date"
+     },
+     "event": {
+      "type": "string",
+      "title": "Event"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     },
+     "was": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Was"
+     },
+     "to": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "To"
+     }
+    },
+    "type": "object",
+    "required": [
+     "step_id",
+     "step_title",
+     "date",
+     "event"
+    ],
+    "title": "LogEntry"
+   },
+   "MarkIn": {
+    "properties": {
+     "op": {
+      "type": "string",
+      "title": "Op"
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Reason"
+     },
+     "to": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "To"
+     }
+    },
+    "type": "object",
+    "required": [
+     "op"
+    ],
+    "title": "MarkIn",
+    "description": "Отметка шага. `to` — человеческий ввод («завтра в 9», «+3», ISO):\nразбирает ядро, оболочка дату не трогает (`CONTRACT.md`)."
+   },
+   "MarkResult": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok",
+      "default": true
+     },
+     "op": {
+      "type": "string",
+      "title": "Op"
+     },
+     "task_id": {
+      "type": "integer",
+      "title": "Task Id"
+     },
+     "task": {
+      "type": "string",
+      "title": "Task"
+     },
+     "step": {
+      "type": "integer",
+      "title": "Step"
+     },
+     "status": {
+      "type": "string",
+      "title": "Status"
+     },
+     "task_status": {
+      "type": "string",
+      "title": "Task Status"
+     },
+     "next_step_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Next Step Id"
+     },
+     "next_step_title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Next Step Title"
+     },
+     "dates_assigned": {
+      "items": {
+       "type": "integer"
+      },
+      "type": "array",
+      "title": "Dates Assigned"
+     },
+     "next_check": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Next Check"
+     },
+     "stalled": {
+      "type": "integer",
+      "title": "Stalled",
+      "default": 0
+     },
+     "hint": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Hint"
+     },
+     "undone": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Undone"
+     },
+     "control_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Control Date"
+     },
+     "row": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/FeedRow"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "counts": {
+      "$ref": "#/components/schemas/Counts"
+     }
+    },
+    "type": "object",
+    "required": [
+     "op",
+     "task_id",
+     "task",
+     "step",
+     "status",
+     "task_status",
+     "counts"
+    ],
+    "title": "MarkResult",
+    "description": "Ответ на отметку шага. Несёт новое состояние — обновлённую строку ленты\n(`row`, None если шаг из ленты и завала ушёл) и счётчики, — чтобы клиенту\nне нужен был второй круг до сервера. Это контрактно чистая версия\nоптимистичного интерфейса: оболочка по-прежнему ничего не вычисляет."
+   },
+   "OkResult": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok",
+      "default": true
+     }
+    },
+    "type": "object",
+    "title": "OkResult"
+   },
+   "PlanIn": {
+    "properties": {
+     "task_id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Task Id"
+     },
+     "start_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start Date"
+     },
+     "steps": {
+      "items": {
+       "$ref": "#/components/schemas/StepEditIn"
+      },
+      "type": "array",
+      "title": "Steps"
+     }
+    },
+    "type": "object",
+    "required": [
+     "steps"
+    ],
+    "title": "PlanIn"
+   },
+   "PlanResult": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok"
+     },
+     "errors": {
+      "items": {
+       "$ref": "#/components/schemas/FieldError"
+      },
+      "type": "array",
+      "title": "Errors"
+     },
+     "warnings": {
+      "items": {
+       "$ref": "#/components/schemas/FieldWarning"
+      },
+      "type": "array",
+      "title": "Warnings"
+     },
+     "steps": {
+      "items": {
+       "$ref": "#/components/schemas/PlannedStep"
+      },
+      "type": "array",
+      "title": "Steps"
+     }
+    },
+    "type": "object",
+    "required": [
+     "ok",
+     "errors",
+     "warnings",
+     "steps"
+    ],
+    "title": "PlanResult"
+   },
+   "PlannedStep": {
+    "properties": {
+     "path": {
+      "type": "string",
+      "title": "Path"
+     },
+     "id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Id"
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mode"
+     },
+     "start": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start"
+     },
+     "control": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Control"
+     },
+     "explicit_start": {
+      "type": "boolean",
+      "title": "Explicit Start"
+     },
+     "steps": {
+      "items": {
+       "$ref": "#/components/schemas/PlannedStep"
+      },
+      "type": "array",
+      "title": "Steps",
+      "default": []
+     }
+    },
+    "type": "object",
+    "required": [
+     "path",
+     "id",
+     "mode",
+     "start",
+     "control",
+     "explicit_start"
+    ],
+    "title": "PlannedStep"
+   },
+   "PreviewRow": {
+    "properties": {
+     "position": {
+      "type": "integer",
+      "title": "Position"
+     },
+     "title": {
+      "type": "string",
+      "title": "Title"
+     },
+     "offset_days": {
+      "type": "integer",
+      "title": "Offset Days"
+     },
+     "control_date": {
+      "type": "string",
+      "title": "Control Date"
+     },
+     "control_text": {
+      "type": "string",
+      "title": "Control Text"
+     },
+     "weekday": {
+      "type": "string",
+      "title": "Weekday"
+     },
+     "on_weekend": {
+      "type": "boolean",
+      "title": "On Weekend"
+     },
+     "show_at": {
+      "type": "string",
+      "title": "Show At"
+     }
+    },
+    "type": "object",
+    "required": [
+     "position",
+     "title",
+     "offset_days",
+     "control_date",
+     "control_text",
+     "weekday",
+     "on_weekend",
+     "show_at"
+    ],
+    "title": "PreviewRow"
+   },
+   "QuickIn": {
+    "properties": {
+     "text": {
+      "type": "string",
+      "title": "Text"
+     }
+    },
+    "type": "object",
+    "required": [
+     "text"
+    ],
+    "title": "QuickIn"
+   },
+   "ReasonsResult": {
+    "properties": {
+     "reasons": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Reasons"
+     }
+    },
+    "type": "object",
+    "required": [
+     "reasons"
+    ],
+    "title": "ReasonsResult",
+    "description": "Справочник причин переноса и провала (раздел 5.4 ТЗ). Только активные:\nархивная причина для новой записи не годится, а в истории остаётся."
+   },
+   "RecurrenceView": {
+    "properties": {
+     "anchor": {
+      "type": "string",
+      "format": "date",
+      "title": "Anchor"
+     },
+     "freq": {
+      "type": "string",
+      "title": "Freq"
+     },
+     "interval": {
+      "type": "integer",
+      "title": "Interval"
+     },
+     "byweekday": {
+      "items": {
+       "type": "integer"
+      },
+      "type": "array",
+      "title": "Byweekday"
+     },
+     "bymonthday": {
+      "items": {
+       "type": "integer"
+      },
+      "type": "array",
+      "title": "Bymonthday"
+     },
+     "bysetpos": {
+      "items": {
+       "type": "integer"
+      },
+      "type": "array",
+      "title": "Bysetpos"
+     },
+     "bymonth": {
+      "items": {
+       "type": "integer"
+      },
+      "type": "array",
+      "title": "Bymonth"
+     },
+     "holiday_shift": {
+      "type": "string",
+      "title": "Holiday Shift"
+     },
+     "lead_days": {
+      "type": "integer",
+      "title": "Lead Days"
+     },
+     "until": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Until"
+     },
+     "paused": {
+      "type": "boolean",
+      "title": "Paused"
+     },
+     "description": {
+      "type": "string",
+      "title": "Description"
+     }
+    },
+    "type": "object",
+    "required": [
+     "anchor",
+     "freq",
+     "interval",
+     "byweekday",
+     "bymonthday",
+     "bysetpos",
+     "bymonth",
+     "holiday_shift",
+     "lead_days",
+     "until",
+     "paused",
+     "description"
+    ],
+    "title": "RecurrenceView",
+    "description": "Нормализованное правило со склада плюс подпись `description` —\nеё считает `recurrence.describe`, а не морда: оболочка правило словами\nне пересказывает."
+   },
+   "RuleDate": {
+    "properties": {
+     "date": {
+      "type": "string",
+      "format": "date",
+      "title": "Date"
+     },
+     "text": {
+      "type": "string",
+      "title": "Text"
+     }
+    },
+    "type": "object",
+    "required": [
+     "date",
+     "text"
+    ],
+    "title": "RuleDate"
+   },
+   "RuleIn": {
+    "properties": {
+     "anchor": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Anchor"
+     },
+     "freq": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Freq"
+     },
+     "interval": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Interval"
+     },
+     "byweekday": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Byweekday"
+     },
+     "bymonthday": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Bymonthday"
+     },
+     "bysetpos": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Bysetpos"
+     },
+     "bymonth": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "integer"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Bymonth"
+     },
+     "holiday_shift": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Holiday Shift"
+     },
+     "lead_days": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Lead Days"
+     },
+     "until": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Until"
+     },
+     "paused": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Paused"
+     }
+    },
+    "type": "object",
+    "title": "RuleIn",
+    "description": "Правило повторения как его вводит форма. В ядро уходит\n`model_dump(exclude_unset=True)`: незаданное поле не затирает дефолты\n`recurrence.normalize_rule`, а поля без виджета (`holiday_shift`,\n`lead_days`, `until`, `paused`) возвращаются такими, какими пришли из\n`GET` — `describe` их проговаривает, терять нельзя.\n\n`extra=\"ignore\"`, не `\"forbid\"`: комментарий у `PUT /templates/{name}`\n(«клиент шлёт то, что получил в `GET`») буквально предлагает подставить\nсюда `RecurrenceView` из ответа как есть, а в нём есть `description`,\nкоторого у `RuleIn` нет. `forbid` ронял такой честный round-trip 422‑й\n(находка ревью среза 2, core/models_templates.py:41); полю всё равно\nнекуда деться дальше `_payload`/`_rule_payload`, они разбирают только\nизвестные ключи."
+   },
+   "RuleParseResult": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok"
+     },
+     "rule": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/RuleIn"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "description": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Description"
+     },
+     "errors": {
+      "items": {
+       "$ref": "#/components/schemas/FieldError"
+      },
+      "type": "array",
+      "title": "Errors"
+     }
+    },
+    "type": "object",
+    "required": [
+     "ok"
+    ],
+    "title": "RuleParseResult"
+   },
+   "RulePreviewIn": {
+    "properties": {
+     "anchor": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Anchor"
+     },
+     "rule": {
+      "$ref": "#/components/schemas/RuleIn"
+     }
+    },
+    "type": "object",
+    "required": [
+     "rule"
+    ],
+    "title": "RulePreviewIn"
+   },
+   "RulePreviewResult": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok"
+     },
+     "description": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Description"
+     },
+     "anchor": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Anchor"
+     },
+     "preview": {
+      "items": {
+       "$ref": "#/components/schemas/RuleDate"
+      },
+      "type": "array",
+      "title": "Preview"
+     },
+     "errors": {
+      "items": {
+       "$ref": "#/components/schemas/FieldError"
+      },
+      "type": "array",
+      "title": "Errors"
+     }
+    },
+    "type": "object",
+    "required": [
+     "ok"
+    ],
+    "title": "RulePreviewResult"
+   },
+   "SearchResult": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok",
+      "default": true
+     },
+     "query": {
+      "type": "string",
+      "title": "Query"
+     },
+     "count": {
+      "type": "integer",
+      "title": "Count"
+     },
+     "results": {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array",
+      "title": "Results"
+     }
+    },
+    "type": "object",
+    "required": [
+     "query",
+     "count",
+     "results"
+    ],
+    "title": "SearchResult"
+   },
+   "StepEditIn": {
+    "properties": {
+     "title": {
+      "type": "string",
+      "title": "Title",
+      "default": ""
+     },
+     "control_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Control Date"
+     },
+     "start_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start Date"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mode"
+     },
+     "steps": {
+      "items": {
+       "$ref": "#/components/schemas/StepEditIn"
+      },
+      "type": "array",
+      "title": "Steps",
+      "default": []
+     },
+     "id": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Id"
+     }
+    },
+    "type": "object",
+    "title": "StepEditIn"
+   },
+   "StepIn": {
+    "properties": {
+     "title": {
+      "type": "string",
+      "title": "Title",
+      "default": ""
+     },
+     "control_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Control Date"
+     },
+     "start_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start Date"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Note"
+     },
+     "mode": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Mode"
+     },
+     "steps": {
+      "items": {
+       "$ref": "#/components/schemas/StepIn"
+      },
+      "type": "array",
+      "title": "Steps",
+      "default": []
+     }
+    },
+    "type": "object",
+    "title": "StepIn"
+   },
+   "TaskCard": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok",
+      "default": true
+     },
+     "task_id": {
+      "type": "integer",
+      "title": "Task Id"
+     },
+     "task": {
+      "type": "string",
+      "title": "Task"
+     },
+     "task_status": {
+      "type": "string",
+      "title": "Task Status"
+     },
+     "status_ru": {
+      "type": "string",
+      "title": "Status Ru"
+     },
+     "body": {
+      "type": "string",
+      "title": "Body"
+     },
+     "created": {
+      "type": "string",
+      "format": "date",
+      "title": "Created"
+     },
+     "start_date": {
+      "type": "string",
+      "title": "Start Date"
+     },
+     "tags": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Tags"
+     },
+     "cancelled": {
+      "type": "boolean",
+      "title": "Cancelled",
+      "default": false
+     },
+     "cancelled_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cancelled Reason"
+     },
+     "template_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Template Name"
+     },
+     "cycle_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Cycle Key"
+     },
+     "control_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Control Date"
+     },
+     "current_step": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Current Step"
+     },
+     "progress": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Progress"
+     },
+     "stalled": {
+      "type": "integer",
+      "title": "Stalled"
+     },
+     "steps": {
+      "items": {
+       "$ref": "#/components/schemas/CardStep"
+      },
+      "type": "array",
+      "title": "Steps"
+     },
+     "history": {
+      "items": {
+       "$ref": "#/components/schemas/LogEntry"
+      },
+      "type": "array",
+      "title": "History"
+     },
+     "actions": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Actions"
+     }
+    },
+    "type": "object",
+    "required": [
+     "task_id",
+     "task",
+     "task_status",
+     "status_ru",
+     "body",
+     "created",
+     "start_date",
+     "tags",
+     "control_date",
+     "current_step",
+     "progress",
+     "stalled",
+     "steps",
+     "history",
+     "actions"
+    ],
+    "title": "TaskCard"
+   },
+   "TaskDeleteResult": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok",
+      "default": true
+     },
+     "task_id": {
+      "type": "integer",
+      "title": "Task Id"
+     },
+     "task": {
+      "type": "string",
+      "title": "Task"
+     },
+     "deleted": {
+      "type": "boolean",
+      "title": "Deleted",
+      "default": true
+     }
+    },
+    "type": "object",
+    "required": [
+     "task_id",
+     "task"
+    ],
+    "title": "TaskDeleteResult"
+   },
+   "TaskEditIn": {
+    "properties": {
+     "title": {
+      "type": "string",
+      "title": "Title"
+     },
+     "start_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start Date"
+     },
+     "tags": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Tags"
+     },
+     "body": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Body"
+     },
+     "steps": {
+      "items": {
+       "$ref": "#/components/schemas/StepEditIn"
+      },
+      "type": "array",
+      "title": "Steps"
+     },
+     "force": {
+      "type": "boolean",
+      "title": "Force",
+      "default": false
+     }
+    },
+    "type": "object",
+    "required": [
+     "title",
+     "steps"
+    ],
+    "title": "TaskEditIn"
+   },
+   "TaskIn": {
+    "properties": {
+     "title": {
+      "type": "string",
+      "title": "Title"
+     },
+     "start_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start Date"
+     },
+     "tags": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Tags",
+      "default": []
+     },
+     "body": {
+      "type": "string",
+      "title": "Body",
+      "default": ""
+     },
+     "steps": {
+      "items": {
+       "$ref": "#/components/schemas/StepIn"
+      },
+      "type": "array",
+      "title": "Steps"
+     }
+    },
+    "type": "object",
+    "required": [
+     "title",
+     "steps"
+    ],
+    "title": "TaskIn"
+   },
+   "TaskRef": {
+    "properties": {
+     "task_id": {
+      "type": "integer",
+      "title": "Task Id"
+     },
+     "task": {
+      "type": "string",
+      "title": "Task"
+     }
+    },
+    "type": "object",
+    "required": [
+     "task_id",
+     "task"
+    ],
+    "title": "TaskRef"
+   },
+   "TaskSaveResult": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok",
+      "default": true
+     },
+     "task_id": {
+      "type": "integer",
+      "title": "Task Id"
+     },
+     "task": {
+      "type": "string",
+      "title": "Task"
+     },
+     "task_status": {
+      "type": "string",
+      "title": "Task Status"
+     },
+     "steps": {
+      "type": "integer",
+      "title": "Steps"
+     },
+     "created": {
+      "type": "boolean",
+      "title": "Created"
+     },
+     "renamed_from": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Renamed From"
+     },
+     "warnings": {
+      "items": {
+       "$ref": "#/components/schemas/FieldWarning"
+      },
+      "type": "array",
+      "title": "Warnings",
+      "default": []
+     },
+     "card": {
+      "$ref": "#/components/schemas/TaskCard"
+     }
+    },
+    "type": "object",
+    "required": [
+     "task_id",
+     "task",
+     "task_status",
+     "steps",
+     "created",
+     "card"
+    ],
+    "title": "TaskSaveResult"
+   },
+   "TemplateCard": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok",
+      "default": true
+     },
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "tags": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Tags"
+     },
+     "body": {
+      "type": "string",
+      "title": "Body"
+     },
+     "steps": {
+      "items": {
+       "$ref": "#/components/schemas/TemplateStep"
+      },
+      "type": "array",
+      "title": "Steps"
+     },
+     "steps_count": {
+      "type": "integer",
+      "title": "Steps Count"
+     },
+     "attachments_count": {
+      "type": "integer",
+      "title": "Attachments Count"
+     },
+     "recurrence": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/RecurrenceView"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "type": "object",
+    "required": [
+     "name",
+     "tags",
+     "body",
+     "steps",
+     "steps_count",
+     "attachments_count",
+     "recurrence"
+    ],
+    "title": "TemplateCard"
+   },
+   "TemplateDeleteResult": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok",
+      "default": true
+     },
+     "template": {
+      "type": "string",
+      "title": "Template"
+     },
+     "deleted": {
+      "type": "boolean",
+      "title": "Deleted",
+      "default": true
+     }
+    },
+    "type": "object",
+    "required": [
+     "template"
+    ],
+    "title": "TemplateDeleteResult"
+   },
+   "TemplateIn": {
+    "properties": {
+     "name": {
+      "type": "string",
+      "title": "Name"
+     },
+     "tags": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array",
+      "title": "Tags"
+     },
+     "body": {
+      "type": "string",
+      "title": "Body",
+      "default": ""
+     },
+     "steps": {
+      "items": {
+       "$ref": "#/components/schemas/TemplateStepIn"
+      },
+      "type": "array",
+      "title": "Steps"
+     },
+     "recurrence": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/RuleIn"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "type": "object",
+    "required": [
+     "name",
+     "steps"
+    ],
+    "title": "TemplateIn"
+   },
+   "TemplateList": {
+    "properties": {
+     "templates": {
+      "items": {
+       "$ref": "#/components/schemas/TemplateCard"
+      },
+      "type": "array",
+      "title": "Templates"
+     },
+     "count": {
+      "type": "integer",
+      "title": "Count"
+     }
+    },
+    "type": "object",
+    "required": [
+     "templates",
+     "count"
+    ],
+    "title": "TemplateList"
+   },
+   "TemplatePreview": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok"
+     },
+     "start": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start"
+     },
+     "start_text": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start Text"
+     },
+     "steps": {
+      "items": {
+       "$ref": "#/components/schemas/PreviewRow"
+      },
+      "type": "array",
+      "title": "Steps"
+     },
+     "errors": {
+      "items": {
+       "$ref": "#/components/schemas/FieldError"
+      },
+      "type": "array",
+      "title": "Errors"
+     }
+    },
+    "type": "object",
+    "required": [
+     "ok",
+     "start",
+     "start_text"
+    ],
+    "title": "TemplatePreview",
+    "description": "Живой предпросмотр: плохой ввод — это ответ `ok: false`, а не ошибка\nзапроса, потому что форма спрашивает на каждое нажатие."
+   },
+   "TemplatePreviewIn": {
+    "properties": {
+     "template": {
+      "$ref": "#/components/schemas/TemplateIn"
+     },
+     "start": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Start"
+     }
+    },
+    "type": "object",
+    "required": [
+     "template"
+    ],
+    "title": "TemplatePreviewIn"
+   },
+   "TemplateStep": {
+    "properties": {
+     "position": {
+      "type": "integer",
+      "title": "Position"
+     },
+     "title": {
+      "type": "string",
+      "title": "Title"
+     },
+     "offset_days": {
+      "type": "integer",
+      "title": "Offset Days"
+     },
+     "time_of_day": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Time Of Day"
+     }
+    },
+    "type": "object",
+    "required": [
+     "position",
+     "title",
+     "offset_days",
+     "time_of_day"
+    ],
+    "title": "TemplateStep"
+   },
+   "TemplateStepIn": {
+    "properties": {
+     "title": {
+      "type": "string",
+      "title": "Title",
+      "default": ""
+     },
+     "offset_days": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Offset Days"
+     },
+     "time_of_day": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Time Of Day"
+     },
+     "position": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Position"
+     }
+    },
+    "type": "object",
+    "title": "TemplateStepIn"
+   },
+   "ValidationError": {
+    "properties": {
+     "loc": {
+      "items": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "integer"
+        }
+       ]
+      },
+      "type": "array",
+      "title": "Location"
+     },
+     "msg": {
+      "type": "string",
+      "title": "Message"
+     },
+     "type": {
+      "type": "string",
+      "title": "Error Type"
+     },
+     "input": {
+      "title": "Input"
+     },
+     "ctx": {
+      "type": "object",
+      "title": "Context"
+     }
+    },
+    "type": "object",
+    "required": [
+     "loc",
+     "msg",
+     "type"
+    ],
+    "title": "ValidationError"
+   },
+   "WhenResult": {
+    "properties": {
+     "ok": {
+      "type": "boolean",
+      "title": "Ok"
+     },
+     "date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Date"
+     },
+     "label": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Label"
+     },
+     "past": {
+      "type": "boolean",
+      "title": "Past",
+      "default": false
+     },
+     "error": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Error"
+     }
+    },
+    "type": "object",
+    "required": [
+     "ok"
+    ],
+    "title": "WhenResult",
+    "description": "Во что превратился человеческий ввод даты — подсказка под полем формы.\nПодпись («завтра в 09:30», «18.10.2026, через 40 дн.») считается здесь,\nа не в браузере: по контракту оболочка не пересказывает данные ядра\nсвоими словами. Нераспознанный ввод — это ответ, а не ошибка запроса:\nполе опрашивается на каждое нажатие клавиши."
+   },
+   "api__v1__router__TextIn": {
+    "properties": {
+     "text": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Text"
+     }
+    },
+    "type": "object",
+    "title": "TextIn"
+   },
+   "api__v1__templates__TextIn": {
+    "properties": {
+     "text": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Text"
+     }
+    },
+    "type": "object",
+    "title": "TextIn",
+    "description": "Как `TextIn` в `api/v1/router.py` — свой экземпляр, а не импорт оттуда:\nмодуль шаблонов не должен тянуть за собой маршруты задач ради одного поля."
+   }
+  }
+ }
+}

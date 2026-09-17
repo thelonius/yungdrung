@@ -8,7 +8,6 @@
 
 Календарь: 17 августа 2026 — понедельник. Рабочее время 09:00–21:00.
 """
-import json
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path

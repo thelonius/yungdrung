@@ -173,6 +173,42 @@ def наполнить():
     ход(engine.cmd_notdone, t, 2, -2, reason="не было времени", to=день(-1).isoformat())
 
 
+ШАБЛОН = "Еженедельный отчёт по объекту"
+
+
+def шаблон_с_повторением():
+    """Шаблон с правилом повторения и парой вложений (срез 2, критерий
+    приёмки §7 п.10 спецификации): без этого страница `/шаблоны` показывает
+    пустой список и нечем проверить ни `RecurrenceForm`, ни `AttachmentList`
+    шаблона."""
+    данные = {
+        "name": ШАБЛОН,
+        "tags": [МЕТКА, "стройка"],
+        "body": "Еженедельный сбор данных с объекта и отчёт руководству.",
+        "steps": [
+            {"title": "Собрать данные с объекта", "offset_days": 0, "time_of_day": "09:00"},
+            {"title": "Свести отчёт", "offset_days": 1, "time_of_day": "12:00"},
+            {"title": "Отправить руководству", "offset_days": 1, "time_of_day": "18:00"},
+        ],
+    }
+    ответ = engine.cmd_save_template(_args(json=json.dumps(данные)), СЕГОДНЯ)
+    if not ответ.get("ok"):
+        sys.exit(f"{ШАБЛОН}: {ответ.get('errors')}")
+
+    правило = {"freq": "weekly", "interval": 1, "byweekday": [0],
+              "anchor": СЕГОДНЯ.isoformat()}
+    ответ = engine.cmd_set_recurrence(_args(name=ШАБЛОН, rule=правило), СЕГОДНЯ)
+    if not ответ.get("ok"):
+        sys.exit(f"{ШАБЛОН}: повторение: {ответ.get('errors')}")
+
+    вложения = (("чек-лист.pdf", b"%PDF-1.4 demo checklist"),
+                ("фото-объекта.png", b"\x89PNG\r\n\x1a\n demo photo"))
+    for имя, байты in вложения:
+        ответ = engine.cmd_attach(_args(template=ШАБЛОН, filename=имя, data=байты), СЕГОДНЯ)
+        if not ответ.get("ok"):
+            sys.exit(f"{ШАБЛОН}: вложение «{имя}»: {ответ.get('errors')}")
+
+
 ЗАМЕТКИ = {
     "Василий Говнов": ("люди", "Юрист и согласующий. Телефон и договор — заполнить."),
     "Заявка на грант ФПГ": ("документы", "Подана в июле, ждём решения комиссии."),
@@ -203,6 +239,8 @@ def очистить():
         if путь.exists() and МЕТКА in путь.read_text(encoding="utf-8"):
             путь.unlink()
             убрано += 1
+    if engine.cmd_template_delete(_args(name=ШАБЛОН), СЕГОДНЯ).get("ok"):
+        убрано += 1
     return убрано
 
 
@@ -219,6 +257,7 @@ def main():
     было = {t["path"].stem for t in engine.load_tasks()}
     заметки()
     наполнить()
+    шаблон_с_повторением()
     стало = engine.load_tasks()
     новых = [t for t in стало if t["path"].stem not in было]
     print(f"заведено задач: {len(новых)}, всего в сторе: {len(стало)}")

@@ -1,29 +1,26 @@
 'use strict';
 
+const { $, $$, get, post, toast, shortDate, dateField } = Yd;
+const dlg = $('#expand');
+let текущий = null;
+
+const xStartField = dateField({
+  text: '#x-start',
+  presets: '#expand .presets',
+  withTime: false,
+  onChange: (text) => {
+    clearTimeout(xStartField._previewT);
+    xStartField._previewT = setTimeout(() => обновитьПредпросмотр(text || 'сегодня'), 200);
+  },
+});
+
+
 // Список шаблонов и развёртывание в задачу. Раздел 5.6 ТЗ, требование R22.
 //
 // Предпросмотр и разбор даты старта считает ядро — страница только показывает.
 // То же правило, что на ленте: КОНТРАКТ.md запрещает оболочке вычислять то,
 // что должно вычислять ядро.
 
-const $ = (s, r = document) => r.querySelector(s);
-const dlg = $('#expand');
-
-let текущий = null; // имя шаблона, открытого в диалоге
-
-async function get(url) {
-  const r = await fetch(url);
-  return r.json();
-}
-
-async function post(url, body) {
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  return r.json();
-}
 
 function карточка(t) {
   const li = document.createElement('li');
@@ -124,17 +121,6 @@ async function обновитьПредпросмотр(текстДаты) {
   }
 }
 
-$('#x-start').addEventListener('input', (e) => {
-  clearTimeout($('#x-start')._t);
-  $('#x-start')._t = setTimeout(() => обновитьПредпросмотр(e.target.value), 200);
-});
-
-for (const btn of dlg.querySelectorAll('.presets button')) {
-  btn.addEventListener('click', () => {
-    $('#x-start').value = btn.dataset.when;
-    обновитьПредпросмотр(btn.dataset.when);
-  });
-}
 
 $('#x-back').addEventListener('click', () => dlg.close());
 

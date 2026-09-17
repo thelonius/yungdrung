@@ -1,5 +1,7 @@
 'use strict';
 
+const { $, $$, get, post, toast, shortDate, dateField } = Yd;
+
 // База знаний — плоский список поверх /api/kb/notes (engine.cmd_kb_note_list).
 // Страница не ходит на сервер за каждым нажатием клавиши: список грузится один
 // раз, фильтр работает по уже загруженным данным. Тот же приём, что на «Всех
@@ -10,15 +12,10 @@
 // леммами (тот живёт в /api/search и знает про падежи) — здесь просто фильтр
 // списка, который человек видит перед собой.
 
-const $ = (s, r = document) => r.querySelector(s);
 
 let записи = [];
 let поиск = '';
 
-async function get(url) {
-  const r = await fetch(url);
-  return r.json();
-}
 
 function словоСиноним(n) {
   const n10 = n % 10;

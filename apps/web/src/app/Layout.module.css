@@ -1,0 +1,10 @@
+.bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex-wrap: wrap; padding: 14px 20px; border-bottom: 1px solid var(--line);
+  background: var(--card);
+}
+.brand { font-weight: 700; text-decoration: none; color: var(--ink); font-size: 15px; }
+.nav { display: flex; gap: 4px; flex-wrap: wrap; font-size: 13px; }
+.nav a { text-decoration: none; padding: 4px 8px; border-radius: 6px; color: var(--accent); }
+.nav a:hover { background: var(--focus); }
+.tools { display: flex; gap: 6px; }

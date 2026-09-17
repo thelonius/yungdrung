@@ -1,0 +1,608 @@
+[
+ {
+  "op": "create",
+  "result": {
+   "ok": true,
+   "task": "Заявка на грант",
+   "steps": 2,
+   "status": "ждёт"
+  }
+ },
+ {
+  "op": "create_par_group",
+  "result": {
+   "ok": true,
+   "task": "Подписать договор",
+   "steps": 4,
+   "status": "ждёт"
+  }
+ },
+ {
+  "op": "create_errors_by_path",
+  "result": {
+   "ok": false,
+   "errors": [
+    {
+     "field": "title",
+     "error": "Задача с таким названием уже есть"
+    },
+    {
+     "field": "steps.0.title",
+     "error": "Название шага обязательно"
+    },
+    {
+     "field": "steps.0.control_date",
+     "error": "Дату не понял. Можно: 18.08 · 15 марта · завтра · +3 · пн · полдесятого"
+    },
+    {
+     "field": "steps.1.control_date",
+     "error": "Даты ставятся подшагам, не группе"
+    },
+    {
+     "field": "steps.2.mode",
+     "error": "Режим группы — par или seq"
+    },
+    {
+     "field": "steps.3.steps",
+     "error": "В группе нужен хотя бы один подшаг"
+    },
+    {
+     "field": "steps.4.control_date",
+     "error": "Контроль раньше даты начала шага"
+    }
+   ]
+  }
+ },
+ {
+  "op": "create_bad_title_no_steps",
+  "result": {
+   "ok": false,
+   "errors": [
+    {
+     "field": "title",
+     "error": "В названии нельзя символы /"
+    },
+    {
+     "field": "steps",
+     "error": "Нужен хотя бы один шаг"
+    }
+   ]
+  }
+ },
+ {
+  "op": "create_bad_json",
+  "result": {
+   "ok": false,
+   "errors": [
+    {
+     "field": null,
+     "error": "битый JSON: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
+    }
+   ]
+  }
+ },
+ {
+  "op": "show",
+  "result": {
+   "task": "Заявка на грант",
+   "status": "waiting",
+   "body": "Заметка.",
+   "meta": {
+    "schema": 1,
+    "type": "task",
+    "title": "Заявка на грант",
+    "created": "2026-09-08",
+    "start_date": "2026-09-08",
+    "tags": [
+     "деньги",
+     "фонд"
+    ],
+    "status": "ждёт",
+    "current_step": "Собрать документы",
+    "control_date": "2026-09-10",
+    "stalled": 0,
+    "progress": "0/2"
+   },
+   "steps": [
+    {
+     "id": 1,
+     "title": "Собрать документы",
+     "status": "pending",
+     "start_date": "2026-09-08",
+     "control_date": "2026-09-10 10:00:00",
+     "completed_date": null,
+     "note": null,
+     "parent": null,
+     "mode": null,
+     "log": [],
+     "closed": false,
+     "active": true,
+     "stalled": 0,
+     "state": "waiting"
+    },
+    {
+     "id": 2,
+     "title": "Отправить",
+     "status": "pending",
+     "start_date": "2026-09-10 10:00:00",
+     "control_date": "2026-09-15",
+     "completed_date": null,
+     "note": "через сайт фонда",
+     "parent": null,
+     "mode": null,
+     "log": [],
+     "closed": false,
+     "active": false,
+     "stalled": 0,
+     "state": "waiting"
+    }
+   ]
+  }
+ },
+ {
+  "op": "show_par_group",
+  "result": {
+   "task": "Подписать договор",
+   "status": "waiting",
+   "body": "",
+   "meta": {
+    "schema": 1,
+    "type": "task",
+    "title": "Подписать договор",
+    "created": "2026-09-08",
+    "start_date": "2026-09-08",
+    "tags": [],
+    "status": "ждёт",
+    "current_step": "Арендодатель",
+    "control_date": "2026-09-12",
+    "stalled": 0,
+    "progress": "0/3"
+   },
+   "steps": [
+    {
+     "id": 1,
+     "title": "Подписи",
+     "status": "pending",
+     "start_date": null,
+     "control_date": null,
+     "completed_date": null,
+     "note": null,
+     "parent": null,
+     "mode": "par",
+     "log": [],
+     "closed": false,
+     "active": false,
+     "stalled": 0,
+     "state": null
+    },
+    {
+     "id": 2,
+     "title": "Арендодатель",
+     "status": "pending",
+     "start_date": "2026-09-08",
+     "control_date": "2026-09-12",
+     "completed_date": null,
+     "note": null,
+     "parent": 1,
+     "mode": null,
+     "log": [],
+     "closed": false,
+     "active": true,
+     "stalled": 0,
+     "state": "waiting"
+    },
+    {
+     "id": 3,
+     "title": "Банк",
+     "status": "pending",
+     "start_date": "2026-09-08",
+     "control_date": "2026-09-13",
+     "completed_date": null,
+     "note": null,
+     "parent": 1,
+     "mode": null,
+     "log": [],
+     "closed": false,
+     "active": true,
+     "stalled": 0,
+     "state": "waiting"
+    },
+    {
+     "id": 4,
+     "title": "Передать ключи",
+     "status": "pending",
+     "start_date": "2026-09-13",
+     "control_date": "2026-09-20",
+     "completed_date": null,
+     "note": null,
+     "parent": null,
+     "mode": null,
+     "log": [],
+     "closed": false,
+     "active": false,
+     "stalled": 0,
+     "state": "waiting"
+    }
+   ]
+  }
+ },
+ {
+  "op": "show_strips_steps_block",
+  "result": {
+   "task": "Старая с блоком шагов",
+   "status": "waiting",
+   "body": "Заметка руками.",
+   "meta": {
+    "schema": 1,
+    "type": "task",
+    "title": "Старая с блоком шагов",
+    "created": "2026-08-20",
+    "start_date": "2026-08-20",
+    "tags": [],
+    "status": "ждёт",
+    "current_step": "Единственный",
+    "control_date": "2026-09-30",
+    "stalled": 0,
+    "progress": "0/1"
+   },
+   "steps": [
+    {
+     "id": 1,
+     "title": "Единственный",
+     "status": "pending",
+     "start_date": null,
+     "control_date": "2026-09-30",
+     "completed_date": null,
+     "note": null,
+     "parent": null,
+     "mode": null,
+     "log": [],
+     "closed": false,
+     "active": true,
+     "stalled": 0,
+     "state": "waiting"
+    }
+   ]
+  }
+ },
+ {
+  "op": "update_reorder",
+  "result": {
+   "ok": true,
+   "task": "Заявка на грант",
+   "status": "ждёт",
+   "steps": 2
+  }
+ },
+ {
+  "op": "update_missing_step_no_force",
+  "result": {
+   "ok": false,
+   "errors": [
+    {
+     "field": "steps",
+     "error": "Шаг 2 пропал из данных — сначала «снять», не убирать так"
+    }
+   ]
+  }
+ },
+ {
+  "op": "update_missing_step_force",
+  "result": {
+   "ok": true,
+   "task": "Заявка на грант",
+   "status": "ждёт",
+   "steps": 2
+  }
+ },
+ {
+  "op": "update_rename_taken",
+  "result": {
+   "ok": false,
+   "errors": [
+    {
+     "field": "title",
+     "error": "Задача с таким названием уже есть"
+    }
+   ]
+  }
+ },
+ {
+  "op": "update_rename",
+  "result": {
+   "ok": true,
+   "task": "Заявка на грант ФПГ",
+   "status": "ждёт",
+   "steps": 2
+  }
+ },
+ {
+  "op": "show_after_update",
+  "result": {
+   "task": "Заявка на грант ФПГ",
+   "status": "waiting",
+   "body": "Новая заметка.",
+   "meta": {
+    "schema": 1,
+    "type": "task",
+    "title": "Заявка на грант ФПГ",
+    "created": "2026-09-08",
+    "start_date": "2027-09-07",
+    "tags": [
+     "фонд"
+    ],
+    "status": "ждёт",
+    "current_step": "Собрать документы",
+    "control_date": "2026-09-10",
+    "stalled": 0,
+    "progress": "0/2"
+   },
+   "steps": [
+    {
+     "id": 1,
+     "title": "Собрать документы",
+     "status": "pending",
+     "start_date": "2026-09-08",
+     "control_date": "2026-09-10 10:00:00",
+     "completed_date": null,
+     "note": null,
+     "parent": null,
+     "mode": null,
+     "log": [],
+     "closed": false,
+     "active": true,
+     "stalled": 0,
+     "state": "waiting"
+    },
+    {
+     "id": 3,
+     "title": "Новый шаг",
+     "status": "pending",
+     "start_date": "2026-09-10",
+     "control_date": "2026-09-18",
+     "completed_date": null,
+     "note": "заметка шага",
+     "parent": null,
+     "mode": null,
+     "log": [],
+     "closed": false,
+     "active": false,
+     "stalled": 0,
+     "state": "waiting"
+    }
+   ]
+  }
+ },
+ {
+  "op": "update_bad_date_not_written",
+  "result": {
+   "ok": false,
+   "errors": [
+    {
+     "field": "steps.0.control_date",
+     "error": "Дату не понял. Можно: 18.08 · 15 марта · завтра · +3 · пн · полдесятого"
+    }
+   ]
+  }
+ },
+ {
+  "op": "update_unknown_task",
+  "result": {
+   "exit": "нет задачи по «нет такой»"
+  }
+ },
+ {
+  "op": "resolve_steps",
+  "result": [
+   {
+    "title": "Первый",
+    "note": null,
+    "id": null,
+    "errors": [],
+    "children": [],
+    "mode": null,
+    "start": "2026-09-05",
+    "control": "2026-09-12",
+    "явный_старт": true,
+    "поле": "steps.0",
+    "предыдущий": null
+   },
+   {
+    "title": "Второй",
+    "note": null,
+    "id": null,
+    "errors": [],
+    "children": [],
+    "mode": null,
+    "start": "2026-09-11",
+    "control": "2026-09-14",
+    "явный_старт": true,
+    "поле": "steps.1",
+    "предыдущий": "2026-09-12"
+   },
+   {
+    "title": "Группа",
+    "note": null,
+    "id": null,
+    "errors": [],
+    "children": [
+     {
+      "title": "Внутри",
+      "note": null,
+      "id": null,
+      "errors": [],
+      "children": [],
+      "mode": null,
+      "start": "2026-09-14",
+      "control": "2026-09-16",
+      "явный_старт": false,
+      "поле": "steps.2.steps.0",
+      "предыдущий": "2026-09-14"
+     },
+     {
+      "title": "Раньше",
+      "note": null,
+      "id": null,
+      "errors": [],
+      "children": [],
+      "mode": null,
+      "start": "2026-09-15",
+      "control": "2026-09-17",
+      "явный_старт": true,
+      "поле": "steps.2.steps.1",
+      "предыдущий": "2026-09-16"
+     }
+    ],
+    "mode": "seq",
+    "start": null,
+    "control": null,
+    "явный_старт": false,
+    "поле": "steps.2",
+    "предыдущий": "2026-09-14"
+   }
+  ]
+ },
+ {
+  "op": "soft_warnings",
+  "result": [
+   {
+    "field": "steps.0.start_date",
+    "warning": "Шаг начинается раньше даты начала задачи"
+   },
+   {
+    "field": "steps.1.start_date",
+    "warning": "Шаг начинается раньше, чем закончится предыдущий"
+   },
+   {
+    "field": "steps.2.steps.1.start_date",
+    "warning": "Шаг начинается раньше, чем закончится предыдущий"
+   }
+  ]
+ },
+ {
+  "op": "validate_new_task",
+  "result": [
+   {
+    "field": "title",
+    "error": "Задача с таким названием уже есть"
+   }
+  ]
+ },
+ {
+  "op": "cancel",
+  "result": {
+   "ok": true,
+   "task": "Позвонить Василию",
+   "status": "отменена"
+  }
+ },
+ {
+  "op": "cancel_twice",
+  "result": {
+   "exit": "задача «Позвонить Василию» уже отменена"
+  }
+ },
+ {
+  "op": "close",
+  "result": {
+   "ok": true,
+   "task": "Сделка по складу",
+   "closed_steps": 3,
+   "task_status": "done"
+  }
+ },
+ {
+  "op": "close_again",
+  "result": {
+   "ok": true,
+   "task": "Сделка по складу",
+   "closed_steps": 0,
+   "task_status": "done"
+  }
+ },
+ {
+  "op": "close_cancelled",
+  "result": {
+   "exit": "задача «Отменённая история» отменена, а не открыта"
+  }
+ },
+ {
+  "op": "reopen",
+  "result": {
+   "ok": true,
+   "task": "Оплатить налоги за третий квартал",
+   "step": "1",
+   "task_status": "без даты"
+  }
+ },
+ {
+  "op": "reopen_open_step",
+  "result": {
+   "exit": "шаг 3 не был сделан (сейчас: pending)"
+  }
+ },
+ {
+  "op": "reopen_group",
+  "result": {
+   "exit": "шаг 1 — группа, отмечаются её подшаги"
+  }
+ },
+ {
+  "op": "reopen_unknown_step",
+  "result": {
+   "exit": "нет шага 9 в «Оплатить налоги за третий квартал»"
+  }
+ },
+ {
+  "op": "delete",
+  "result": {
+   "ok": true,
+   "task": "Закрытая задача",
+   "deleted": true
+  }
+ },
+ {
+  "op": "delete_unknown",
+  "result": {
+   "exit": "нет задачи по «Закрытая»"
+  }
+ },
+ {
+  "op": "feed_after",
+  "result": {
+   "now": "2026-09-08T11:00:00",
+   "feed": [],
+   "overdue_count": 0,
+   "counts": {
+    "overdue": 0,
+    "today": 0,
+    "waiting": 5
+   },
+   "next_ahead": {
+    "task_id": 7,
+    "task": "Заявка на грант ФПГ",
+    "step": 1,
+    "title": "Собрать документы",
+    "group": null,
+    "note": null,
+    "control_at": "2026-09-10 10:00:00",
+    "show_at": "2026-09-10T10:00:00",
+    "state": "waiting",
+    "postponed": 0,
+    "stalled": false,
+    "tags": [
+     "фонд"
+    ],
+    "last_reason": null,
+    "actions": [
+     "done",
+     "notdone",
+     "defer",
+     "skip"
+    ]
+   },
+   "stalled_count": 0,
+   "broken": []
+  }
+ }
+]

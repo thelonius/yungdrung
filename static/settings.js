@@ -1,39 +1,20 @@
 'use strict';
 
+const { $, $$, get, post, toast, shortDate, dateField } = Yd;
+
 // Резервные копии, восстановление и экспорт в JSON. Раздел 9 ТЗ, R25 и R11.
 //
 // Страница не решает, что где лежит и что откуда восстанавливать — она зовёт
 // ядро и показывает ответ. Дефолтный путь копий и текст ошибки тоже считает
 // движок; здесь только перевод байтов в КБ/МБ для глаз, это не расчёт данных.
 
-const $ = (s, r = document) => r.querySelector(s);
 const confirmDlg = $('#confirm-restore');
 const tagDlg = $('#tag-action');
 
 let восстановитьЦель = null; // копия, которую подтверждаем в диалоге
 let тегДействие = null; // {mode: 'rename'|'merge', tag} — на что отвечает tag-action
 
-async function get(url) {
-  const r = await fetch(url);
-  return r.json();
-}
 
-async function post(url, body) {
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body || {}),
-  });
-  return r.json();
-}
-
-function всплывашка(текст) {
-  const el = document.createElement('div');
-  el.className = 'toast';
-  el.textContent = текст;
-  document.body.append(el);
-  setTimeout(() => el.remove(), 3500);
-}
 
 // Байты для человека. Движок отдаёт число как есть — округление и подпись
 // «КБ/МБ» это не вычисление данных, а просто другая запись того же числа.
@@ -95,10 +76,10 @@ $('#backup-now').addEventListener('click', async () => {
   try {
     const r = await post('/api/backup', { force: true });
     if (!r.ok) {
-      всплывашка((r.errors || []).map((e) => e.error).join('; ') || 'копия не снялась');
+      toast((r.errors || []).map((e) => e.error).join('; ') || 'копия не снялась');
       return;
     }
-    всплывашка(`Копия снята: ${r.name}`);
+    toast(`Копия снята: ${r.name}`);
     await загрузитьКопии();
   } finally {
     btn.disabled = false;
@@ -185,7 +166,7 @@ let текущиеНастройки = null;
 async function загрузитьНастройки() {
   текущиеНастройки = await get('/api/settings');
   if (текущиеНастройки.error) {
-    всплывашка('Файл настроек повреждён: ' + текущиеНастройки.error);
+    toast('Файл настроек повреждён: ' + текущиеНастройки.error);
     return;
   }
   const n = текущиеНастройки.notifications;
@@ -217,7 +198,7 @@ $('#work-save').addEventListener('click', async () => {
   const метка = $('#work-saved');
   метка.hidden = false;
   setTimeout(() => { метка.hidden = true; }, 2500);
-  if (r.warnings && r.warnings.length) всплывашка(r.warnings.map((w) => w.warning).join(' · '));
+  if (r.warnings && r.warnings.length) toast(r.warnings.map((w) => w.warning).join(' · '));
 });
 
 // --- причины переноса ------------------------------------------------------
@@ -241,7 +222,7 @@ function причинаСтрокой(r) {
   btn.disabled = r.archived;
   btn.addEventListener('click', async () => {
     const ответ = await post('/api/reasons-archive', { name: r.name });
-    if (!ответ.ok) return всплывашка((ответ.errors || []).map((e) => e.error).join('; '));
+    if (!ответ.ok) return toast((ответ.errors || []).map((e) => e.error).join('; '));
     отрисоватьПричины(ответ.result);
     текущиеНастройки.reasons = ответ.result;
   });
@@ -354,7 +335,7 @@ function тегСтрокой(t) {
   pin.textContent = t.pinned ? 'Закреплён' : 'Закрепить';
   pin.addEventListener('click', async () => {
     const r = await post('/api/tags-toggle-pinned', { name: t.name });
-    if (!r.ok) return всплывашка((r.errors || []).map((e) => e.error).join('; '));
+    if (!r.ok) return toast((r.errors || []).map((e) => e.error).join('; '));
     текущиеНастройки.tags = r.result;
     отрисоватьТеги(r.result);
   });
@@ -424,7 +405,7 @@ $('#ta-yes').addEventListener('click', async () => {
     tagDlg.close();
     текущиеНастройки.tags = r.result;
     отрисоватьТеги(r.result);
-    всплывашка(mode === 'rename' ? 'Тег переименован'
+    toast(mode === 'rename' ? 'Тег переименован'
       : `Тег объединён, задач затронуто: ${r.tasks_updated}`);
   } finally {
     btn.disabled = false;

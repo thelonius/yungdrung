@@ -18,16 +18,14 @@
   python3 engine.py show <задача>               одна задача целиком
   python3 engine.py export --to выгрузка.xlsx   весь стор в Excel
 
-Задача указывается частью имени файла: "грант" найдёт «Заявка на грант ФПГ».
+Задача указывается куском названия: "грант" найдёт «Заявка на грант ФПГ».
 """
 import argparse
 import json
 import os
 import re
 import sys
-import tempfile
-import time
-from datetime import date, datetime, time as dtime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -46,16 +44,51 @@ try:
 except ImportError:
     sys.exit("нужен pyyaml: pip install pyyaml")
 
-import attachments
-import backup
-import kb
-import recurrence as rec
-import settings as cfg
-import store
-import templates as tpl
-import worktime
+# Импорты ниже — после настройки кодировки потоков и после проверки pyyaml:
+# понятная строка «нужен pyyaml» полезнее ImportError из середины модуля.
+# Отсюда E402 по всему блоку, тот же приём, что в server.py.
+import backup  # noqa: E402
+import kb  # noqa: E402
+import recurrence as rec  # noqa: E402
+import settings as cfg  # noqa: E402
+import store  # noqa: E402
+import templates as tpl  # noqa: E402
+import worktime  # noqa: E402
+# Доменные функции и разбор дат переехали в `domain/` (REFACTOR.md, срез 1a).
+# Здесь они реэкспортируются: тесты, `server.py` и `templates.py` зовут их как
+# `engine.parse_date_input` и `engine.is_closed`, и ломать эти адреса ради
+# переезда файла незачем — они уйдут вместе с самим `engine.py` в срезе 5.
+from domain.names import FORBIDDEN_IN_NAME, MAX_TITLE, title_error  # noqa: E402,F401
+from domain.ru_dates import (  # noqa: E402,F401
+    ДНИ_НЕДЕЛИ, ОТНОСИТЕЛЬНЫЕ, as_date, parse_date_input, parse_stored_control,
+    parse_time_part,
+)
+# Планирование шагов (проверка, дефолты дат, сборка и правка) переехало в
+# `domain/steps_plan.py` (срез 2); здесь те же имена для тестов и `templates.py`.
+import domain.steps_plan as steps_plan  # noqa: E402
+from domain.steps_plan import (  # noqa: E402,F401
+    MODES, _parse_optional_date, _финиш_узла, apply_task_edit, build_task,
+    default_step_start, resolve_steps, soft_warnings, validate_new_task,
+    validate_task_edit, walk_resolved,
+)
+from domain.steps import (  # noqa: E402,F401
+    DONE, FAILED, OPEN, SKIPPED, STATUS_RU, _closure, current_step, current_steps,
+    is_closed, is_group, leaves_of, stall_count, step_view, steps_of, task_status,
+    task_summary,
+)
+import core.attachments as core_attachments  # noqa: E402
+import core.clock  # noqa: E402
+import core.feed as core_feed  # noqa: E402
+import core.mark as core_mark  # noqa: E402
+import core.persist as core_persist  # noqa: E402
+import core.recur as core_recur  # noqa: E402
+import core.tasks as core_tasks  # noqa: E402
+import core.templates as core_templates  # noqa: E402
+from core.context import Context  # noqa: E402
+from core.errors import CoreError, NotFound, ValidationError  # noqa: E402
+from core.models_tasks import TaskEditIn  # noqa: E402
 
-SCHEMA = 1
+SCHEMA = core_persist.TASK_SCHEMA
 VAULT = Path(os.environ.get("YUNGDRUNG_VAULT", Path(__file__).resolve().parent))
 KB_DIR = VAULT / "База"
 
@@ -67,13 +100,16 @@ def db_path():
     return VAULT / "стор.db"
 
 
-def get_store():
-    return store.Store(db_path())
+def _ctx():
+    """Контекст ядра от текущего VAULT. Функция, а не константа: тесты подменяют
+    `VAULT` через monkeypatch уже после импорта, и захардкоженный контекст эту
+    подмену не увидел бы."""
+    return Context(VAULT)
 
-OPEN = "pending"
-DONE = "done"
-SKIPPED = "skipped"
-FAILED = "failed"
+
+def get_store():
+    return _ctx().store
+
 
 def get_reasons():
     """Справочник причин, раздел 5.4 ТЗ. Причина обязательна при «не сделано»,
@@ -88,17 +124,6 @@ def get_reasons():
     """
     return cfg.active_reason_names(cfg.settings_path(VAULT))
 
-# В стор статус пишется по-русски: эти файлы читает заказчик, а не только движок.
-# В JSON наружу уходят английские ключи — там интерфейс для бота.
-STATUS_RU = {
-    "overdue": "просрочена",
-    "due": "сегодня",
-    "waiting": "ждёт",
-    "no_date": "без даты",
-    "done": "закрыта",
-    "empty": "нет шагов",
-    "cancelled": "отменена",
-}
 
 # Статусы и события шага в файле лежат по-английски — их читает движок. В Excel
 # уходит перевод: тот файл открывает заказчик, и «not_done» ему ни о чём не говорит.
@@ -130,41 +155,6 @@ def parse_file(path):
     return yaml.safe_load(fm) or {}, body.lstrip("\n")
 
 
-class PlainDumper(yaml.SafeDumper):
-    """Без якорей и ссылок: одна и та же дата в нескольких полях — обычное дело,
-    а `&id001`/`*id001` Obsidian не разбирает и файл для него ломается."""
-
-    def ignore_aliases(self, data):
-        return True
-
-
-def write_file(path, meta, body):
-    """Атомарно: Obsidian держит файлы открытыми и кэширует, дописывать на месте нельзя.
-
-    На Windows os.replace может ненадолго упасть с PermissionError, если файл в
-    этот момент держит антивирус, OneDrive-индексатор или сам Obsidian — на маке
-    так почти не бывает. Несколько коротких повторов дешевле, чем терять запись.
-    """
-    fm = yaml.dump(meta, Dumper=PlainDumper, allow_unicode=True, sort_keys=False,
-                   default_flow_style=False)
-    content = f"---\n{fm}---\n\n{body}"
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
-        for attempt in range(5):
-            try:
-                os.replace(tmp, path)
-                break
-            except PermissionError:
-                if attempt == 4:
-                    raise
-                time.sleep(0.2 * (attempt + 1))
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
-
-
 # Задачи теперь читает store.py — SQLite не оставляет полуразобранных строк
 # так, как правленный руками YAML оставлял полуразобранные файлы. Список остаётся
 # (всегда пустой) ради стабильности формы ответа: `cmd_feed`/`cmd_backlog`/
@@ -178,13 +168,30 @@ def load_tasks():
 
 
 def find_task(fragment):
+    """Задача по куску названия. Собирается только найденная.
+
+    Раньше здесь читался весь стор со шагами и журналом, чтобы сверить кусок
+    строки с названиями, — и потому каждая отметка шага стоила столько же,
+    сколько лента: 180 мс на пяти тысячах закрытых задач. Теперь названия
+    приходят одной колонкой, а шаги и журнал собираются у одной задачи.
+
+    Сравнение осталось в Python: `lower()` и `LIKE` в SQLite работают только по
+    ASCII, и «ГРАНТ» не нашёл бы «грант».
+    """
+    return get_store().task_by_id(find_task_id(fragment))
+
+
+def find_task_id(fragment):
+    """Только id задачи по куску названия — без сборки шагов и журнала.
+    Адаптерам отметок (`_mark`, `cmd_undo`) больше ничего и не нужно: задачу
+    по id загрузит ядро, и собирать её здесь второй раз незачем."""
     frag = fragment.lower()
-    hits = [t for t in load_tasks() if frag in t["path"].stem.lower()]
+    hits = [(tid, title) for tid, title in get_store().titles() if frag in title.lower()]
     if not hits:
         sys.exit(f"нет задачи по «{fragment}»")
     if len(hits) > 1:
-        sys.exit("подходит несколько: " + ", ".join(t["path"].stem for t in hits))
-    return hits[0]
+        sys.exit("подходит несколько: " + ", ".join(title for _, title in hits))
+    return hits[0][0]
 
 
 # Записи базы знаний, которые не разобрались при последнем чтении. Та же логика,
@@ -231,497 +238,71 @@ def load_kb_entries():
     return out
 
 
-# --- вычисления ------------------------------------------------------------
-
-def as_date(value):
-    """Дата контроля может быть с временем или без: без времени — весь день."""
-    if value is None:
-        return None
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    return datetime.fromisoformat(str(value).strip()).date()
-
-
-def parse_stored_control(text):
-    """Строка control_date (из `parse_date_input` или уже из хранилища) →
-    `date` или `datetime`, время сохраняется, если было.
-
-    Отдельно от `as_date` намеренно: тот всегда режет время, а перенос шага
-    («перенести на 15:00», пресет «через час») обязан его пронести. Раньше
-    `cmd_defer`/`cmd_notdone` звали `date.fromisoformat(args.to)` напрямую —
-    на строке без времени это работало, а на «2026-08-24 15:00» падало с
-    ValueError, и «перенести на конкретный час» было в принципе недостижимо.
-
-    Порядок проверки важен: `date.fromisoformat` на строке с временем сам
-    бросает ValueError, и код проваливается в `datetime.fromisoformat`,
-    который с Python 3.11 принимает и пробел, и «T» как разделитель.
-    """
-    s = str(text).strip()
-    try:
-        return date.fromisoformat(s)
-    except ValueError:
-        return datetime.fromisoformat(s)
-
-
-def steps_of(task):
-    return task["meta"].get("steps") or []
-
-
-def is_closed(step):
-    """Шаг закрыт, только если статус — один из двух известных нам.
-
-    Всё незнакомое считаем открытым, а не закрытым. Стор правится руками, и
-    заказчик вполне может напечатать в Obsidian `status: сделан` вместо `done`.
-    Раньше это роняло `list`/`next`/`refresh`/`export` целиком с traceback:
-    «закрыт» и «открыт» проверялись двумя разными правилами, и на незнакомом
-    статусе они расходились — задача не считалась закрытой, но и текущего шага
-    в ней не находилось.
-    """
-    return step.get("status", OPEN) in (DONE, SKIPPED, FAILED)
-
-
-def is_group(step):
-    """Группа подшагов. У группы есть режим — "par" (порядок не важен) или
-    "seq" (подшаги по очереди), — а дат, статуса и журнала нет: закрытие
-    вычисляется из детей. Обычный шаг режима не имеет."""
-    return bool(step.get("mode"))
-
-
-def _children_map(steps):
-    """id родителя → его дети в порядке хранения. Верхний уровень — под ключом
-    None. Плоский список из БД идёт в глубину-первом порядке, поэтому дети
-    каждого родителя здесь оказываются в своём относительном порядке."""
-    m = {}
-    for s in steps:
-        m.setdefault(s.get("parent"), []).append(s)
-    return m
-
-
-def _closure(steps):
-    """(закрыт?, карта детей) для дерева шагов. Лист закрыт по статусу, группа —
-    когда закрыты все дети. Группа без детей считается закрытой: валидация
-    такие не пропускает, а на битых данных «закрыта» безопаснее вечно
-    открытой — не всплывает в ленте."""
-    m = _children_map(steps)
-
-    def закрыт(s):
-        if is_group(s):
-            return all(закрыт(c) for c in m.get(s["id"], []))
-        return is_closed(s)
-
-    return закрыт, m
-
-
-def leaves_of(task):
-    return [s for s in steps_of(task) if not is_group(s)]
-
-
-def current_steps(task):
-    """Активные листья — то, по чему сейчас идёт работа. В последовательной
-    цепочке это листья первого незакрытого элемента; параллельная группа
-    отдаёт активные листья всех своих незакрытых детей разом."""
-    steps = steps_of(task)
-    закрыт, m = _closure(steps)
-
-    def раскрыть(s):
-        if not is_group(s):
-            return [s]
-        дети = [c for c in m.get(s["id"], []) if not закрыт(c)]
-        if s["mode"] == "par":
-            return [лист for c in дети for лист in раскрыть(c)]
-        return раскрыть(дети[0]) if дети else []
-
-    for s in m.get(None, []):
-        if not закрыт(s):
-            return раскрыть(s)
-    return []
-
-
-def current_step(task):
-    """Первый активный лист — для сводки и мест, где нужен один шаг."""
-    активные = current_steps(task)
-    return активные[0] if активные else None
-
-
-def task_status(task, today):
-    # Отмена — состояние задачи целиком, не выводится из шагов и стоит впереди
-    # любого другого правила: отменённая задача не должна всплывать просроченной
-    # только потому, что в ней остался незакрытый шаг.
-    if task["meta"].get("cancelled"):
-        return "cancelled"
-    steps = steps_of(task)
-    if not steps:
-        return "empty"
-    активные = current_steps(task)
-    if not активные:
-        return "done"
-    # Активных листьев может быть несколько (параллельная группа) — задача
-    # получает худшее из их состояний: просрочка перекрывает «сегодня», та —
-    # отсутствие даты, та — ожидание. Один лист даёт прежнее поведение.
-    состояния = set()
-    for step in активные:
-        due = as_date(step.get("control_date"))
-        if due is None:
-            состояния.add("no_date")
-        elif due < today:
-            состояния.add("overdue")
-        elif due == today:
-            состояния.add("due")
-        else:
-            состояния.add("waiting")
-    for худшее in ("overdue", "due", "no_date"):
-        if худшее in состояния:
-            return худшее
-    return "waiting"
-
-
-def stall_count(step):
-    """Сколько раз шаг не сделали. Отличает «ещё не дошли руки» от «буксует».
-
-    Массовый перенос (`mass_defer`) считается наравне с «не сделан» — R20 ТЗ
-    прямо требует, чтобы он увеличивал счётчик. Обычный одиночный `defer` сюда
-    не идёт: там дату для конкретного шага выбирают осознанно, это не то же
-    самое, что «опять не собрались» (см. test_defer_does_not_count_as_stalling).
-    """
-    return sum(1 for e in step.get("log") or [] if e.get("event") in ("not_done", "mass_defer"))
-
-
-def step_view(task, step, today):
-    due = as_date(step.get("control_date"))
-    return {
-        "task": task["path"].stem,
-        "step": step.get("id"),
-        "title": step.get("title"),
-        "control_date": str(step.get("control_date")) if step.get("control_date") else None,
-        "overdue_days": (today - due).days if due and due < today else 0,
-        "stalled": stall_count(step),
-        "last_reason": next(
-            (e.get("reason") for e in reversed(step.get("log") or []) if e.get("reason")), None
-        ),
-    }
-
-
 # --- запись ----------------------------------------------------------------
 
-def log_event(step, event, today, **fields):
-    step.setdefault("log", [])
-    entry = {"date": today, "event": event}
-    entry.update({k: v for k, v in fields.items() if v is not None})
-    step["log"].append(entry)
+log_event = core_mark.log_event
 
 
 def get_step(task, step_id):
-    """Найти шаг для отметки. Группа отметки не принимает — done/defer и
-    остальные работают по её подшагам, а закрытие группы вычисляется."""
-    for step in steps_of(task):
-        if str(step.get("id")) == str(step_id):
-            if is_group(step):
-                sys.exit(f"шаг {step_id} — группа, отмечаются её подшаги")
-            return step
-    sys.exit(f"нет шага {step_id} в «{task['path'].stem}»")
+    """Найти шаг для отметки (`core.mark.find_step`); для CLI отказ — выход с
+    текстом, как и раньше."""
+    try:
+        return core_mark.find_step(task, step_id)
+    except CoreError as e:
+        sys.exit(str(e))
 
 
-def _step_snapshot(step):
-    """Значения шага в момент чтения — сторож для `save(expected_step=...)`
-    против гонки при одновременной отметке (issue #11). Все поля, которые
-    команды над одним шагом (done/notdone/defer/fail/skip) вообще меняют:
-    если хоть одно успело измениться в базе между этим чтением и записью —
-    чужая запись уже выиграла гонку, и переписывать её нельзя."""
-    return {"status": step.get("status", OPEN),
-            "control_date": step.get("control_date"),
-            "completed_date": step.get("completed_date"),
-            "note": step.get("note")}
+_step_snapshot = core_mark.step_snapshot
 
 
-STEPS_START = "<!-- шаги: пишет движок, править руками не нужно -->"
-STEPS_END = "<!-- /шаги -->"
+STEPS_START = steps_plan.STEPS_START
+STEPS_END = steps_plan.STEPS_END
 
-# Маркеры статуса шага в теле заметки. Галочки-чекбоксы намеренно не используем:
-# в Obsidian они кликабельные, заказчик отметил бы шаг мышкой, движок затёр бы
-# это при следующей записи — и получилось бы два писателя одного поля.
-MARK = {DONE: "✓", SKIPPED: "×", FAILED: "✗", OPEN: "•"}
-
-
-def render_steps(task, today):
-    """Шаги человеческим списком — в тело заметки.
-
-    Зачем: в панели свойств Obsidian массив объектов не рисуется, там видна
-    обрезанная JSON-строка. Заказчик кликает по задаче из таблицы Bases и
-    упирается в нечитаемое. Здесь он видит список.
-
-    Побочно чинится вторая дыра: `[[ссылка]]` внутри названия шага живёт во
-    frontmatter, а его Obsidian ссылками не считает. В теле — считает, поэтому
-    ссылки на заметки базы знаний из названий шагов начинают работать.
-    """
-    lines = [STEPS_START, "**Шаги**", ""]
-    for step in steps_of(task):
-        status = step.get("status", OPEN)
-        tail = []
-        due = as_date(step.get("control_date"))
-        if status == DONE:
-            completed = as_date(step.get("completed_date"))
-            tail.append(f"сделан {completed:%d.%m.%Y}" if completed else "сделан")
-        elif status == SKIPPED:
-            tail.append("снят")
-        elif status == FAILED:
-            tail.append("не будет сделан")
-        elif due:
-            tail.append(f"контроль {due:%d.%m.%Y}")
-            if due < today:
-                tail.append(f"просрочен на {(today - due).days} дн.")
-        else:
-            tail.append("дата не назначена")
-
-        stalled = stall_count(step)
-        if stalled >= 3 and status == OPEN:
-            reason = next((e.get("reason") for e in reversed(step.get("log") or [])
-                            if e.get("reason")), None)
-            tail.append(f"буксует, отметок «не сделан»: {stalled}"
-                         + (f" ({reason})" if reason else ""))
-
-        lines.append(f"{MARK.get(status, '•')} **{step.get('id')}.** "
-                      f"{step.get('title', '')} — {' · '.join(tail)}")
-    lines += ["", STEPS_END]
-    return "\n".join(lines)
-
-
-def put_steps_into_body(body, block):
-    """Блок шагов переписываем, всё остальное в теле не трогаем.
-
-    Тело принадлежит заказчику: там его заметки по задаче. Движок владеет только
-    участком между маркерами. Если маркеров нет — вставляем блок сверху, текст
-    заказчика уезжает под него.
-    """
-    start = body.find(STEPS_START)
-    end = body.find(STEPS_END)
-    if start != -1 and end != -1 and end > start:
-        tail = body[end + len(STEPS_END):]
-        return body[:start] + block + tail
-    return block + "\n\n" + body.lstrip("\n") if body.strip() else block + "\n"
-
-
-def task_summary(task, today):
-    """status/current_step/control_date/stalled/progress — сводка верхнего
-    уровня, которую `save()` мержит в `task["meta"]` перед возвратом.
-
-    Отдельная функция, а не кусок внутри save(): раньше сводку было видно
-    только прочитав только что написанный файл, теперь — сразу после чтения
-    из БД её там нет (колонок под неё нет, source of truth в шагах). Тестам и
-    любому будущему коду, которому нужен «файл как он раньше выглядел бы»,
-    нужен ровно этот пересчёт, а не второе его написание.
-    """
-    листья = leaves_of(task)
-    активные = current_steps(task)
-    step = активные[0] if активные else None
-    closed = sum(1 for s in листья if is_closed(s))
-    # Прогресс считается по листьям: группа — скобка вокруг подшагов, а не
-    # отдельная единица работы. Контроль сводки — ближайший из активных.
-    контроли = sorted((as_date(s["control_date"]) for s in активные
-                       if s.get("control_date")))
-    return {
-        "status": STATUS_RU[task_status(task, today)],
-        "current_step": step.get("title") if step else None,
-        "control_date": контроли[0] if контроли else None,
-        "stalled": max((stall_count(s) for s in активные), default=0),
-        "progress": f"{closed}/{len(листья)}" if листья else None,
-    }
 
 
 def _sync_tags_to_catalog(tags):
-    """Тег, вписанный в карточку задачи (свободное поле «через запятую»),
-    обязан появиться в справочнике settings.py — иначе tags-rename/tags-merge
-    (Issue #7) не находят теги, которые реально стоят на задачах: справочник
-    заполнялся только явным tags-add и расходился с тем, что видно в ленте.
-
-    add_tag на уже существующем имени — SettingsError (дубликат в `_tags_add`),
-    это штатный повтор, а не сбой сохранения задачи, поэтому глотаем любую
-    SettingsError целиком: карточка не должна не сохраниться из-за того, что
-    её тег не прошёл валидацию справочника (например, цвет по умолчанию тут
-    ни при чём, но лучше не ронять запись задачи ради строки в другом файле).
-    """
-    path = cfg.settings_path(VAULT)
-    for имя in tags:
-        try:
-            cfg.add_tag(имя, "gray", pinned=False, path=path)
-        except cfg.SettingsError:
-            pass
+    _ctx().sync_tags(tags)
 
 
 def save(task, today, expected_step=None):
-    """Статус и сводка пересчитываются при каждой записи, руками их никто не ставит.
-
-    Сводка в БД не хранится вообще — колонок под неё нет, это была чистая
-    денормализация под таблицу Obsidian Bases. Здесь она по-прежнему мержится в
-    `task["meta"]`, потому что вызывающий код (`cmd_update`/`cmd_cancel`/
-    `cmd_reopen` и другие) читает `task["meta"]["status"]` сразу после save() —
-    источник правды остаётся в шагах, а это просто удобный снимок для JSON.
-
-    `expected_step` пробрасывается в `store.save_task` как есть — см. его
-    докстринг про guard от гонки (issue #11). Команды, которым нечего
-    сторожить (правка задачи целиком, отмена и т.п.), его не передают — для
-    них поведение не меняется.
-    """
-    meta = task["meta"]
-    meta["schema"] = SCHEMA
-    meta.update(task_summary(task, today))
-    _sync_tags_to_catalog(meta.get("tags") or [])
-    склад = get_store()
-    склад.save_task(task, today, expected_step=expected_step)
-    _index_task(склад, task)
-
-
-def _index_task(склад, task):
-    """Обновить поисковый индекс по одной задаче — сразу после её записи.
-
-    Одна строка, а не пересборка всего: `reindex_search` нужен после переезда и
-    для починки, но платить им за каждую отметку шага нельзя. Индексируется
-    новое название, поэтому строка сначала удаляется по нему же — при
-    переименовании старая осталась бы висеть и находилась по прежнему слову.
-    Отсюда `_forget_old_title`: имя до правки знает только вызывающий.
-
-    Сбой индексации не роняет запись: задача уже в базе, и потерять её из-за
-    того, что не собрались леммы, было бы хуже, чем разойтись с индексом —
-    индекс чинится командой `reindex`, а задача ничем.
-    """
-    try:
-        склад.search_replace(
-            "task", task["path"].stem, task["path"].stem,
-            (task.get("body") or "").strip()[:200],
-            kb.lemmatize_text(_search_text_of_task(task)))
-    except Exception:
-        pass
+    """Единственный путь записи задачи — `core.persist.save_task`. Здесь только
+    подстановка контекста: остальной engine.py зовёт `save(task, today)` из двух
+    десятков мест, и адрес сохранён до демонтажа файла (срез 5)."""
+    core_persist.save_task(_ctx(), task, today, expected_step=expected_step)
 
 
 # --- команды ---------------------------------------------------------------
 
-def feed_item(task, step, now, work, group=None):
-    """Строка ленты. Всё вычислено здесь: морда только показывает.
-
-    Раздел 6.1 ТЗ перечисляет, что видно в строке: название шага, название задачи,
-    время контроля, теги, счётчик переносов, если больше нуля.
-    """
-    control = step.get("control_date")
-    показ = worktime.show_at(control, work) if control else None
-    return {
-        "task": task["path"].stem,
-        "step": step.get("id"),
-        "title": step.get("title"),
-        "group": group,
-        "note": step.get("note"),
-        "control_at": str(control) if control else None,
-        "show_at": показ.isoformat() if показ else None,
-        "state": worktime.due_state(control, now, work),
-        "postponed": stall_count(step),
-        "stalled": stall_count(step) >= 3,
-        "tags": task["meta"].get("tags") or [],
-        "last_reason": next(
-            (e.get("reason") for e in reversed(step.get("log") or []) if e.get("reason")),
-            None),
-        "actions": ["done", "notdone", "defer", "skip"],
-    }
-
-
-def collect_open(now, work):
-    """Открытые шаги всех задач, разложенные по состоянию.
-
-    Одним проходом, потому что лента и завал — это один и тот же набор, просто
-    разрезанный по-разному, и считать его дважды значит однажды разойтись.
-    """
-    лента, завал, ждут = [], [], []
-    for task in load_tasks():
-        # Отменённая задача уходит из всех трёх наборов целиком. Шаг в ней
-        # остаётся открытым — по нему просто больше не работают, — поэтому без
-        # явной проверки она каждый день всплывала бы просроченной, хотя
-        # `task_status` считает её отменённой первым же правилом. Заодно это
-        # снимает напоминания: `remind.py` ходит за списком сюда же.
-        if task["meta"].get("cancelled"):
-            continue
-        по_id = {s["id"]: s for s in steps_of(task)}
-        # Параллельная группа даёт несколько активных листьев — и несколько
-        # строк ленты: у каждого свой срок, прятать их друг за друга нечестно.
-        # Название группы едет в строку контекстом.
-        for step in current_steps(task):
-            родитель = по_id.get(step.get("parent"))
-            item = feed_item(task, step, now, work,
-                             group=родитель.get("title") if родитель else None)
-            if item["state"] == "overdue":
-                завал.append(item)
-            elif worktime.in_horizon(step.get("control_date"), now, work):
-                лента.append(item)
-            else:
-                ждут.append(item)
-    ключ = lambda i: (i["show_at"] or "9999", i["task"], i["step"] or 0)
-    return sorted(лента, key=ключ), sorted(завал, key=ключ), sorted(ждут, key=ключ)
 
 
 def cmd_feed(args, today):
-    """Лента «Что сегодня» — раздел 6.1 ТЗ.
-
-    Просроченное в строки не попадает: по 6.1 оно живёт отдельной плашкой, потому
-    что пятнадцать красных строк парализуют экран. Счётчик отдаёт отдельно.
-    """
-    now = _now(args, today)
-    work = _work(args)
-    лента, завал, ждут = collect_open(now, work)
-    ближайший = ждут[0] if ждут else None
-    return {
-        "now": now.isoformat(),
-        "feed": лента,
-        "overdue_count": len(завал),
-        "counts": {"overdue": len(завал), "today": len(лента), "waiting": len(ждут)},
-        "next_ahead": ближайший,
-        "stalled_count": sum(1 for i in лента + завал if i["stalled"]),
-        "broken": list(BROKEN),
-    }
+    """Лента «Что сегодня» — раздел 6.1 ТЗ. Считает `core.feed`; здесь только
+    аргументы CLI и `broken` из чтения базы знаний."""
+    итог = core_feed.feed(_ctx(), _now(args, today), _work(args)).model_dump()
+    итог["broken"] = list(BROKEN)
+    return итог
 
 
 def cmd_backlog(args, today):
-    """Разбор завала — раздел 6.9 ТЗ. Сортировка по умолчанию — сначала самое
-    давнее, то есть по `show_at` возрастанием: пункт ТЗ явный и без исключений
-    для буксующих. Раньше буксующие элементы всплывали наверх поверх более
-    старых просрочек (`(not stalled, show_at)`) — это удобно интуитивно, но
-    противоречит явно записанному правилу, и ни один тест этого не стерёг.
-    """
-    now = _now(args, today)
-    work = _work(args)
-    _, завал, _ = collect_open(now, work)
-    завал.sort(key=lambda i: i["show_at"] or "9999")
-    return {"now": now.isoformat(), "backlog": завал, "count": len(завал),
-            "broken": list(BROKEN)}
+    """Разбор завала — раздел 6.9 ТЗ, считает `core.feed.backlog`."""
+    итог = core_feed.backlog(_ctx(), _now(args, today), _work(args)).model_dump()
+    итог["broken"] = list(BROKEN)
+    return итог
 
 
 def _now(args, today):
-    """Момент, от которого считаем. `--today` задаёт дату, время берём текущее —
-    так тесты и утренние прогоны воспроизводимы, а живой запуск точен."""
-    заданный = getattr(args, "now", None) if args else None
-    if заданный:
-        return worktime.as_datetime(заданный)
-    сейчас = datetime.now()
-    return сейчас if today == сейчас.date() else datetime.combine(today, сейчас.time())
+    """Момент, от которого считаем: `--today` задаёт дату, время берём текущее
+    (см. `core.clock.derive_now`)."""
+    return core.clock.derive_now(today, getattr(args, "now", None) if args else None)
 
 
 def _work(args):
     """Рабочие часы: настройки из файла — база, аргументы вызова — оверрайд
-    поверх них. Раньше файл настроек не читался вовсе, и `Настройки.json` мог
-    хранить что угодно — трекер всё равно жил на 09:00–21:00 по умолчанию.
-    """
-    try:
-        сохранённые = cfg.load(cfg.settings_path(VAULT))["notifications"]
-    except cfg.SettingsError:
-        # Битый файл настроек не должен останавливать ленту и завал — почему
-        # он битый, разбирается в настройках-интерфейсе, а не здесь.
-        сохранённые = cfg.defaults()["notifications"]
-
-    def выбрать(из_аргумента, ключ):
-        return из_аргумента if из_аргумента is not None else сохранённые.get(ключ)
-
-    return worktime.settings(
-        start=выбрать(getattr(args, "work_start", None) if args else None, "start"),
-        end=выбрать(getattr(args, "work_end", None) if args else None, "end"),
-        weekends=выбрать(getattr(args, "weekends", None) if args else None, "weekends"),
-    )
+    поверх них (`Context.work`)."""
+    return _ctx().work(
+        start=getattr(args, "work_start", None) if args else None,
+        end=getattr(args, "work_end", None) if args else None,
+        weekends=getattr(args, "weekends", None) if args else None)
 
 
 def cmd_next(args, today):
@@ -741,575 +322,14 @@ def cmd_next(args, today):
             "broken": list(BROKEN)}
 
 
-ДНИ_НЕДЕЛИ = {
-    "пн": 0, "понедельник": 0, "вт": 1, "вторник": 1, "ср": 2, "среда": 2,
-    "чт": 3, "четверг": 3, "пт": 4, "пятница": 4, "сб": 5, "суббота": 5,
-    "вс": 6, "воскресенье": 6,
-}
-
-ОТНОСИТЕЛЬНЫЕ = {"сегодня": 0, "завтра": 1, "послезавтра": 2}
-
-# Месяцы словом сравниваются по основе, а не полной таблицей падежей: «марта»,
-# «марте», «март» — один и тот же месяц, и хвост можно просто отбросить. Приём
-# взят из разбора дат в adaptive-astro-scheduler, где он уже отработал.
-#
-# «Май» вынесен отдельно, и это не педантизм: его основа «ма» короче любой
-# другой и своим хвостом съедает «марта» — ровно тот баг, который в исходном
-# коде и живёт. Три формы перечислить дешевле, чем сторожить исключение.
-МЕСЯЦЫ_ОСНОВЫ = [
-    ("январ", 1), ("феврал", 2), ("март", 3), ("апрел", 4), ("июн", 6),
-    ("июл", 7), ("август", 8), ("сентябр", 9), ("октябр", 10),
-    ("ноябр", 11), ("декабр", 12),
-]
-МЕСЯЦЫ_МАЙ = {"май": 5, "мая": 5, "мае": 5}
-
-
-def _месяц(слово):
-    """Название месяца в любом падеже → номер, иначе None.
-
-    Хвост после основы ограничен двумя буквами: без этого «мартышка» прошла бы
-    за март. Совсем строгой проверки падежа тут не нужно — дальше по разбору
-    стоит номер дня, и мусор всё равно не соберётся в дату.
-    """
-    if слово in МЕСЯЦЫ_МАЙ:
-        return МЕСЯЦЫ_МАЙ[слово]
-    for основа, номер in МЕСЯЦЫ_ОСНОВЫ:
-        if not слово.startswith(основа):
-            continue
-        хвост = слово[len(основа):]
-        if хвост == "" or (len(хвост) <= 2 and хвост.isalpha()):
-            return номер
-    return None
-
-# Предлоги-связки. У шага одна точка времени, а не диапазон, поэтому «в 9»,
-# «до 9» и «к 9» называют один и тот же час: разница есть для человека, для
-# движка её нет. Выкидываем их и разбираем то, что осталось — иначе «завтра в
-# 9-30» падает на слове «в», хотя и дата, и время в строке написаны.
-СВЯЗКИ = {"в", "во", "на", "до", "после", "к", "ко"}
-
-# Время суток словом: «7 вечера» пишут чаще, чем «19:00».
-ЧАСТИ_СУТОК = {"утра", "дня", "вечера", "ночи"}
-
-# Названия часов — просто другая запись времени, разворачиваем до разбора.
-ИМЕНА_ЧАСОВ = {"полдень": "12:00", "полночь": "00:00"}
-
-# Разговорное время. «Полдесятого» — половина ДЕСЯТОГО часа, то есть 9:30:
-# порядковое число называет час, который идёт, а не который прошёл. Ровно та же
-# логика у «без пятнадцати десять» (9:45) и «четверть десятого» (9:15) — везде
-# считается от следующего часа назад.
-#
-# Половина суток не угадывается: «полдесятого» — это 9:30, а не 21:30, ровно
-# как «в 9» даёт 9:00, а не 21:00. Кому нужен вечер, тот пишет «полдесятого
-# вечера», и слово доворачивает час обычным путём (`_время_суток`). Угадывать
-# по рабочему дню — значит иногда ставить контроль на двенадцать часов мимо,
-# причём молча.
-ЧАСЫ_ПОРЯДКОВЫЕ = {
-    "первого": 1, "второго": 2, "третьего": 3, "четвертого": 4, "пятого": 5,
-    "шестого": 6, "седьмого": 7, "восьмого": 8, "девятого": 9, "десятого": 10,
-    "одиннадцатого": 11, "двенадцатого": 12,
-}
-ЧАСЫ_КОЛИЧЕСТВЕННЫЕ = {
-    "час": 1, "часа": 1, "два": 2, "три": 3, "четыре": 4, "пять": 5,
-    "шесть": 6, "семь": 7, "восемь": 8, "девять": 9, "десять": 10,
-    "одиннадцать": 11, "двенадцать": 12,
-}
-# Минуты в родительном — то, что стоит после «без». «Четверти» тут же: для
-# разбора это просто пятнадцать, написанное словом.
-МИНУТЫ_РОДИТЕЛЬНЫЕ = {
-    "пяти": 5, "десяти": 10, "четверти": 15, "пятнадцати": 15,
-    "двадцати": 20, "двадцати пяти": 25,
-}
-ПОЛОВИНА_СЛОВОМ = {"пол", "половина", "половине", "половины"}
-
-
-def _пол_часа(слова, i):
-    """«полдесятого», «пол десятого», «пол-десятого», «половине десятого»."""
-    слово = слова[i]
-    if слово.startswith("пол"):
-        # «полдень» и «полночь» до сюда не доходят — их развернул ИМЕНА_ЧАСОВ.
-        час = ЧАСЫ_ПОРЯДКОВЫЕ.get(слово[3:].lstrip("-"))
-        if час:
-            return f"{час - 1:02d}:30", 1
-    if слово in ПОЛОВИНА_СЛОВОМ and i + 1 < len(слова):
-        час = ЧАСЫ_ПОРЯДКОВЫЕ.get(слова[i + 1])
-        if час:
-            return f"{час - 1:02d}:30", 2
-    return None
-
-
-def _четверть_часа(слова, i):
-    """«четверть десятого» → 9:15. «Без четверти» разбирает `_без_минут`."""
-    if слова[i] in ("четверть", "четверти") and i + 1 < len(слова):
-        час = ЧАСЫ_ПОРЯДКОВЫЕ.get(слова[i + 1])
-        if час:
-            return f"{час - 1:02d}:15", 2
-    return None
-
-
-def _без_минут(слова, i):
-    """«без пятнадцати десять» → 9:45, «без двадцати пяти шесть» → 5:35.
-
-    Минуты могут занимать два слова («двадцати пяти»), поэтому длинный вариант
-    пробуем первым: на «без двадцати пяти шесть» короткий прочитал бы «двадцати»
-    и остался бы с «пяти» вместо часа.
-    """
-    if слова[i] != "без":
-        return None
-    for длина in (2, 1):
-        конец = i + 1 + длина
-        if конец >= len(слова):
-            continue
-        минуты = МИНУТЫ_РОДИТЕЛЬНЫЕ.get(" ".join(слова[i + 1:конец]))
-        час = ЧАСЫ_КОЛИЧЕСТВЕННЫЕ.get(слова[конец])
-        if минуты and час:
-            return f"{час - 1:02d}:{60 - минуты:02d}", длина + 2
-    return None
-
-
-def _разговорное_время(слова):
-    """Разговорное время в списке слов → «ЧЧ:ММ» одним токеном.
-
-    Тот же приём, что у ИМЕНА_ЧАСОВ выше: переписываем в цифровую запись до
-    основного разбора, и дальше «завтра в полдесятого» идёт по той же дороге,
-    что «завтра в 9:30», — ни одна ветка ниже про разговорную форму не знает.
-    Формы многословные («без пятнадцати десять»), поэтому проход по списку, а
-    не подстановка по словарю.
-    """
-    итог, i = [], 0
-    while i < len(слова):
-        совпало = (_пол_часа(слова, i) or _четверть_часа(слова, i)
-                   or _без_минут(слова, i))
-        if совпало:
-            токен, съедено = совпало
-            итог.append(токен)
-            i += съедено
-        else:
-            итог.append(слова[i])
-            i += 1
-    return итог
-
-
-def _не_время(token):
-    raise ValueError(f"не время: {token}")
-
-
-def parse_time_part(token):
-    """«14:00», «9.30», «18-45» → time. Не время — None, и это не ошибка:
-    вызывающий просто поймёт, что времени в строке не было.
-
-    Секунды принимаются и отбрасываются: точность продукта — минуты, но
-    `str(datetime)` печатает время с секундами, а карточка отправляет то, что
-    показал сервер, обратно как есть. Без этого «10:00:00» не опознаётся как
-    время вообще, разбор проваливается в ISO-fallback на голую дату, и время
-    у уже сохранённого шага молча пропадает при первом же сохранении карточки.
-    """
-    m = re.fullmatch(r"(\d{1,2})[:.\-](\d{2})(?::\d{2})?", token)
-    if not m:
-        return None
-    часы, минуты = int(m.group(1)), int(m.group(2))
-    if часы > 23 or минуты > 59:
-        raise ValueError(f"не время: {token}")
-    return dtime(часы, минуты)
-
-
-def _час_или_время(token):
-    """Хвост строки как время: и «9:30», и голый час «9»."""
-    т = parse_time_part(token)
-    if т is not None:
-        return т
-    if token.isdigit() and len(token) <= 2 and int(token) <= 23:
-        return dtime(int(token), 0)
-    return None
-
-
-def _время_суток(t, слово):
-    """«7 вечера» → 19:00, «12 ночи» → 00:00.
-
-    Часы больше двенадцати не трогаем: «19 вечера» пишут редко, но кто написал,
-    тот имел в виду ровно то, что написал, — доворачивать там нечего.
-    """
-    ч = t.hour
-    if слово in ("дня", "вечера") and ч < 12:
-        ч += 12
-    elif слово in ("утра", "ночи") and ч == 12:
-        ч = 0
-    return dtime(ч, t.minute)
-
-
-def parse_date_input(text, today, *, now=None):
-    """Человеческий ввод → date или datetime. Здесь, а не в браузере.
-
-    Форма и CLI обязаны понимать ввод одинаково, иначе появятся задачи, которые
-    завелись через форму, но не читаются движком. Поэтому разбор один, а форма
-    только показывает, во что он превратился.
-
-    Понимает: 2026-08-18 · 18.08.2026 · 18.08 · сегодня · завтра · послезавтра ·
-    +3 и «через 3 дня» · пн, вторник (ближайший такой день после сегодня) ·
-    «15 марта» и «15 марта 2027» (месяц в любом падеже).
-
-    Со временем: «завтра 14:00», «завтра в 9-30», «18.08 в 9», «+3 18:00»,
-    «в 7 вечера», «завтра в полдень». Предлоги «в/во/на/до/после/к» выкидываются,
-    время суток словом доворачивает час до суточного. Просто «14:00» — сегодня
-    в это время. Без времени возвращается date, и шаг считается назначенным на
-    весь день: рабочие часы для него считаются от начала дня.
-
-    Разговорные формы времени: «полдесятого» и «половина десятого» (9:30),
-    «четверть десятого» (9:15), «без пятнадцати десять» и «без четверти десять»
-    (9:45), «без двадцати пяти шесть» (5:35). Разворачиваются в «ЧЧ:ММ» до
-    основного разбора (`_разговорное_время`), поэтому складываются со всем
-    остальным: «завтра в полдесятого вечера» — это 21:30 следующего дня.
-
-    «Через час» / «через N часов» — от текущего момента, а не от полуночи
-    `today`, поэтому требует именной аргумент `now`: без него `today` несёт
-    только дату, часа в ней нет и отсчитывать не от чего. Вызовы, которым
-    точный момент не нужен или недоступен (CLI с `--today`, предпросмотр
-    шаблона), `now` не передают — фраза для них так и остаётся нераспознанной,
-    с тем же `ValueError`, что и любой другой непонятный текст. Единственный
-    вызывающий, у которого есть настоящее «сейчас», — окно контроля на ленте.
-    """
-    if text is None:
-        return None
-    s = str(text).strip().lower().replace("ё", "е")
-    if not s:
-        return None
-
-    if now is not None:
-        часовой = re.fullmatch(r"через\s+(\d+)?\s*час\w*", s)
-        if часовой:
-            return now + timedelta(hours=int(часовой.group(1) or 1))
-
-    слова = [ИМЕНА_ЧАСОВ.get(w, w) for w in s.split() if w not in СВЯЗКИ]
-    if not слова:
-        raise ValueError(f"не дата: {text!r}")
-    слова = _разговорное_время(слова)
-    s = " ".join(слова)
-
-    # «через 3 дня» — то же самое, что «+3», просто длиннее написано. Хвост
-    # («18:00» после «дня») не теряем — он уйдёт в обычный разбор времени ниже.
-    через = re.match(r"^через\s+(\d+)\s*д(?:ень|ня|ней)?\b\s*(.*)$", s)
-    if через:
-        s = f"+{через.group(1)} {через.group(2)}".strip()
-
-    # «вечера» относится к часу перед собой, поэтому слово снимаем заранее:
-    # дальше время разбирается обычным путём, как если бы его написали цифрами.
-    # Порядок важен — «дня» из «через 3 дня» разобрано выше и сюда не доходит.
-    части = s.split()
-    суточное = None
-    if len(части) > 1 and части[-1] in ЧАСТИ_СУТОК:
-        суточное = части.pop()
-        s = " ".join(части)
-
-    # Время отделяем до всего остального: «18.08 09:30» — это дата и время, а не
-    # два непонятных числа.
-    if len(части) > 1:
-        часть_времени = _час_или_время(части[-1])
-        if часть_времени is not None:
-            if суточное:
-                часть_времени = _время_суток(часть_времени, суточное)
-            день = parse_date_input(" ".join(части[:-1]), today)
-            if день is None:
-                raise ValueError(f"есть время, но нет даты: {text!r}")
-            return datetime.combine(as_date(день), часть_времени)
-    else:
-        # Одно слово. Часом его считаем, только когда это однозначно час: стоит
-        # двоеточие, приписано время суток или это короткое число вроде «9».
-        # Голое «18» не путаем с датой: «18.08» ловится дальше своим форматом.
-        if суточное or ":" in s:
-            часы = _час_или_время(s) or _не_время(s)
-            return datetime.combine(
-                today, _время_суток(часы, суточное) if суточное else часы)
-        if s.isdigit() and len(s) <= 2 and int(s) <= 23:
-            return datetime.combine(today, dtime(int(s), 0))
-
-    if s in ОТНОСИТЕЛЬНЫЕ:
-        return today + timedelta(days=ОТНОСИТЕЛЬНЫЕ[s])
-
-    if s.startswith("+") and s[1:].isdigit():
-        return today + timedelta(days=int(s[1:]))
-
-    день = ДНИ_НЕДЕЛИ.get(s)
-    if день is not None:
-        вперёд = (день - today.weekday()) % 7 or 7  # «пн» в понедельник — следующий
-        return today + timedelta(days=вперёд)
-
-    # «15 марта», «15 марта 2027». Голый месяц без числа («в мае») намеренно не
-    # проходит: у шага одна дата контроля, а «май» — это тридцать один вариант,
-    # и выбирать за человека первое число значит тихо соврать.
-    m = re.fullmatch(r"(\d{1,2})\s+([а-я]+)(?:\s+(\d{4}))?", s)
-    if m and _месяц(m.group(2)):
-        д, месяц, год = int(m.group(1)), _месяц(m.group(2)), m.group(3)
-        if год:
-            return date(int(год), месяц, д)
-        дата = date(today.year, месяц, д)
-        # «15 марта» в августе — это следующий март, та же логика, что у «18.08»
-        return дата if дата >= today else date(today.year + 1, месяц, д)
-
-    m = re.fullmatch(r"(\d{1,2})[.\-/](\d{1,2})(?:[.\-/](\d{2}|\d{4}))?", s)
-    if m:
-        д, мес, год = int(m.group(1)), int(m.group(2)), m.group(3)
-        if год is None:
-            # «9-30» — не тридцатый месяц, а половина десятого. Если датой строка
-            # не читается, пробуем прочитать её временем, а не роняем разбор.
-            if мес > 12:
-                return datetime.combine(today, parse_time_part(s) or _не_время(s))
-            дата = date(today.year, мес, д)
-            # «18.08» в сентябре — это следующий год, а не прошедшая дата
-            return дата if дата >= today else date(today.year + 1, мес, д)
-        год = int(год)
-        return date(год + 2000 if год < 100 else год, мес, д)
-
-    return as_date(s)  # ISO и всё, что понимает datetime.fromisoformat
-
-
-# После переезда на SQLite название задачи больше не имя файла — ограничение
-# сохранено, но теперь по другой причине. `|` занят синтаксисом piped-ссылок
-# базы знаний (`[[Название|как написано]]`), `\/:*?"<>` в названии задачи
-# нечитаемы и мешали бы будущим выгрузкам (Excel режет такие символы в именах
-# листов). Осознанное продуктовое правило, не отпечаток файловой системы.
-FORBIDDEN_IN_NAME = set('\\/:*?"<>|')
-
-# До 200 символов — раздел 6.3 ТЗ, число оттуда, не наша прикидка. Раньше здесь
-# стояло 120 «пока экран не резиновый» — соображение о вёрстке ленты, подменившее
-# собой число из требования. Вёрстку это не решало правильно: длинное название
-# просто переносилось на несколько строк, а не переставало влезать совсем. Кому
-# длинное название мешает — решает CSS обрезкой с многоточием (`.row-title` в
-# feed.css), а не запрет заказчику назвать задачу подробно.
-MAX_TITLE = 200
-
-
-def _parse_optional_date(raw, today, поле, errors):
-    """Разобрать необязательную дату, добавить ошибку в список при провале.
-
-    Общий кусок между валидацией контрольной даты и даты начала — раньше жил
-    только внутри `validate_new_task`, теперь нужен в двух местах и разойтись
-    им нельзя: разное сообщение об ошибке на одну и ту же дату сбивает с толку.
-    """
-    raw = (raw or "").strip()
-    if not raw:
-        return None
-    try:
-        return parse_date_input(raw, today)
-    except (ValueError, TypeError):
-        errors.append({"field": поле,
-                       "error": "Дату не понял. Можно: 18.08 · 15 марта · завтра · +3 · пн · полдесятого"})
-        return None
-
-
-def default_step_start(предыдущий_контроль, старт_задачи):
-    """Дата начала шага по умолчанию — раздел 6.3.2 ТЗ: контроль предыдущего
-    шага, а для первого шага дата начала задачи."""
-    return предыдущий_контроль or старт_задачи
-
-
-MODES = ("par", "seq")
-
-
-def resolve_steps(steps_data, старт_задачи, today, старые=None, prefix="steps",
-                  предыдущий=None, mode="seq"):
-    """Разобрать шаги и подставить дефолт даты начала — один проход, которым
-    пользуются и проверка, и запись, и создание, и правка.
-
-    Раньше дефолт вычислялся заново в `build_task`, отдельно от `validate_new_task`:
-    проверка смотрела только на то, что пришло в запросе, и дефолт мог обогнать
-    control_date уже после проверки. Здесь дефолт и проверка смотрят на одни
-    и те же значения.
-
-    Шаг с непустым списком `steps` — группа: у неё режим ("par" по умолчанию,
-    "seq" для подцепочки), дат нет, дети разбираются рекурсивно. Дефолт даты
-    начала листа — по последовательной цепочке: контроль предыдущего элемента,
-    у группы это максимум контролей её поддерева. Внутри параллельной группы
-    цепочки нет: каждый ребёнок стартует от точки входа группы.
-
-    `старые` — режим правки: для листа с известным `id` без явной даты начала
-    берётся сохранённое, а не дефолт по новому порядку. Без этого чистая
-    перестановка шагов в карточке упиралась бы в «контроль раньше начала».
-
-    Возвращает дерево словарей: title, start, control, note, id, mode,
-    children, errors, явный_старт, поле, предыдущий (для мягких предупреждений).
-    """
-    resolved = []
-    for i, step in enumerate(steps_data or []):
-        поле = f"{prefix}.{i}"
-        errors = []
-        if not (step.get("title") or "").strip():
-            errors.append({"field": f"{поле}.title", "error": "Название шага обязательно"})
-        дети_данные = step.get("steps") or []
-        node = {"title": step.get("title"), "note": step.get("note"),
-                "id": step.get("id"), "errors": errors, "children": [],
-                "mode": None, "start": None, "control": None,
-                "явный_старт": False, "поле": поле, "предыдущий": предыдущий}
-        if дети_данные or step.get("mode"):
-            режим = step.get("mode") or "par"
-            if режим not in MODES:
-                errors.append({"field": f"{поле}.mode",
-                               "error": "Режим группы — par или seq"})
-                режим = "par"
-            node["mode"] = режим
-            if not дети_данные:
-                errors.append({"field": f"{поле}.steps",
-                               "error": "В группе нужен хотя бы один подшаг"})
-            for k in ("control_date", "start_date"):
-                if step.get(k):
-                    errors.append({"field": f"{поле}.{k}",
-                                   "error": "Даты ставятся подшагам, не группе"})
-            node["children"] = resolve_steps(
-                дети_данные, старт_задачи, today, старые,
-                prefix=f"{поле}.steps", предыдущий=предыдущий, mode=режим)
-            финиш = _финиш_узла(node)
-        else:
-            control = _parse_optional_date(step.get("control_date"), today,
-                                           f"{поле}.control_date", errors)
-            явный_старт = _parse_optional_date(step.get("start_date"), today,
-                                               f"{поле}.start_date", errors)
-            сохранённый = None
-            if старые is not None and step.get("id") in старые:
-                сохранённый = as_date(старые[step["id"]].get("start_date"))
-            start = явный_старт or сохранённый or default_step_start(предыдущий,
-                                                                     старт_задачи)
-            # Жёсткая проверка из раздела 6.3.3 ТЗ: контроль раньше, чем шаг можно
-            # начать, бессмысленен как дата — блокирует сохранение. Сравниваем с
-            # итоговым start (явным или дефолтным), а не только с введённым.
-            if start and control and as_date(control) < as_date(start):
-                errors.append({"field": f"{поле}.control_date",
-                               "error": "Контроль раньше даты начала шага"})
-            node.update(start=start, control=control,
-                        явный_старт=bool(явный_старт))
-            финиш = control
-        resolved.append(node)
-        if mode != "par" and финиш:
-            предыдущий = финиш
-    return resolved
-
-
-def _финиш_узла(node):
-    """Когда элемент цепочки «кончается» для дефолта следующего: у листа это
-    его контроль, у группы — самый поздний контроль поддерева. None, если дат
-    в поддереве нет вовсе."""
-    даты = [node["control"]] if node["control"] else []
-    даты += [f for f in (_финиш_узла(c) for c in node["children"]) if f]
-    return max(даты, key=as_date) if даты else None
-
-
-def walk_resolved(nodes):
-    """Дерево resolve_steps плоским потоком, глубина-первым порядком."""
-    for n in nodes:
-        yield n
-        yield from walk_resolved(n["children"])
-
-
-def validate_new_task(data, existing_names, today):
-    """Проверка задачи до записи. Возвращает список ошибок по полям — тех,
-    что блокируют сохранение. Мягкие предупреждения — отдельно, в `soft_warnings`.
-
-    Отдельно от формы намеренно: правила должны быть в одном месте, иначе форма
-    и CLI разойдутся, и в стор попадёт то, что движок потом не прочитает.
-    Ошибки возвращаются списком, а не первым попавшимся исключением, — форме надо
-    подсветить все проблемные поля разом, а не гонять человека по кругу.
-    """
-    errors = []
-
-    title = (data.get("title") or "").strip()
-    if not title:
-        errors.append({"field": "title", "error": "Название задачи обязательно"})
-    elif len(title) > MAX_TITLE:
-        errors.append({"field": "title",
-                       "error": f"Название длиннее {MAX_TITLE} символов"})
-    elif set(title) & FORBIDDEN_IN_NAME:
-        плохие = "".join(sorted(set(title) & FORBIDDEN_IN_NAME))
-        errors.append({"field": "title",
-                       "error": f"В названии нельзя символы {плохие}"})
-    elif title.lower() in {n.lower() for n in existing_names}:
-        errors.append({"field": "title",
-                       "error": "Задача с таким названием уже есть"})
-    elif title != title.strip(". "):
-        errors.append({"field": "title",
-                       "error": "Название не должно кончаться точкой или пробелом"})
-
-    старт_задачи = _parse_optional_date(data.get("start_date"), today,
-                                        "start_date", errors) or today
-
-    steps = data.get("steps") or []
-    if not steps:
-        errors.append({"field": "steps", "error": "Нужен хотя бы один шаг"})
-    for r in walk_resolved(resolve_steps(steps, старт_задачи, today)):
-        errors += r["errors"]
-    return errors
-
-
-def soft_warnings(data, today):
-    """Мягкие предупреждения из раздела 6.3.3 ТЗ: сохранить можно, но человек
-    должен увидеть, что даты выглядят подозрительно.
-
-    Не блокируют запись, поэтому отдельная функция, а не часть `validate_new_task`:
-    смешивать в одном списке то, что останавливает сохранение, с тем, что просто
-    предупреждает, заставило бы форму гадать, какая ошибка какая.
-
-    Сравнение идёт по явно введённой дате начала, не по дефолтной: дефолт равен
-    как раз тому, с чем его сравнивают (концу задачи или предыдущему шагу), и
-    строгое «меньше» на них никогда не сработает — предупреждать не о чем.
-    """
-    warnings = []
-    старт_задачи = _parse_optional_date(data.get("start_date"), today, None, []) or today
-    for r in walk_resolved(resolve_steps(data.get("steps") or [], старт_задачи, today)):
-        if not r["явный_старт"]:
-            continue
-        if as_date(r["start"]) < as_date(старт_задачи):
-            warnings.append({"field": f'{r["поле"]}.start_date',
-                             "warning": "Шаг начинается раньше даты начала задачи"})
-        if r["предыдущий"] and as_date(r["start"]) < as_date(r["предыдущий"]):
-            warnings.append({"field": f'{r["поле"]}.start_date',
-                             "warning": "Шаг начинается раньше, чем закончится "
-                                       "предыдущий"})
-    return warnings
-
-
-def build_task(data, today):
-    """Данные формы → frontmatter задачи. Без записи на диск.
-
-    Идентификаторы шагов раздаёт движок, а не форма: они должны быть плотными и
-    по порядку, иначе `done <задача> 3` будет попадать не туда.
-    """
-    старт_задачи = _parse_optional_date(data.get("start_date"), today, None, []) or today
-    steps = []
-
-    def добавить(nodes, parent):
-        for r in nodes:
-            sid = len(steps) + 1
-            steps.append({
-                "id": sid,
-                "title": r["title"].strip(),
-                # У группы статус смысла не несёт (закрытие вычисляется из
-                # детей), но форма записи шага одна на всех — колонка NOT NULL.
-                "status": OPEN,
-                "start_date": r["start"],
-                "control_date": r["control"],
-                "completed_date": None,
-                "note": (r["note"] or "").strip() or None,
-                "parent": parent,
-                "mode": r["mode"],
-                "log": [],
-            })
-            добавить(r["children"], sid)
-
-    добавить(resolve_steps(data.get("steps") or [], старт_задачи, today), None)
-    tags = [t.strip() for t in (data.get("tags") or []) if t and t.strip()]
-    meta = {
-        "schema": SCHEMA,
-        "type": "task",
-        "title": data["title"].strip(),
-        "created": today,
-        "start_date": старт_задачи,
-        "tags": tags,
-        "steps": steps,
-    }
-    return meta
-
-
 def cmd_create(args, today):
     """Завести задачу. Единственный путь создания — и из формы, и из CLI.
 
     JSON на входе: {"title": "...", "tags": [...], "steps": [{"title": "...",
     "control_date": "2026-08-20"}], "body": "..."}
+
+    Проверка, сборка meta и запись — `core.tasks.create_task`; здесь только
+    разбор JSON и перевод исключения в прежнюю форму CLI.
     """
     raw = sys.stdin.read() if args.json == "-" else args.json
     try:
@@ -1317,130 +337,25 @@ def cmd_create(args, today):
     except json.JSONDecodeError as e:
         return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
 
-    existing = [t["path"].stem for t in load_tasks()]
-    errors = validate_new_task(data, existing, today)
-    if errors:
-        return {"ok": False, "errors": errors}
-
-    meta = build_task(data, today)
-    # `path` — раньше был предвычисленный путь к файлу, теперь задачи ещё нет
-    # в БД, значит нет и id. save() увидит path=None, заведёт новую строку и
-    # сам подставит сюда TaskRef с настоящим id.
-    task = {"path": None, "meta": meta, "body": (data.get("body") or "").strip() + "\n"}
     try:
-        save(task, today)
-    except store.DuplicateTitle:
-        return {"ok": False, "errors": [{"field": "title", "error": "Задача с таким названием уже есть"}]}
-    return {"ok": True, "task": task["path"].stem,
-            "steps": len(meta["steps"]), "status": task["meta"]["status"]}
-
-
-# --- правка существующей задачи --------------------------------------------
-#
-# Отдельно от создания. При правке шаги приходят с уже известными `id`, и эти
-# id обязаны пережить редактирование: на них ссылаются `done`/`notdone`/
-# `defer`/`fail`/`skip`, и переезд с 1..N при каждом сохранении раскидал бы
-# отметки не по тем шагам.
-#
-# Статус, дата закрытия и журнал шага правкой не трогаются никогда — это поле
-# зоны четырёх команд перехода, а не карточки. Карточка меняет только то, что
-# заказчик видит как метаданные: заголовок, даты, заметку, порядок, состав.
-
-def validate_task_edit(task, data, existing_names, today):
-    """Проверка правки — со своими правилами дат (см. `resolve_steps_for_edit`),
-    а не `validate_new_task`: та не знает про сохранённые даты существующих
-    шагов и на чистой перестановке без единой правки дат ошибалась бы сама.
-    """
-    errors = []
-    title = (data.get("title") or "").strip()
-    свои = {n for n in existing_names if n.lower() != task["path"].stem.lower()}
-    if not title:
-        errors.append({"field": "title", "error": "Название задачи обязательно"})
-    elif len(title) > MAX_TITLE:
-        errors.append({"field": "title",
-                       "error": f"Название длиннее {MAX_TITLE} символов"})
-    elif set(title) & FORBIDDEN_IN_NAME:
-        плохие = "".join(sorted(set(title) & FORBIDDEN_IN_NAME))
-        errors.append({"field": "title",
-                       "error": f"В названии нельзя символы {плохие}"})
-    elif title.lower() in {n.lower() for n in свои}:
-        errors.append({"field": "title",
-                       "error": "Задача с таким названием уже есть"})
-    elif title != title.strip(". "):
-        errors.append({"field": "title",
-                       "error": "Название не должно кончаться точкой или пробелом"})
-
-    старт_задачи = _parse_optional_date(data.get("start_date"), today, "start_date",
-                                        errors) or as_date(task["meta"].get("start_date")) \
-        or today
-    старые = {s["id"]: s for s in steps_of(task)}
-
-    steps = data.get("steps") or []
-    if not steps:
-        errors.append({"field": "steps", "error": "Нужен хотя бы один шаг"})
-    for r in walk_resolved(resolve_steps(steps, старт_задачи, today, старые=старые)):
-        errors += r["errors"]
-    return errors
-
-
-def apply_task_edit(task, data, today):
-    """Переписать метаданные задачи по данным карточки. Возвращает список
-    id шагов, которые пропали из данных без явного «снять» — молчаливая потеря
-    шага хуже, чем отказ сохранить.
-    """
-    meta = task["meta"]
-    старые = {s["id"]: s for s in steps_of(task)}
-    старт_задачи = _parse_optional_date(data.get("start_date"), today, None, []) or \
-        as_date(meta.get("start_date")) or today
-
-    следующий_id = max([s["id"] for s in старые.values()], default=0) + 1
-    новые, увиденные = [], set()
-
-    def добавить(nodes, parent):
-        nonlocal следующий_id
-        for r in nodes:
-            если_старый = r["id"] is not None and r["id"] in старые
-            if если_старый:
-                шаг = dict(старые[r["id"]])  # статус/completed_date/log копируются как есть
-                увиденные.add(r["id"])
-            else:
-                # Тот же порядок полей, что у build_task, — иначе новый шаг в файле
-                # выглядит написанным другой рукой, хотя человеку разницы нет.
-                шаг = {"id": следующий_id, "title": None, "status": OPEN,
-                       "start_date": None, "control_date": None,
-                       "completed_date": None, "note": None, "parent": None,
-                       "mode": None, "log": []}
-                следующий_id += 1
-            шаг["title"] = r["title"].strip()
-            шаг["start_date"] = r["start"]
-            шаг["control_date"] = r["control"]
-            шаг["note"] = (r["note"] or "").strip() or None
-            # Родитель и режим переписываются и у старых шагов: карточка могла
-            # перетащить шаг в группу или обратно, это правка структуры, а не
-            # статуса. Статус и журнал при этом не трогаются.
-            шаг["parent"] = parent
-            шаг["mode"] = r["mode"]
-            новые.append(шаг)
-            добавить(r["children"], шаг["id"])
-
-    добавить(resolve_steps(data.get("steps") or [], старт_задачи, today, старые=старые),
-             None)
-
-    пропали = [sid for sid in старые if sid not in увиденные]
-
-    meta["title"] = data.get("title", meta["title"]).strip()
-    meta["start_date"] = старт_задачи
-    if "tags" in data:
-        meta["tags"] = [t.strip() for t in (data.get("tags") or []) if t and t.strip()]
-    meta["steps"] = новые
-    if "body" in data:
-        task["body"] = (data.get("body") or "").strip() + "\n"
-    return пропали
+        task = core_tasks.create_task(_ctx(), data, today)
+    except ValidationError as e:
+        return {"ok": False, "errors": e.errors}
+    return {"ok": True, "task": task["path"].stem, "task_id": task["path"].id,
+            "steps": len(task["meta"]["steps"]), "status": task["meta"]["status"]}
 
 
 def cmd_update(args, today):
     """Правка задачи из карточки: заголовок, даты, теги, заметка, состав и
     порядок шагов. Статусы шагов через `done`/`notdone`/`defer`/`fail`/`skip`.
+
+    Проверка, применение правки, запись и перенос владения вложениями/базы
+    знаний при переименовании — `core.tasks.update_task`. Поля из сырого JSON
+    подставляются в `TaskEditIn` со значениями по умолчанию для отсутствующих
+    ключей (`title`/`steps`), а не напрямую `TaskEditIn(**data)`: CLI и старая
+    форма годами присылали неполные словари, и `validate_task_edit` сама
+    превращает пустое название или пустой список шагов в обычную ошибку поля,
+    а не в необработанное исключение Pydantic.
     """
     raw = sys.stdin.read() if args.json == "-" else args.json
     try:
@@ -1448,42 +363,18 @@ def cmd_update(args, today):
     except json.JSONDecodeError as e:
         return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
 
-    task = find_task(args.task)
-    прежнее_имя = task["path"].stem
-    existing = [t["path"].stem for t in load_tasks()]
-    errors = validate_task_edit(task, data, existing, today)
-    if errors:
-        return {"ok": False, "errors": errors}
-
-    пропали = apply_task_edit(task, data, today)
-    if пропали and not getattr(args, "force", False):
-        # Шаг исчез из данных без явного «снять». Скорее всего баг интерфейса
-        # или случайное перетаскивание мимо списка — молча терять историю шага
-        # нельзя, поэтому здесь отказ, а не тихое удаление.
-        return {"ok": False, "errors": [{
-            "field": "steps",
-            "error": f"Шаг {sid} пропал из данных — сначала «снять», не убирать так"}
-            for sid in пропали]}
-
-    # Переименование раньше значило перенос файла — os.replace после записи,
-    # отдельная проверка «файл уже существует» до неё. У задачи-строки id не
-    # меняется от смены title, так что переименование — то же самое save(),
-    # что и любая другая правка; `validate_task_edit` уже проверила название
-    # на совпадение с другими задачами, UNIQUE(title) в БД — подстраховка от
-    # гонки, а не источник этой проверки.
+    task_id = find_task_id(args.task)
+    edit = TaskEditIn(
+        title=data.get("title") or "", start_date=data.get("start_date"),
+        tags=data.get("tags"), body=data.get("body"), steps=data.get("steps") or [],
+        force=bool(getattr(args, "force", False)))
     try:
-        save(task, today)
-    except store.DuplicateTitle:
-        return {"ok": False, "errors": [{"field": "title", "error": "Задача с таким названием уже есть"}]}
-
-    # Строку индекса адресует название, поэтому переименованная задача оставила
-    # бы позади себя старую: она находилась бы по прежнему слову и вела в
-    # никуда. `save` уже записал новую — снимаем только прежнюю.
-    if task["path"].stem != прежнее_имя:
-        get_store().search_forget("task", прежнее_имя)
-
-    return {"ok": True, "task": task["path"].stem, "status": task["meta"]["status"],
-            "steps": len(task["meta"]["steps"])}
+        result = core_tasks.update_task(
+            _ctx(), task_id, edit, today, _now(args, today), _work(args))
+    except ValidationError as e:
+        return {"ok": False, "errors": e.errors}
+    return {"ok": True, "task": result.task, "task_id": result.task_id,
+            "status": result.card.status_ru, "steps": result.steps}
 
 
 def cmd_cancel(args, today):
@@ -1493,13 +384,13 @@ def cmd_cancel(args, today):
     Отменённая задача перестаёт быть просроченной или ждущей: её статус
     вычисляется первым делом в `task_status`, раньше любого правила про шаги.
     """
-    task = find_task(args.task)
-    if task["meta"].get("cancelled"):
-        sys.exit(f"задача «{task['path'].stem}» уже отменена")
-    task["meta"]["cancelled"] = True
-    task["meta"]["cancelled_reason"] = (getattr(args, "reason", None) or "").strip() or None
-    save(task, today)
-    return {"ok": True, "task": task["path"].stem, "status": task["meta"]["status"]}
+    task_id = find_task_id(args.task)
+    try:
+        card = core_tasks.cancel(_ctx(), task_id, getattr(args, "reason", None), today,
+                                 _now(args, today), _work(args))
+    except CoreError as e:
+        sys.exit(str(e))
+    return {"ok": True, "task": card.task, "task_id": card.task_id, "status": card.status_ru}
 
 
 def cmd_close(args, today):
@@ -1513,38 +404,26 @@ def cmd_close(args, today):
     нужна и её довели до конца, просто не оставляя записи о каждом шаге.
 
     Отменённую задачу так не закрыть — это два разных исхода одной задачи, а
-    не последовательность. Уже полностью закрытая — не ошибка: `активные`
-    пусто с первого шага, и повтор ничего не портит (та же идемпотентность,
+    не последовательность. Уже полностью закрытая — не ошибка: активных шагов
+    нет с первого шага, и повтор ничего не портит (та же идемпотентность,
     что у `delete_attachment`).
     """
-    task = find_task(args.task)
-    if task["meta"].get("cancelled"):
-        sys.exit(f"задача «{task['path'].stem}» отменена, а не открыта")
-    закрыто = 0
-    while True:
-        активные = current_steps(task)
-        if not активные:
-            break
-        for s in активные:
-            s["status"] = DONE
-            s["completed_date"] = today
-            log_event(s, "done", today, reason=None)
-            закрыто += 1
-    save(task, today)
-    return {"ok": True, "task": task["path"].stem, "closed_steps": закрыто,
-            "task_status": task_status(task, today)}
+    task_id = find_task_id(args.task)
+    try:
+        result = core_tasks.close(_ctx(), task_id, today, _now(args, today), _work(args))
+    except CoreError as e:
+        sys.exit(str(e))
+    return {"ok": True, "task": result.card.task, "task_id": result.task_id,
+            "closed_steps": result.closed_steps, "task_status": result.card.task_status}
 
 
 def cmd_delete(args, today):
     """Удалить задачу насовсем. Подтверждение — дело интерфейса, не движка:
     здесь только сам необратимый шаг."""
-    task = find_task(args.task)
-    склад = get_store()
-    склад.delete_task(task["path"].id)
-    # Из индекса тоже: иначе удалённая задача продолжает находиться поиском, и
-    # клик по ней ведёт в никуда.
-    склад.search_forget("task", task["path"].stem)
-    return {"ok": True, "task": task["path"].stem, "deleted": True}
+    task_id = find_task_id(args.task)
+    result = core_tasks.delete(_ctx(), task_id)
+    return {"ok": True, "task": result.task, "task_id": result.task_id,
+            "deleted": result.deleted}
 
 
 def cmd_reopen(args, today):
@@ -1554,16 +433,14 @@ def cmd_reopen(args, today):
     порядок закрытия и порядок в списке могут не совпасть при провале/снятии
     более раннего шага.
     """
-    task = find_task(args.task)
-    step = get_step(task, args.step)
-    if step.get("status") != DONE:
-        sys.exit(f"шаг {args.step} не был сделан (сейчас: {step.get('status')})")
-    step["status"] = OPEN
-    step["completed_date"] = None
-    log_event(step, "reopened", today)
-    save(task, today)
-    return {"ok": True, "task": task["path"].stem, "step": args.step,
-            "task_status": task["meta"]["status"]}
+    task_id = find_task_id(args.task)
+    try:
+        card = core_tasks.reopen(_ctx(), task_id, args.step, today,
+                                 _now(args, today), _work(args))
+    except CoreError as e:
+        sys.exit(str(e))
+    return {"ok": True, "task": card.task, "task_id": card.task_id, "step": args.step,
+            "task_status": card.status_ru}
 
 
 def _recurrence_view(шаблон):
@@ -1579,11 +456,18 @@ def _recurrence_view(шаблон):
 
 def cmd_templates(args, today):
     """Список шаблонов. Отдаём с предпросмотром на сегодня: заказчику надо видеть,
-    какие даты получатся, а не только имена."""
-    склад = tpl.JsonStore(VAULT)
+    какие даты получатся, а не только имена.
+
+    Склад и вложения читаются через `core.templates.store`/`Context.store`, а не
+    напрямую: тот же адрес стора, что видит `/api/v1`, — не два способа его
+    собрать. Выходные для предпросмотра берутся из настроек заказчика
+    (`ctx.work()`), не из дефолтов — иначе при включённой работе по выходным
+    строка сама себе противоречила бы (см. `core.templates.preview`)."""
+    ctx = _ctx()
     старт = parse_date_input(args.start, today) if getattr(args, "start", None) else today
     из_даты = as_date(старт)
-    файлы = get_store()
+    склад = core_templates.store(ctx)
+    файлы = ctx.store
     out = []
     for шаблон in склад.all():
         out.append({
@@ -1591,7 +475,7 @@ def cmd_templates(args, today):
             "tags": шаблон.get("tags") or [],
             "steps": len(шаблон.get("steps") or []),
             "attachments": len(файлы.list_attachments("template", шаблон["name"])),
-            "preview": tpl.preview(шаблон, из_даты),
+            "preview": tpl.preview(шаблон, из_даты, ctx.work()),
             "recurrence": _recurrence_view(шаблон),
         })
     return {"templates": out, "count": len(out), "start": из_даты.isoformat()}
@@ -1615,43 +499,35 @@ def cmd_template_preview(args, today):
     except json.JSONDecodeError as e:
         return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
 
-    старт = as_date(parse_date_input(args.start, today)) \
-        if getattr(args, "start", None) else today
-    пробный = {**data, "name": (data.get("name") or "").strip() or "—", "recurrence": None}
-    ошибки = [e for e in tpl.validate_template(пробный)
-              if not str(e.get("field") or "").startswith("name")]
-    if ошибки:
-        return {"ok": False, "errors": ошибки}
-    return {"ok": True, "start": старт.isoformat(),
-            "start_text": tpl.human_moment(старт),
-            "steps": tpl.preview(пробный, старт)}
+    # Расчёт переехал в `core.templates.preview` (§3.4 среза 2): та же проверка
+    # и та же сборка строк, только плохая дата теперь не роняет команду
+    # исключением, а возвращает `ok: false`, как остальные живые проверки.
+    результат = core_templates.preview(_ctx(), data, getattr(args, "start", None), today)
+    if not результат.ok:
+        return {"ok": False, "errors": [e.model_dump() for e in результат.errors]}
+    return {"ok": True, "start": результат.start.isoformat(),
+            "start_text": результат.start_text,
+            "steps": [s.model_dump() for s in результат.steps]}
 
 
 def cmd_recurrence_preview(args, today):
     """Проверить и описать правило без сохранения — живая подпись в форме,
-    та же роль, что у `/api/parse-date` для одиночной даты."""
-    if not getattr(args, "anchor", None):
-        return {"ok": False, "errors": [{"field": "recurrence.anchor",
-                                         "error": "Нужна дата, от которой считать первый цикл"}]}
-    try:
-        якорь = as_date(parse_date_input(args.anchor, today))
-    except (ValueError, TypeError):
-        return {"ok": False, "errors": [{"field": "recurrence.anchor",
-                                         "error": "Дату не понял, нужен формат 2026-08-18"}]}
+    та же роль, что у `/api/parse-date` для одиночной даты.
+
+    Проверка и подпись переехали в `core.templates.preview_rule`; здесь
+    остаётся только разбор JSON правила из CLI-аргумента."""
     try:
         правило = json.loads(args.rule) if isinstance(args.rule, str) else (args.rule or {})
     except json.JSONDecodeError as e:
         return {"ok": False, "errors": [{"field": "recurrence", "error": f"битый JSON: {e}"}]}
 
-    ошибки = rec.validate_rule(правило, start=якорь)
-    if ошибки:
-        return {"ok": False, "errors": [
-            {"field": f"recurrence.{e['field']}" if e.get("field") else "recurrence",
-             "error": e["error"]} for e in ошибки]}
-
-    return {"ok": True, "description": rec.describe(правило), "anchor": якорь.isoformat(),
-            "preview": [{"date": s["date"].isoformat(), "text": s["text"]}
-                       for s in rec.preview(правило, якорь, count=5)]}
+    результат = core_templates.preview_rule(
+        getattr(args, "anchor", None), правило, today, _ctx().work())
+    if not результат.ok:
+        return {"ok": False, "errors": [e.model_dump() for e in результат.errors]}
+    return {"ok": True, "description": результат.description,
+            "anchor": результат.anchor.isoformat(),
+            "preview": [{"date": d.date.isoformat(), "text": d.text} for d in результат.preview]}
 
 
 def cmd_recurrence_parse(args, today):
@@ -1666,37 +542,33 @@ def cmd_recurrence_parse(args, today):
     человеку, как система его поняла, — «каждую неделю по вторникам» рядом с
     ближайшими датами. Иначе разбор молча съедает опечатку.
     """
-    try:
-        правило = rec.parse_text(getattr(args, "text", None))
-    except rec.RuleError as e:
-        return {"ok": False, "errors": e.errors}
-    if правило.get("until") is not None:
-        правило["until"] = правило["until"].isoformat()
-    return {"ok": True, "rule": правило, "description": rec.describe(правило)}
+    результат = core_templates.parse_rule(getattr(args, "text", None))
+    if not результат.ok:
+        return {"ok": False, "errors": [e.model_dump() for e in результат.errors]}
+    return {"ok": True, "rule": результат.rule.model_dump(),
+            "description": результат.description}
 
 
 def cmd_set_recurrence(args, today):
     """Прикрепить или снять правило повторения с шаблона.
 
-    Идёт через `Store.save` целиком, а не отдельным полем: у шаблона один путь
-    записи, тот же, что у формы шагов, — иначе однажды разойдутся форматом.
+    Идёт через `core.templates.set_recurrence` → `Store.save` целиком, а не
+    отдельным полем: у шаблона один путь записи, тот же, что у формы шагов, —
+    иначе однажды разойдутся форматом.
     """
-    склад = tpl.JsonStore(VAULT)
-    шаблон = склад.get(args.name)
-    if not шаблон:
-        return {"ok": False, "errors": [{"field": "name",
-                                         "error": f"нет шаблона «{args.name}»"}]}
-    данные = dict(шаблон)
     if getattr(args, "clear", False):
-        данные["recurrence"] = None
+        правило = None
     else:
-        данные["recurrence"] = args.rule if isinstance(args.rule, dict) else json.loads(args.rule)
+        правило = args.rule if isinstance(args.rule, dict) else json.loads(args.rule)
     try:
-        обновлённый = склад.save(данные)
-    except tpl.TemplateError as e:
-        return {"ok": False, "errors": getattr(e, "errors", [{"field": None, "error": str(e)}])}
-    return {"ok": True, "template": обновлённый["name"],
-            "recurrence": _recurrence_view(обновлённый)}
+        карточка = core_templates.set_recurrence(_ctx(), args.name, правило, today)
+    except NotFound as e:
+        return {"ok": False, "errors": [{"field": "name", "error": str(e)}]}
+    except ValidationError as e:
+        return {"ok": False, "errors": e.errors}
+    return {"ok": True, "template": карточка.name,
+            "recurrence": карточка.recurrence.model_dump(mode="json")
+            if карточка.recurrence else None}
 
 
 def cmd_save_template(args, today):
@@ -1717,12 +589,11 @@ def cmd_save_template(args, today):
     except json.JSONDecodeError as e:
         return {"ok": False, "errors": [{"field": None, "error": f"битый JSON: {e}"}]}
 
-    склад = tpl.JsonStore(VAULT)
     try:
-        шаблон = склад.save(data)
-    except tpl.TemplateError as e:
-        return {"ok": False, "errors": getattr(e, "errors", [{"field": None, "error": str(e)}])}
-    return {"ok": True, "template": шаблон["name"], "steps": len(шаблон.get("steps") or [])}
+        карточка = core_templates.save(_ctx(), data, today)
+    except ValidationError as e:
+        return {"ok": False, "errors": e.errors}
+    return {"ok": True, "template": карточка.name, "steps": len(карточка.steps)}
 
 
 def cmd_template_delete(args, today):
@@ -1735,10 +606,10 @@ def cmd_template_delete(args, today):
     шаблон никого не ломает: её читают только по source_type/source_id
     конкретной задачи или шаблона, а не перечислением всех строк подряд.
     """
-    склад = tpl.JsonStore(VAULT)
-    if not склад.delete(args.name):
-        return {"ok": False, "errors": [{"field": "name",
-                                         "error": f"нет шаблона «{args.name}»"}]}
+    try:
+        core_templates.delete(_ctx(), args.name)
+    except NotFound as e:
+        return {"ok": False, "errors": [{"field": "name", "error": str(e)}]}
     return {"ok": True, "template": args.name, "deleted": True}
 
 
@@ -1750,65 +621,44 @@ def _create_task_from_data(данные, today, existing=None):
     список задач уже прочитан вызывающим (движок повторений создаёт несколько
     задач подряд, и читать стор заново перед каждой — лишний проход по файлам).
     """
-    существующие = existing if existing is not None else [t["path"].stem for t in load_tasks()]
-    errors = validate_new_task(данные, существующие, today)
-    if errors:
-        return None, errors
-
-    meta = build_task(данные, today)
-    # Происхождение проставляется до записи и только здесь: `build_task` про
-    # шаблоны не знает и знать не должен, а `save` пишет то, что в meta.
-    if данные.get("template_name"):
-        meta["template_name"] = данные["template_name"]
-        meta["cycle_key"] = данные.get("cycle_key")
-    задача = {"path": None, "meta": meta, "body": (данные.get("body") or "").strip() + "\n"}
     try:
-        save(задача, today)
-    except store.DuplicateTitle:
-        return None, [{"field": "title", "error": "Задача с таким названием уже есть"}]
+        задача = core_tasks.create_task(
+            _ctx(), данные, today, existing=existing,
+            template_name=данные.get("template_name"), cycle_key=данные.get("cycle_key"))
+    except ValidationError as e:
+        return None, e.errors
     return задача, None
 
 
 def copy_template_attachments(template_name, task_name, today):
     """Перенести файлы шаблона на заведённую из него задачу. Возвращает,
-    сколько перенесено.
-
-    Копируются строки в `attachments`, а не байты: файл на диске адресуется
-    своим sha256 (`attachments.save`), поэтому вторая ссылка на ту же картинку
-    ничего не пишет на диск и ничего не весит. Без этого шага фото на шаблоне
-    остаётся украшением карточки: человек делает задачу, а схема, ради которой
-    файл прикрепляли, лежит там, куда он в этот момент не смотрит.
-
-    Подпись и имя файла переносятся как есть, дата ставится сегодняшняя — это
-    дата появления файла у задачи, а не у шаблона.
-    """
-    склад = get_store()
-    перенесено = 0
-    for r in склад.list_attachments("template", template_name):
-        склад.add_attachment("task", task_name, r["sha256"], r["filename"],
-                             r["mime"], r["bytes"], r["caption"], today)
-        перенесено += 1
-    return перенесено
+    сколько перенесено. Шим над `core.attachments.copy_template_to_task`:
+    зовётся из `cmd_from_template` и `cmd_recur`, пока те не переехали."""
+    return core_attachments.copy_template_to_task(_ctx(), template_name, task_name, today)
 
 
 def cmd_from_template(args, today):
-    """Завести задачу из шаблона."""
-    склад = tpl.JsonStore(VAULT)
-    шаблон = склад.get(args.name)
-    if not шаблон:
-        return {"ok": False, "errors": [{"field": "name",
-                                         "error": f"нет шаблона «{args.name}»"}]}
-    старт = as_date(parse_date_input(args.start, today)) if args.start else today
-    данные = tpl.expand(шаблон, старт, title=args.title)
+    """Завести задачу из шаблона.
 
-    задача, errors = _create_task_from_data(данные, today)
-    if errors:
-        return {"ok": False, "errors": errors}
-    файлы = copy_template_attachments(шаблон["name"], задача["path"].stem, today)
-    _record_manual_cycle(шаблон, задача["path"].stem, today)
-    return {"ok": True, "task": задача["path"].stem, "template": шаблон["name"],
-            "steps": len(задача["meta"]["steps"]), "attachments": файлы,
-            "status": задача["meta"]["status"]}
+    Тонкий адаптер над `core.templates.instantiate` (§3.4 спецификации среза
+    2): цепочка «развернуть шаблон → записать задачу → перенести файлы →
+    отметить цикл» раньше была продублирована здесь и в `instantiate`
+    дословно — то же самое, что уже было исправлено для `cmd_recur` выше
+    (находка ревью среза 2, engine.py:640). Форма ответа прежняя: `status`
+    здесь по-прежнему русский, как раньше отдавал `task["meta"]["status"]`
+    после записи, а не английский `FromTemplateResult.task_status`.
+    """
+    try:
+        итог = core_templates.instantiate(
+            _ctx(), args.name, args.start, args.title, today,
+            _now(args, today), _work(args))
+    except NotFound as e:
+        return {"ok": False, "errors": [{"field": "name", "error": str(e)}]}
+    except ValidationError as e:
+        return {"ok": False, "errors": e.errors}
+    return {"ok": True, "task": итог.task, "template": итог.template,
+            "steps": итог.steps, "attachments": итог.attachments,
+            "status": STATUS_RU[итог.task_status]}
 
 
 # --- повторения --------------------------------------------------------
@@ -1817,39 +667,24 @@ def recurrence_state_path(vault=None):
     """Журнал повторений лежит рядом с стором, но не в нём: это отметки «какой
     цикл был последним», а не данные заказчика. Тот же приём, что у файла
     доставки в notify.py — потеря файла означает лишний повтор, а не потерю
-    задачи."""
-    return Path(vault or VAULT) / ".повторения.json"
+    задачи. Тонкая обёртка над `core.recur.state_path`: `vault` здесь только
+    для тестов, что подменяют его отдельно от `engine.VAULT`."""
+    return core_recur.state_path(Context(vault) if vault else _ctx())
 
 
 def load_recurrence_state():
-    path = recurrence_state_path()
-    if not path.is_file():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        # Битый журнал — не повод падать: хуже пропустить проверку блокировки
-        # один раз, чем перестать заводить задачи по всем правилам разом.
-        return {}
+    return core_recur.load_state(_ctx())
 
 
 def save_recurrence_state(state):
-    path = recurrence_state_path()
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=1, default=str)
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    core_recur.save_state(_ctx(), state)
 
 
 def recurring_title(name, cycle_date):
     """Имя автосозданной задачи. Голое имя шаблона совпало бы с прошлым циклом —
     ровно та коллизия, что при ручном разворачивании ловит понятную ошибку
     в форме, а здесь заведение идёт без человека и споткнуться не о что."""
-    return f"{name} — {cycle_date:%d.%m.%Y}"
+    return core_recur.recurring_title(name, cycle_date)
 
 
 def _cycle_closed(task_name, today):
@@ -1859,10 +694,7 @@ def _cycle_closed(task_name, today):
     считаем закрытием, а не блокировкой навсегда — иначе удалённая вручную
     задача остановила бы правило насовсем, и это тише любой ошибки.
     """
-    for задача in load_tasks():
-        if задача["path"].stem == task_name:
-            return task_status(задача, today) == "done"
-    return True
+    return core_recur.cycle_closed(_ctx(), task_name, today)
 
 
 def _recompute_previous(запись, today):
@@ -1873,13 +705,7 @@ def _recompute_previous(запись, today):
     цикла из `from-template` должны считать его одинаково, иначе один сочтёт
     цикл открытым, а другой закрытым, и решения разойдутся.
     """
-    if not запись.get("previous"):
-        return None
-    предыдущий = dict(запись["previous"])
-    задача_цикла = предыдущий.pop("task", None)
-    if задача_цикла:
-        предыдущий["closed"] = _cycle_closed(задача_цикла, today)
-    return предыдущий
+    return core_recur.recompute_previous(_ctx(), запись, today)
 
 
 def _record_manual_cycle(шаблон, task_name, today):
@@ -1892,149 +718,86 @@ def _record_manual_cycle(шаблон, task_name, today):
     Журнал правится так, будто цикл создал сам `recur`: тот же расчёт через
     `due_cycles`, и только если он в самом деле нашёл цикл к созданию — цикл,
     заведённый заранее (раньше своего дня по `lead_days`) или заблокированный
-    незакрытым предыдущим, ручная задача не трогает.
+    незакрытым предыдущим, ручная задача не трогает. Логика — `core.recur`;
+    здесь только адрес контекста.
     """
-    правило = шаблон.get("recurrence")
-    if not правило:
-        return
-    имя = шаблон["name"]
-    state = load_recurrence_state()
-    запись = state.get(имя) or {}
-    предыдущий = _recompute_previous(запись, today)
-    якорь = as_date(правило["anchor"])
-    try:
-        решения = rec.due_cycles(
-            {k: v for k, v in правило.items() if k != "anchor"}, якорь, today,
-            previous=предыдущий, work=worktime.settings(), force=False, limit=1)
-    except rec.RuleError:
-        return
-    создан = next((р for р in решения if р["action"] == "create"), None)
-    if создан is None:
-        return
-    запись["previous"] = {"date": создан["date"].isoformat(), "closed": False,
-                          "task": task_name}
-    state[имя] = запись
-    save_recurrence_state(state)
+    core_recur.record_manual_cycle(_ctx(), шаблон, task_name, today)
 
 
 def cmd_recur(args, today):
     """Прогнать шаблоны с правилом повторения: создать очередной цикл или
     записать пропуск. Раздел 5.12 ТЗ.
 
-    Идемпотентно в границах контракта: незакрытый цикл при повторном вызове в
-    тот же день снова даёт пропуск, а не вторую задачу — `due_cycles` сам не
-    продвигает журнал, пока предыдущий цикл не закрыт.
+    Тонкий адаптер над `core.recur.run` (§3.4 спецификации среза 2): форма
+    ответа совпадает дословно (её и раньше отдавал только этот адаптер и
+    легаси `/api/recur`), поэтому здесь не остаётся собственной логики.
+    Раньше тело было отдельной копией того же расчёта, задублированной с
+    `core.recur.run` вместо вызова его — два места считали один и тот же
+    cron-путь по-разному могли бы разойтись после следующей правки одного
+    без другого (находка ревью среза 2, engine.py:723). `_create_task_from_data`
+    и `copy_template_attachments`, которых требовала старая копия, отсюда
+    больше не зовутся; они остаются шимами для `cmd_from_template` (регион B2).
     """
-    склад = tpl.JsonStore(VAULT)
-    state = load_recurrence_state()
-    work = worktime.settings()
-    задачи_кэш = [t["path"].stem for t in load_tasks()]
-
-    отчёт = []
-    for шаблон in склад.all():
-        правило = шаблон.get("recurrence")
-        if not правило:
-            continue
-        имя = шаблон["name"]
-        if getattr(args, "name", None) and имя != args.name:
-            continue
-        запись = state.get(имя) or {}
-        предыдущий = _recompute_previous(запись, today)
-
-        якорь = as_date(правило["anchor"])
-        сила = bool(getattr(args, "force", False)) and getattr(args, "name", None) == имя
-        try:
-            решения = rec.due_cycles(
-                {k: v for k, v in правило.items() if k != "anchor"}, якорь, today,
-                previous=предыдущий, work=work, force=сила,
-                limit=getattr(args, "limit", None) or 12)
-        except rec.RuleError as e:
-            отчёт.append({"template": имя, "errors": e.errors, "created": [], "skipped": []})
-            continue
-
-        # Статус закрытия старого цикла пересчитывается заново на каждом вызове
-        # из фактического состояния задачи (см. выше), а не хранится, — поэтому
-        # если новых циклов в этом прогоне не появилось, запись про «previous»
-        # трогать не нужно вовсе: она и так будет пересчитана в следующий раз.
-        созданы, пропущены, сбой = [], [], None
-        for решение in решения:
-            if решение["action"] == "skip":
-                пропущены.append({"date": решение["date"].isoformat(),
-                                  "message": решение["message"]})
-                continue
-            title = recurring_title(имя, решение["date"])
-            данные = tpl.expand(шаблон, решение["date"], title=title)
-            # Откуда задача взялась — в колонки, а не в разбор названия потом.
-            # `решение["key"]` это `recurrence.cycle_key`, тот же ключ, которым
-            # журнал повторений отличает уже записанный цикл от нового.
-            данные["template_name"] = имя
-            данные["cycle_key"] = решение["key"]
-            задача, errors = _create_task_from_data(данные, today, existing=задачи_кэш)
-            if errors:
-                # Название занято чем-то посторонним — не тем же циклом: имя
-                # несёт дату, и наше собственное совпадение уже поймала бы
-                # проверка выше по этому же циклу. Останавливаем это правило,
-                # остальные шаблоны идут дальше своим чередом.
-                сбой = errors
-                break
-            задачи_кэш.append(задача["path"].stem)
-            copy_template_attachments(имя, задача["path"].stem, today)
-            созданы.append({"date": решение["date"].isoformat(), "task": задача["path"].stem})
-            запись["previous"] = {"date": решение["date"].isoformat(), "closed": False,
-                                  "task": задача["path"].stem}
-
-        if созданы:
-            state[имя] = запись
-        if сбой:
-            отчёт.append({"template": имя, "errors": сбой,
-                          "created": созданы, "skipped": пропущены})
-        else:
-            отчёт.append({"template": имя, "created": созданы, "skipped": пропущены})
-
-    save_recurrence_state(state)
-    return {"today": today.isoformat(), "templates": отчёт,
-            "created": sum(len(t["created"]) for t in отчёт)}
+    return core_recur.run(_ctx(), today, name=getattr(args, "name", None),
+                          force=bool(getattr(args, "force", False)),
+                          limit=getattr(args, "limit", None) or 12)
 
 
 def cmd_template_from_task(args, today):
     """Сделать шаблон из существующей задачи — «я это уже делал, повтори так же».
 
     Сдвиги считаются от даты первого шага, поэтому шаблон переносим на любую дату
-    старта. Задача при этом не меняется.
+    старта. Задача при этом не меняется. Кусок названия остаётся входом CLI —
+    `core.templates.from_task` адресуется `task_id`, как и весь `/api/v1`; заодно
+    из группового шага без даты шаблон больше не собирает шаг-пустышку — в шаблон
+    идут только листья (`domain.steps.leaves_of`).
     """
     задача = find_task(args.task)
-    склад = tpl.JsonStore(VAULT)
     try:
-        шаблон = tpl.template_from_task(задача["meta"], name=args.name)
-        склад.save(шаблон)
-    except tpl.TemplateError as e:
-        return {"ok": False, "errors": getattr(e, "errors", [{"field": None, "error": str(e)}])}
-    return {"ok": True, "template": шаблон["name"], "from_task": задача["path"].stem,
-            "steps": len(шаблон.get("steps") or [])}
+        карточка = core_templates.from_task(_ctx(), задача["path"].id, args.name, today)
+    except ValidationError as e:
+        return {"ok": False, "errors": e.errors}
+    return {"ok": True, "template": карточка.name, "from_task": задача["path"].stem,
+            "steps": len(карточка.steps)}
 
 
 def cmd_refresh(args, today):
-    """Пересчитать сводку во всех задачах.
+    """Сводка по всем задачам на указанный день. **Ничего не пишет.**
 
     Статус устаревает сам по себе: задача становится просроченной оттого, что
-    прошёл день, а не оттого, что кто-то её трогал. Гонять перед утренней
-    сборкой.
+    прошёл день, а не оттого, что кто-то её трогал. Но следствие из этого не
+    «надо всё перезаписать», а обратное: раз статус зависит только от шагов и
+    от даты, то ни одно хранимое поле от «сегодня» не зависит, и записывать
+    нечего.
 
-    Раньше второй прогон в тот же день не трогал ни одного файла: сводка
-    сравнивалась с тем, что уже лежало на диске, — экономило запись и не
-    заставляло Obsidian переиндексировать стор впустую. В БД сравнивать не с
-    чем: сводка нигде не хранится (колонок под неё нет, source of truth в
-    шагах), поэтому каждый refresh честно пересчитывает и отдаёт всё заново, а
-    не только «изменившееся». `--force` остался в контракте ответа, но
-    поведение больше не меняет — запись каждый раз одна и та же дешёвая
-    операция.
+    Так было не всегда, и до замеров этого никто не проверил. Раньше здесь
+    стоял `for task in load_tasks(): save(task, today)`, а `save_task` удаляет
+    и вставляет заново все шаги и все строки журнала задачи. То есть команда
+    перезаписывала весь стор строками, байт в байт равными прежним:
+    сводка в БД не хранится (колонок под неё нет, source of truth в шагах), а
+    `render_steps`/`put_steps_into_body`, которые когда-то писали блок шагов в
+    тело заметки, после переезда в БД не вызываются ниоткуда. Единственным
+    следствием было обновление `task["meta"]` в памяти, которое команда тут же
+    возвращала и выбрасывала.
+
+    Стоило это 21 секунду на 1250 закрытых задачах и 71 секунду на 5000
+    (`tools/bench.py`, замер в `PROTOCOL.md` от 2026-09-07) — при том, что
+    `remind.py` звал команду на каждом пробуждении, а планировщик Windows будит
+    его каждые пять минут. Плюс по 20 тысяч сожжённых значений автоинкремента
+    `step_log.id` за прогон, из-за чего id строки журнала не был стабилен.
+
+    Побочные эффекты, которые команда попутно выполняла, никуда не пропали, а
+    переехали туда, где им место: поисковый индекс и справочник тегов чинит
+    `reindex`, а при обычной работе их поддерживает `save()` на каждой записи.
+
+    `--force` остался в ответе ради обратной совместимости и не значит ничего:
+    писать больше нечего, а значит нечего и форсировать.
     """
-    touched = []
+    итог = []
     for task in load_tasks():
-        save(task, today)
-        touched.append({"task": task["path"].stem,
-                        "status": task["meta"]["status"], "changed": True})
-    return {"today": today.isoformat(), "written": touched, "count": len(touched),
+        сводка = task_summary(task, today)
+        итог.append({"task": task["path"].stem, "status": сводка["status"]})
+    return {"today": today.isoformat(), "tasks": итог, "count": len(итог),
             "forced": bool(args.force), "broken": list(BROKEN)}
 
 
@@ -2222,6 +985,12 @@ def cmd_show(args, today):
     (см. save()), значит `task["meta"]` из Store.load_tasks() её не несёт —
     домешиваем `task_summary()` тем же приёмом, что и save(), иначе карточка
     получала бы задачу без срока и прогресса.
+
+    Форма ответа CLI-адаптера отдельная от `core.tasks.card` (`TaskCard`):
+    здесь плоский список шагов «как в БД» плюс вычисленные поля, там дерево
+    `CardStep` под HTTP-контракт (§2.1, дерево, `row`/`actions` для формы).
+    Переписывать пиннутую golden-снимком форму ради переиспользования кода
+    не входит в задачу переноса — добавлен только `task_id`.
     """
     task = find_task(args.task)
     now = _now(args, today)
@@ -2232,6 +1001,7 @@ def cmd_show(args, today):
     активные_id = {s["id"] for s in current_steps(task)}
     return {
         "task": task["path"].stem,
+        "task_id": task["path"].id,
         "status": task_status(task, today),   # английский, для сравнений в JS
         "body": заметка.strip(),
         "meta": {k: v for k, v in meta.items() if k != "steps"},  # meta["status"] — русский
@@ -2264,161 +1034,78 @@ def cmd_show(args, today):
     }
 
 
-def cmd_done(args, today):
-    task = find_task(args.task)
-    step = get_step(task, args.step)
-    if step.get("status") != OPEN:
-        sys.exit(f"шаг {args.step} уже {step.get('status')}")
-    expected_step = (step["id"], _step_snapshot(step))
-    step["status"] = DONE
-    step["completed_date"] = today
-    log_event(step, "done", today, reason=args.reason)
-
-    # шаг без даты никогда не всплывёт в сборке — ставим сегодня, заказчик
-    # увидит его и при необходимости перенесёт. Открыться могла параллельная
-    # группа, то есть листьев несколько — дату получает каждый из них.
-    активные = current_steps(task)
-    assigned = [s["id"] for s in активные if not s.get("control_date")]
-    for s in активные:
-        if not s.get("control_date"):
-            s["control_date"] = today
+def _mark(op, args, today, shape):
+    """Общий адаптер одиночных отметок: кусок названия → `task_id`, вызов
+    `core.mark`, перевод исключений в прежние ответы CLI — структурная ошибка
+    словарём, конфликт и «нет шага» — выход с текстом. `shape` раскладывает
+    `MarkResult` в прежнюю форму JSON конкретной команды: она записана в
+    `INTEGRATION.md`, и бот на неё рассчитывает."""
+    task_id = find_task_id(args.task)
     try:
-        save(task, today, expected_step=expected_step)
-    except store.StepConflict as e:
-        sys.exit(f"шаг {args.step} уже {e.actual_status}")
-    return {"ok": True, "task": task["path"].stem, "step": args.step, "status": DONE,
-            "next_step": активные[0].get("title") if активные else None,
-            "date_assigned_to_step": assigned[0] if assigned else None,
-            "dates_assigned": assigned,
-            "task_status": task_status(task, today)}
+        r = core_mark.mark(
+            _ctx(), op, task_id, args.step,
+            reason=getattr(args, "reason", None),
+            to=parse_stored_control(args.to) if getattr(args, "to", None) else None,
+            today=today, now=_now(args, today), work=_work(args))
+    except ValidationError as e:
+        return {"ok": False, "errors": e.errors}
+    except CoreError as e:
+        sys.exit(str(e))
+    return {"ok": True, "task_id": r.task_id, "task": r.task, "step": args.step, **shape(r)}
+
+
+def cmd_done(args, today):
+    return _mark("done", args, today, lambda r: {
+        "status": r.status, "next_step": r.next_step_title,
+        "date_assigned_to_step": r.dates_assigned[0] if r.dates_assigned else None,
+        "dates_assigned": r.dates_assigned, "task_status": r.task_status})
 
 
 def _reason_error(reason):
-    """Причина обязана быть словом из справочника — раздел 5.4 ТЗ прямо
-    говорит «из справочника», не «любой текст». Сравнение без регистра, тем же
-    приёмом, что у тегов и шаблонов: «Не было денег» и «не было денег» — одна
-    причина, а не две.
-
-    Пустую причину сюда не пускают вызывающие: обязательна она или нет,
-    решает конкретная операция (у провала — всегда, у переноса — оболочка),
-    а не этот справочник. Здесь только «если указана — должна быть настоящей».
-    """
-    if not reason:
-        return None
-    if reason.strip().lower() not in {r.lower() for r in get_reasons()}:
-        return {"field": "reason", "error": f"Причина «{reason}» не из справочника"}
-    return None
+    return core_mark.reason_error(_ctx(), reason)
 
 
 def cmd_notdone(args, today):
-    """Шаг остаётся открытым: причина обычно внешняя, решать всё равно надо."""
-    ошибка = _reason_error(args.reason)
-    if ошибка:
-        return {"ok": False, "errors": [ошибка]}
-    task = find_task(args.task)
-    step = get_step(task, args.step)
-    if step.get("status") != OPEN:
-        sys.exit(f"шаг {args.step} уже {step.get('status')}")
-    expected_step = (step["id"], _step_snapshot(step))
-    new_date = parse_stored_control(args.to) if args.to else today + timedelta(days=1)
-    log_event(step, "not_done", today, reason=args.reason,
-              was=as_date(step.get("control_date")), to=new_date)
-    step["control_date"] = new_date
-    try:
-        save(task, today, expected_step=expected_step)
-    except store.StepConflict as e:
-        sys.exit(f"шаг {args.step} уже {e.actual_status}")
-    count = stall_count(step)
-    return {"ok": True, "task": task["path"].stem, "step": args.step, "status": OPEN,
-            "next_check": tpl.control_text(new_date), "stalled": count,
-            "hint": "шаг буксует, нужен другой ход" if count >= 3 else None}
+    return _mark("notdone", args, today, lambda r: {
+        "status": r.status, "next_check": r.next_check, "stalled": r.stalled,
+        "hint": r.hint})
 
 
 def _defer_step(task, step, today, to, reason, event="defer", expected_step=None):
-    """Общая механика переноса: пишет событие в журнал шага, двигает дату,
-    сохраняет задачу. Используется одиночным `defer` и массовым переносом из
-    разбора завала (R20 ТЗ) — второй передаёт `event="mass_defer"`, чтобы
-    запись в журнале была отличима от обычного переноса.
-
-    `expected_step` пробрасывается в `save()` как есть; вызывающие ловят
-    `store.StepConflict` сами — сообщение об ошибке у одиночного и массового
-    переноса оформлено по-разному (`sys.exit` против записи в список)."""
-    log_event(step, event, today, reason=reason,
-              was=as_date(step.get("control_date")), to=to)
-    step["control_date"] = to
-    save(task, today, expected_step=expected_step)
+    """Общая механика переноса — `core.mark.defer_step`; зовёт массовый перенос
+    из разбора завала (`cmd_backlog_bulk`)."""
+    core_mark.defer_step(_ctx(), task, step, today, to, reason, event=event,
+                         expected_step=expected_step)
 
 
 def cmd_defer(args, today):
-    ошибка = _reason_error(args.reason)
-    if ошибка:
-        return {"ok": False, "errors": [ошибка]}
-    task = find_task(args.task)
-    step = get_step(task, args.step)
-    if step.get("status") != OPEN:
-        sys.exit(f"шаг {args.step} уже {step.get('status')}")
-    expected_step = (step["id"], _step_snapshot(step))
-    to = parse_stored_control(args.to)
-    try:
-        _defer_step(task, step, today, to, args.reason, expected_step=expected_step)
-    except store.StepConflict as e:
-        sys.exit(f"шаг {args.step} уже {e.actual_status}")
-    return {"ok": True, "task": task["path"].stem, "step": args.step,
-            "next_check": tpl.control_text(to)}
+    return _mark("defer", args, today, lambda r: {"next_check": r.next_check})
 
 
 def cmd_fail(args, today):
-    """«Не будет сделано» — шаг закрывается проваленным, задача идёт дальше.
-
-    Четвёртый исход из раздела 6.4 ТЗ, намеренно менее заметный в интерфейсе:
-    он не должен становиться лёгким путём отмахнуться. Отличается от «снят» тем,
-    что снятый шаг перестал быть нужен, а проваленный был нужен и не случился —
-    и в истории это разные вещи.
-    """
-    ошибка = _reason_error(args.reason)
-    if ошибка:
-        return {"ok": False, "errors": [ошибка]}
-    task = find_task(args.task)
-    step = get_step(task, args.step)
-    if is_closed(step):
-        sys.exit(f"шаг {args.step} уже {step.get('status')}")
-    expected_step = (step["id"], _step_snapshot(step))
-    step["status"] = FAILED
-    log_event(step, "failed", today, reason=args.reason)
-    активные = current_steps(task)
-    for s in активные:
-        if not s.get("control_date"):
-            s["control_date"] = today
-    try:
-        save(task, today, expected_step=expected_step)
-    except store.StepConflict as e:
-        sys.exit(f"шаг {args.step} уже {e.actual_status}")
-    return {"ok": True, "task": task["path"].stem, "step": args.step, "status": FAILED,
-            "next_step": активные[0].get("id") if активные else None,
-            "task_status": task_status(task, today)}
+    return _mark("fail", args, today, lambda r: {
+        "status": r.status, "next_step": r.next_step_id, "task_status": r.task_status})
 
 
 def cmd_skip(args, today):
-    """Шаг снят: задача пошла другим путём, а не через этот шаг."""
-    task = find_task(args.task)
-    step = get_step(task, args.step)
-    # Как и done/notdone/defer: закрытый шаг повторно не трогаем. Иначе снятие
-    # уже сделанного шага оставляло бы completed_date и событие «сделан» в логе
-    # рядом со статусом «снят» — запись, противоречащая сама себе.
-    if is_closed(step):
-        sys.exit(f"шаг {args.step} уже {step.get('status')}")
-    expected_step = (step["id"], _step_snapshot(step))
-    step["status"] = SKIPPED
-    log_event(step, "skipped", today, reason=args.reason)
-    for s in current_steps(task):
-        if not s.get("control_date"):
-            s["control_date"] = today
+    return _mark("skip", args, today, lambda r: {
+        "status": r.status, "task_status": r.task_status})
+
+
+def cmd_undo(args, today):
+    """Отменить последнее сегодняшнее действие над шагом — `core.mark.undo`,
+    обоснования там."""
+    task_id = find_task_id(args.task)
     try:
-        save(task, today, expected_step=expected_step)
-    except store.StepConflict as e:
-        sys.exit(f"шаг {args.step} уже {e.actual_status}")
-    return {"ok": True, "task": task["path"].stem, "step": args.step, "status": SKIPPED,
-            "task_status": task_status(task, today)}
+        r = core_mark.undo(_ctx(), task_id, args.step,
+                           today=today, now=_now(args, today), work=_work(args))
+    except ValidationError as e:
+        return {"ok": False, "errors": e.errors}
+    except CoreError as e:
+        sys.exit(str(e))
+    return {"ok": True, "task_id": r.task_id, "task": r.task, "step": args.step,
+            "undone": r.undone, "status": r.status, "control_date": r.control_date,
+            "stalled": r.stalled, "task_status": r.task_status}
 
 
 def cmd_backlog_bulk(args, today):
@@ -2600,20 +1287,12 @@ def cmd_migrate_kb(args, today):
     return migrate_kb_to_db(today)
 
 
-def _search_text_of_task(task):
-    """Что от задачи попадает в поиск: заголовок, заметка и названия шагов.
-
-    Причины переносов сюда не идут — решение по Q21 («пока не нужно»). Когда
-    понадобятся, они станут отдельными строками индекса со своим `source_type`,
-    и ни эта функция, ни форма таблицы не изменятся.
-    """
-    куски = [task["path"].stem, (task.get("body") or "")]
-    куски += [s.get("title") or "" for s in steps_of(task)]
-    return "\n".join(к for к in куски if к)
+_search_text_of_task = core_persist.search_text_of_task
 
 
 def reindex_search(store_=None):
-    """Собрать поисковый индекс заново по всему стору. Требования R24, R25.
+    """Собрать поисковый индекс заново по всему стору и починить справочник
+    тегов. Требования R24, R25.
 
     Полная пересборка, а не досборка: она нужна после переезда, после смены
     правил лемматизации и как способ починить индекс, если он разошёлся с
@@ -2631,6 +1310,11 @@ def reindex_search(store_=None):
             "task", task["path"].stem, task["path"].stem,
             (task.get("body") or "").strip()[:200],
             kb.lemmatize_text(_search_text_of_task(task)))
+        # Справочник тегов — сюда же: при обычной работе его пополняет save()
+        # на каждой записи, но задача, попавшая в базу мимо движка (миграция),
+        # своих тегов в справочник не донесла. Пачкой это делал refresh, пока
+        # писал весь стор; теперь чинит reindex, а не пятиминутный будильник.
+        _sync_tags_to_catalog(task["meta"].get("tags") or [])
         задач += 1
     записей = 0
     for з in склад.load_kb_notes():
@@ -2694,7 +1378,7 @@ def cmd_kb_scan(args, today):
     """Гипотезы упоминаний записей базы знаний в тексте — R17, разделы 5.7/5.8 ТЗ.
 
     Индекс собирается заново на каждый вызов, не кэшируется: заказчик правит
-    заметки базы в Obsidian, а кэш без инвалидации на эту правку не среагирует.
+    кэш без инвалидации на эту правку не среагирует.
 
     `kb.auto_recognition` выключает поиск новых совпадений целиком — заказчик
     решил, что подчёркивания мешают, а не сканирование сломано. Уже
@@ -2732,43 +1416,21 @@ def cmd_kb_scan(args, today):
 
 
 def _find_task_by_stem(name):
-    """Точное имя файла задачи, без нечёткого поиска `find_task`: гипотезы уже
-    посчитаны на конкретной, уже созданной задаче — мазать мимо здесь нельзя."""
-    for t in load_tasks():
-        if t["path"].stem == name:
-            return t
-    return None
+    """Точное название задачи, без нечёткого поиска `find_task`: гипотезы уже
+    посчитаны на конкретной, уже созданной задаче — мазать мимо здесь нельзя.
 
-
-def _strip_steps_block(body):
-    """Тело без блока шагов плюс способ вернуть блок на прежнее место.
-
-    Смещения гипотез посчитаны против текста БЕЗ этого блока (см. `cmd_kb_scan`
-    и докстринг вызывающего кода), поэтому сплайс ссылок должен идти по той же
-    системе координат. Блока может не быть вовсе — задача только что создана
-    и ещё не проходила через `save()`; тогда возвращается тело как есть.
-
-    Первая же вставка блока (`put_steps_into_body`, когда маркеров ещё не
-    было) склеивает его с текстом заказчика через «\\n\\n» — до одного
-    перевода строки, если текста не было вовсе. Эта склейка не текст
-    заказчика, а механика рендера, и в форме создания на момент сканирования
-    её ещё нет. Не срезать её здесь — значит увести смещения на два символа
-    для любой задачи, которую подтверждают сразу после первого сохранения:
-    ровно тот путь, которым и приходит подтверждение из формы (раздел 4).
-    Дальше эта склейка не меняется (`put_steps_into_body` при найденных
-    маркерах переносит хвост как есть), поэтому срез безопасен и на
-    повторных сохранениях — режется всегда один и тот же кусок.
+    Точное совпадение уходит в SQL по уникальному индексу названия, а не
+    перебором всего стора: этой функцией ходят все команды, которым дали имя
+    задачи, включая отметки шагов.
     """
-    start = body.find(STEPS_START)
-    end = body.find(STEPS_END)
-    if start == -1 or end == -1 or end <= start:
-        return body, lambda stripped: stripped
-    block_end = end + len(STEPS_END)
-    block = body[start:block_end]
-    tail = body[block_end:]
-    склейка = tail[:2] if tail[:2] == "\n\n" else (tail[:1] if tail[:1] == "\n" else "")
-    return (body[:start] + tail[len(склейка):],
-            lambda stripped: stripped[:start] + block + склейка + stripped[start:])
+    склад = get_store()
+    task_id = склад.find_task_id(name)
+    return склад.task_by_id(task_id) if task_id is not None else None
+
+
+# Срез блока шагов переехал в `domain.steps_plan.strip_steps_block`; имя
+# сохранено для тестов и `_mark_links_in_body`.
+_strip_steps_block = steps_plan.strip_steps_block
 
 
 def _mark_links_in_body(task, mentions):
@@ -2960,7 +1622,8 @@ def _kb_note_clean(data, было=None):
     этих команд до переезда на БД.
     """
     было = было or {"title": "", "aliases": [], "body": ""}
-    брать = lambda имя: data.get(имя) if имя in data else было.get(имя)
+    def брать(имя):
+        return data.get(имя) if имя in data else было.get(имя)
     return {
         "title": (брать("title") or "").strip(),
         "aliases": [a.strip() for a in (брать("aliases") or []) if a and a.strip()],
@@ -3310,53 +1973,49 @@ def cmd_export_json(args, today):
 # --- вложения ----------------------------------------------------------
 
 def _attachment_owner(args):
-    """(source_type, source_id) из `task`/`--step` или `--template`: та же
-    адресация, что и везде в контракте — по названию, не по числовому id из
-    базы. Задача обязана существовать; шаг, если указан, — тоже, иначе привязка
-    ссылалась бы на то, чего нет.
+    """Владелец для `core.attachments` из `task`/`--step` или `--template`.
+    Адаптер «кусок названия → `TaskOwner`»: задача в CLI ищется подстрокой
+    (`find_task_id`), в ядре она уже адресуется `task_id`. Существование
+    задачи, шага и шаблона проверяет ядро (`owner_key`), здесь только форма.
 
-    Шаблон адресуется именем из хранилища, а не тем, что прислали: имена
-    сравниваются без регистра (`tpl.same_name`), и «квартальный отчёт» не
-    должен завести вложениям вторую полку рядом с «Квартальный отчёт».
+    Нечисловой `--step` ядру не передать: `TaskOwner.step_id` — int. Ответ
+    прежний, «нет шага X в «Название»», для чего название читается отдельно.
     """
     имя_шаблона = getattr(args, "template", None)
     if имя_шаблона not in (None, ""):
-        шаблон = tpl.JsonStore(VAULT).get(имя_шаблона)
-        if not шаблон:
-            sys.exit(f"нет шаблона «{имя_шаблона}»")
-        return "template", шаблон["name"]
+        return core_attachments.TemplateOwner(имя_шаблона)
     if getattr(args, "task", None) in (None, ""):
         sys.exit("нужно название задачи или --template")
-    task = find_task(args.task)
+    task_id = find_task_id(args.task)
     шаг = getattr(args, "step", None)
-    if шаг not in (None, ""):
-        try:
-            шаг_id = int(шаг)
-        except (TypeError, ValueError):
-            шаг_id = None
-        if шаг_id not in {s["id"] for s in steps_of(task)}:
-            sys.exit(f"нет шага {шаг} в «{task['path'].stem}»")
-        return "step", f'{task["path"].stem}:{шаг_id}'
-    return "task", task["path"].stem
+    if шаг in (None, ""):
+        return core_attachments.TaskOwner(task_id)
+    try:
+        step_id = int(шаг)
+    except (TypeError, ValueError):
+        task = get_store().task_by_id(task_id)
+        sys.exit(f"нет шага {шаг} в «{task['path'].stem}»")
+    return core_attachments.TaskOwner(task_id, step_id)
 
 
 def cmd_attach(args, today):
-    """Прикрепить файл к задаче или к шагу (`--step`). Один путь для CLI и
-    формы: данные приходят либо уже готовыми байтами (форма — `args.data`),
-    либо путём к файлу на диске (CLI — `args.file`) — тот же приём, что у
-    `cmd_create` с JSON-строкой или `-` для чтения из stdin.
+    """Прикрепить файл к задаче, шагу (`--step`) или шаблону (`--template`).
+    Один путь для CLI и формы: данные приходят либо уже готовыми байтами
+    (`args.data`), либо путём к файлу на диске (CLI — `args.file`) — тот же
+    приём, что у `cmd_create` с JSON-строкой или `-` для чтения из stdin.
+
+    Форма ответа прежняя: `NotFound` ядра (задача, шаг, шаблон) отдаётся с
+    полем `template` или `task` — так пиннит `test_attach_к_несуществующему_шагу`.
     """
+    поле = "template" if getattr(args, "template", None) else "task"
     try:
-        source_type, source_id = _attachment_owner(args)
+        owner = _attachment_owner(args)
     except SystemExit as e:
-        поле = "template" if getattr(args, "template", None) else "task"
         return {"ok": False, "errors": [{"field": поле, "error": str(e)}]}
 
     filename = (getattr(args, "filename", None) or "").strip()
     if not filename and getattr(args, "file", None):
         filename = Path(args.file).name
-    if not filename:
-        return {"ok": False, "errors": [{"field": "filename", "error": "Нужно имя файла"}]}
 
     if getattr(args, "data", None) is not None:
         data = args.data
@@ -3367,35 +2026,47 @@ def cmd_attach(args, today):
             return {"ok": False, "errors": [{"field": "file", "error": str(e)}]}
 
     try:
-        sha256, size = attachments.save(VAULT, data, filename)
-    except attachments.AttachmentError as e:
-        return {"ok": False, "errors": [e.as_json()]}
-
-    mime = attachments.guess_mime(filename)
-    caption = (getattr(args, "caption", None) or "").strip() or None
-    attachment_id = get_store().add_attachment(
-        source_type, source_id, sha256, filename, mime, size, caption, today)
-    return {"ok": True, "id": attachment_id, "sha256": sha256, "filename": filename,
-            "mime": mime, "bytes": size}
+        info = core_attachments.add(_ctx(), owner, data, filename,
+                                    getattr(args, "caption", None), today)
+    except ValidationError as e:
+        return {"ok": False, "errors": e.errors}
+    except CoreError as e:
+        return {"ok": False, "errors": [{"field": поле, "error": str(e)}]}
+    # `sha256` в ответе был всегда; модель ядра его не несёт (клиенту он не
+    # нужен), поэтому для прежней формы он дочитывается из строки.
+    row = get_store().get_attachment(info.id)
+    return {"ok": True, "id": info.id, "sha256": row["sha256"], "filename": info.filename,
+            "mime": info.mime, "bytes": info.bytes}
 
 
 def cmd_attachments(args, today):
-    """Список вложений задачи целиком или одного шага (`--step`)."""
-    source_type, source_id = _attachment_owner(args)
-    rows = get_store().list_attachments(source_type, source_id)
+    """Список вложений задачи, одного шага (`--step`) или шаблона.
+
+    Для задачи без `--step` — только её собственные файлы, как и раньше:
+    ядро (`list_for`) отдаёт задачу вместе с шагами одним списком (Р6), а
+    CLI-форма это разделение держит (`test_attach_к_шагу`).
+    """
+    owner = _attachment_owner(args)
+    try:
+        rows = core_attachments.list_for(_ctx(), owner).attachments
+    except CoreError as e:
+        sys.exit(str(e))
+    if isinstance(owner, core_attachments.TaskOwner) and owner.step_id is None:
+        rows = [a for a in rows if a.step_id is None]
     return {"attachments": [
-        {"id": r["id"], "filename": r["filename"], "mime": r["mime"],
-         "bytes": r["bytes"], "caption": r["caption"], "added": r["added"]}
-        for r in rows]}
+        {"id": a.id, "filename": a.filename, "mime": a.mime,
+         "bytes": a.bytes, "caption": a.caption, "added": str(a.added)}
+        for a in rows]}
 
 
 def cmd_attachment_delete(args, today):
     """Удалить вложение. Не задачу и не шаг — на связь между ними это никак
     не влияет, только на список вложений."""
-    if get_store().get_attachment(args.id) is None:
-        sys.exit(f"нет вложения {args.id}")
-    get_store().delete_attachment(args.id)
-    return {"ok": True, "id": args.id}
+    try:
+        r = core_attachments.remove(_ctx(), args.id)
+    except CoreError as e:
+        sys.exit(str(e))
+    return {"ok": True, "id": r.id}
 
 
 def rename_tag_everywhere(old_name, new_name, today=None):
@@ -3418,7 +2089,8 @@ def main():
 
     sub.add_parser("next", help="что требует внимания").set_defaults(func=cmd_next)
     sub.add_parser("feed", help="лента «Что сегодня»").set_defaults(func=cmd_feed)
-    sub.add_parser("backlog", help="всё просроченное — разбор завала").set_defaults(func=cmd_backlog)
+    sub.add_parser("backlog", help="всё просроченное — разбор завала").set_defaults(
+        func=cmd_backlog)
 
     bb = sub.add_parser("backlog-bulk",
                         help="массовые действия из разбора завала, вкладка «Списком» (R20)")
@@ -3445,7 +2117,8 @@ def main():
 
     sr = sub.add_parser("set-recurrence", help="прикрепить или снять повторение у шаблона")
     sr.add_argument("name")
-    sr.add_argument("--rule", help='JSON правила с anchor, например {"anchor":"2026-09-01","freq":"monthly","bymonthday":[5]}')
+    sr.add_argument("--rule", help='JSON правила с anchor, например '
+                                   '{"anchor":"2026-09-01","freq":"monthly","bymonthday":[5]}')
     sr.add_argument("--clear", action="store_true", help="снять повторение")
     sr.set_defaults(func=cmd_set_recurrence)
 
@@ -3457,7 +2130,8 @@ def main():
     td.add_argument("name")
     td.set_defaults(func=cmd_template_delete)
 
-    tp = sub.add_parser("template-preview", help="какие даты дадут шаги ещё не сохранённого шаблона")
+    tp = sub.add_parser("template-preview",
+                        help="какие даты дадут шаги ещё не сохранённого шаблона")
     tp.add_argument("json", help='JSON шаблона или "-" для чтения из stdin')
     tp.add_argument("--start", help="дата старта для примера, по умолчанию сегодня")
     tp.set_defaults(func=cmd_template_preview)
@@ -3556,6 +2230,11 @@ def main():
     fl.add_argument("step")
     fl.add_argument("--reason", required=True, help="причина обязательна")
     fl.set_defaults(func=cmd_fail)
+
+    un = sub.add_parser("undo", help="отменить последнее сегодняшнее действие над шагом")
+    un.add_argument("task")
+    un.add_argument("step")
+    un.set_defaults(func=cmd_undo)
 
     k = sub.add_parser("skip", help="снять шаг")
     k.add_argument("task"); k.add_argument("step"); k.add_argument("--reason")

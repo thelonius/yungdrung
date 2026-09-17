@@ -25,7 +25,6 @@
 """
 import json
 import os
-import re
 import sqlite3
 import subprocess
 import sys
@@ -200,34 +199,12 @@ def test_round_trip_survives_second_pass(vault):
 def test_customer_text_in_body_untouched(vault):
     """Заметка — поле заказчика, и ни одна команда над шагами не должна её
     трогать. Раньше это же проверялось через блок между маркерами, который
-    движок сам вписывал в тело для Obsidian — без Obsidian вписывать в тело
+    движок сам вписывал в тело markdown-заметки — без markdown вписывать в тело
     вообще нечего, и заметка теперь просто лежит колонкой рядом с шагами."""
     body = "Позвонить [[Василий Говнов]].\n\n- пункт\n- ещё пункт\n"
     path = task(vault, "Грант", [step(1, "Позвонить", control_date=TODAY)], body=body)
     run(engine.cmd_done, task="Грант", step="1")
     assert read(path)[1] == body
-
-
-# --- 2. Якоря YAML ----------------------------------------------------------
-#
-# PlainDumper/write_file больше не пишет задачи — писали frontmatter-файл под
-# Obsidian, теперь задачи в БД. Модуль остался (заметки базы знаний пока
-# markdown, см. kb_note() ниже), тест на сам дампер — прямая проверка класса,
-# без похода через сохранение задачи.
-
-def test_custom_dumper_not_luck(vault):
-    """Проверка, что предыдущий тест не пустой: обычный SafeDumper на тех же
-    данных якоря как раз ставит, их убирает именно PlainDumper движка."""
-    one_date = date(2026, 8, 15)
-    meta = {"control_date": one_date,
-            "steps": [{"id": 1, "control_date": one_date,
-                       "log": [{"date": one_date, "event": "done"}]}]}
-
-    standard = yaml.dump(meta, Dumper=yaml.SafeDumper, sort_keys=False)
-    ours = yaml.dump(meta, Dumper=engine.PlainDumper, sort_keys=False)
-
-    assert re.search(r"[&*]id\d+", standard), "SafeDumper перестал ставить якоря"
-    assert re.search(r"[&*]id\d+", ours) is None
 
 
 # --- 3. Даты — датами, не строками -----------------------------------------
@@ -386,7 +363,8 @@ def test_three_marks_in_a_row_is_stalling(vault):
     path = task(vault, "Подшипник", [
         step(1, "Снять колесо", control_date=TODAY, log=[
             {"date": date(2026, 8, 1), "event": "not_done", "reason": "не было времени"},
-            {"date": date(2026, 8, 8), "event": "not_done", "reason": "жду ответа от другого человека"},
+            {"date": date(2026, 8, 8), "event": "not_done",
+             "reason": "жду ответа от другого человека"},
         ]),
     ])
     result = run(engine.cmd_notdone, task="Подшипник", step="1",
@@ -452,6 +430,143 @@ def test_defer_can_go_backwards(vault):
     meta, _ = read(path)
     assert meta["steps"][0]["control_date"] == date(2026, 8, 10)
     assert meta["status"] == "просрочена"
+
+
+# --- 7c. undo: отмена промаха ------------------------------------------------
+#
+# Запись из журнала удаляется, а не гасится обратной: промах — не событие,
+# которое случилось, и оставлять его строкой значило бы навсегда испортить
+# счётчик буксования, а тот здесь сигнал «нужен другой ход», а не украшение.
+# Только последнее действие и только сегодняшнее — это отмена промаха, а не
+# правка истории. См. докстринг `cmd_undo`.
+
+def test_undo_возвращает_сделанный_шаг_в_работу(vault):
+    путь = task(vault, "Грант", [
+        step(1, "Собрать", control_date=TODAY),
+        step(2, "Отправить"),
+    ])
+    run(engine.cmd_done, task="Грант", step="1")
+
+    r = run(engine.cmd_undo, task="Грант", step="1")
+
+    assert r["ok"] and r["undone"] == "done" and r["status"] == "pending"
+    шаг = read(путь)[0]["steps"][0]
+    assert шаг["status"] == "pending"
+    assert шаг["completed_date"] is None
+    assert шаг["log"] == [], "запись удалена, а не погашена обратной"
+
+
+def test_undo_снимает_перенос_и_возвращает_прежнюю_дату(vault):
+    путь = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    run(engine.cmd_notdone, task="Грант", step="1", reason="не было времени")
+    assert read(путь)[0]["steps"][0]["control_date"] == TOMORROW
+
+    r = run(engine.cmd_undo, task="Грант", step="1")
+
+    assert r["ok"] and r["undone"] == "not_done"
+    assert read(путь)[0]["steps"][0]["control_date"] == TODAY
+
+
+def test_undo_возвращает_счётчик_буксования(vault):
+    """Главный смысл удаления записи, а не гашения: случайный клик не должен
+    оставлять шаг буксующим."""
+    путь = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY, log=[
+        {"date": date(2026, 8, 1), "event": "not_done", "reason": "некогда"},
+        {"date": date(2026, 8, 8), "event": "not_done", "reason": "некогда"},
+    ])])
+    третий = run(engine.cmd_notdone, task="Грант", step="1", reason="не было времени")
+    assert третий["stalled"] == 3 and третий["hint"]
+
+    r = run(engine.cmd_undo, task="Грант", step="1")
+
+    assert r["stalled"] == 2
+    assert engine.stall_count(read(путь)[0]["steps"][0]) == 2
+
+
+def test_undo_возвращает_снятый_и_проваленный_шаг(vault):
+    for имя, команда, событие in (("Снятая", engine.cmd_skip, "skipped"),
+                                  ("Провальная", engine.cmd_fail, "failed")):
+        путь = task(vault, имя, [step(1, "Собрать", control_date=TODAY)])
+        run(команда, task=имя, step="1", reason="не было времени")
+
+        r = run(engine.cmd_undo, task=имя, step="1")
+
+        assert r["ok"] and r["undone"] == событие, имя
+        assert read(путь)[0]["steps"][0]["status"] == "pending", имя
+
+
+def test_undo_подряд_разбирает_цепочку_сегодняшних_промахов(vault):
+    путь = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    run(engine.cmd_notdone, task="Грант", step="1", reason="не было времени")
+    run(engine.cmd_notdone, task="Грант", step="1", reason="не было времени")
+
+    assert run(engine.cmd_undo, task="Грант", step="1")["ok"]
+    assert run(engine.cmd_undo, task="Грант", step="1")["ok"]
+
+    шаг = read(путь)[0]["steps"][0]
+    assert шаг["log"] == [] and шаг["control_date"] == TODAY
+
+
+def test_undo_не_трогает_вчерашнее(vault):
+    """Отмена промаха, а не правка истории задним числом."""
+    путь = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY, log=[
+        {"date": date(2026, 8, 14), "event": "not_done", "reason": "некогда"}])])
+
+    r = run(engine.cmd_undo, task="Грант", step="1")
+
+    assert r["ok"] is False
+    assert "сегодняшнее" in r["errors"][0]["error"]
+    assert len(read(путь)[0]["steps"][0]["log"]) == 1
+
+
+def test_undo_по_пустому_журналу_отвечает_ошибкой_а_не_падает(vault):
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+
+    r = run(engine.cmd_undo, task="Грант", step="1")
+
+    assert r["ok"] is False and "нечего отменять" in r["errors"][0]["error"]
+
+
+def test_undo_не_отменяет_переоткрытие(vault):
+    """`reopened` в откат не входит: это осознанное действие человека из
+    карточки задачи, а не промах на ленте."""
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    run(engine.cmd_done, task="Грант", step="1")
+    run(engine.cmd_reopen, task="Грант", step="1")
+
+    r = run(engine.cmd_undo, task="Грант", step="1")
+
+    assert r["ok"] is False and "reopened" in r["errors"][0]["error"]
+
+
+def test_undo_оставляет_дату_доставшуюся_следующему_шагу(vault):
+    """Оговорка, зафиксированная нарочно, а не забытая.
+
+    `done` ставит дату контроля шагам, которые от него открылись и своей даты
+    не имели. Откат их не снимает: в журнале не записано, каким шагам они
+    достались, а угадывать по совпадению даты значило бы иногда затирать дату,
+    поставленную руками. В интерфейсе это не видно — отменённый шаг снова
+    открыт, значит следующие не активны и в ленту не идут; тест сторожит именно
+    это следствие, чтобы поведение не считалось багом при следующем чтении.
+    """
+    путь = task(vault, "Грант", [
+        step(1, "Собрать", control_date=TODAY),
+        step(2, "Отправить"),
+    ])
+    run(engine.cmd_done, task="Грант", step="1")
+    assert read(путь)[0]["steps"][1]["control_date"] == TODAY
+
+    run(engine.cmd_undo, task="Грант", step="1")
+
+    assert read(путь)[0]["steps"][1]["control_date"] == TODAY, "дата остаётся"
+
+    # Проверяется прямо по активности, а не по ленте: попадание в ленту зависит
+    # ещё и от рабочих часов, а TODAY в этом наборе — суббота, и при выходных по
+    # умолчанию нерабочих строка уехала бы в «ждут». К отмене это отношения не
+    # имеет.
+    задача = engine._find_task_by_stem("Грант")
+    assert [s["id"] for s in engine.current_steps(задача)] == [1], \
+        "активен снова первый шаг, второй ждёт, несмотря на доставшуюся дату"
 
 
 # --- 7b. Массовые действия в разборе завала (R20) ---------------------------
@@ -527,7 +642,7 @@ def test_bulk_fail_marks_step_failed_and_opens_next(vault):
 def test_bulk_batch_with_one_closed_step_does_not_abort_others(vault):
     """Один плохой элемент (шаг уже закрыт кем-то другим за это время) не
     роняет пачку — остальные элементы обрабатываются, ошибка структурная."""
-    a = task(vault, "Грант", [step(1, "Собрать", status="done",
+    task(vault, "Грант", [step(1, "Собрать", status="done",
                                    completed_date=date(2026, 8, 1))])
     b = task(vault, "Договор", [step(1, "Подписать", control_date=date(2026, 8, 12))])
 
@@ -680,43 +795,165 @@ def test_build_includes_only_what_needs_attention(vault):
     assert build["due"][0]["overdue_days"] == 5
 
 
+# --- 8b. Лента читает только текущую работу ---------------------------------
+#
+# `collect_open` отбирает задачи запросом (`store.tasks_with_open_steps`), а не
+# проходом по всему стору: объём текущей работы не зависит от размера архива, а
+# время до этого зависело линейно. Отбор в SQL держится на двух вещах, и обе
+# ниже под тестом: на том, что «закрыт» в SQL и в Python значат одно и то же, и
+# на том, что частичный индекс действительно применяется.
+
+def test_отменённая_задача_не_попадает_в_ленту_и_завал(vault):
+    """Шаги отменённой задачи остаются открытыми — по ним просто больше не
+    работают. Без явного условия она всплывала бы просроченной каждый день.
+
+    Инвариант был записан комментарием в `collect_open` и не проверялся ничем;
+    при переносе отбора в SQL сломать его было бы нечем поймать.
+    """
+    task(vault, "Живая", [step(1, "Собрать", control_date=date(2026, 8, 10))])
+    task(vault, "Отменённая", [step(1, "Собрать", control_date=date(2026, 8, 10))],
+         cancelled=True, cancelled_reason="не актуально")
+
+    лента = run(engine.cmd_feed)
+    завал = run(engine.cmd_backlog)
+
+    названия = {i["task"] for i in лента["feed"]} | {i["task"] for i in завал["backlog"]}
+    assert "Живая" in названия
+    assert "Отменённая" not in названия
+    assert лента["counts"]["waiting"] == 0, "и в «ждут» ей тоже места нет"
+
+
+def test_закрытые_статусы_совпадают_с_движком():
+    """`store.CLOSED_STATUSES` дублирует знание из `engine.is_closed`, потому
+    что фильтр по статусу теперь есть и в SQL, а импортировать engine в store
+    нельзя — вышло бы кольцо. Значит, расхождение возможно, и вот сторож.
+
+    Разойдись они — задача с шагом в статусе, который SQL считает закрытым, а
+    Python открытым, просто перестала бы приходить в ленту. Молча.
+    """
+    assert set(store.CLOSED_STATUSES) == {engine.DONE, engine.SKIPPED, engine.FAILED}
+    for статус in store.CLOSED_STATUSES:
+        assert engine.is_closed({"status": статус}), статус
+    for статус in (engine.OPEN, "сделан", "", "непонятно"):
+        assert not engine.is_closed({"status": статус}), статус
+
+
+def test_лента_ищет_открытые_шаги_по_частичному_индексу(vault):
+    """Частичный индекс применяется, а не лежит без дела.
+
+    SQLite берёт частичный индекс только когда условие запроса совпадает с
+    условием индекса. Разъедься они — всё останется правильным и станет опять
+    линейным по размеру архива, а ни один тест на поведение этого не заметит.
+    """
+    task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+    conn = sqlite3.connect(str(vault / "стор.db"))
+    store.migrate_schema(conn)
+    план = " ".join(r[3] for r in conn.execute(
+        "EXPLAIN QUERY PLAN SELECT t.* FROM tasks t WHERE EXISTS ("
+        "  SELECT 1 FROM steps s WHERE s.task_id = t.id "
+        f"   AND s.mode IS NULL AND s.status NOT IN {store.CLOSED_STATUSES}"
+        ") AND t.cancelled = 0 ORDER BY t.title"))
+    conn.close()
+    assert "idx_steps_open" in план, план
+
+
+def test_отметка_шага_не_читает_архив(vault):
+    """`find_task` собирала весь стор, чтобы сверить кусок строки с названиями,
+    — поэтому отметка шага стоила столько же, сколько лента. Теперь названия
+    приходят одной колонкой, а шаги и журнал собираются у одной задачи.
+
+    Проверяется свойством, а не временем: сколько бы закрытых задач ни лежало
+    рядом, ни одна из них не должна быть собрана. Открытые собираться могут:
+    ответ на отметку несёт новое состояние — строку ленты и счётчики
+    (`core.mark`, REFACTOR.md), а они считаются по задачам с открытыми шагами.
+    Их объём от роста архива не зависит, поэтому кривая остаётся плоской.
+    """
+    for i in range(5):
+        task(vault, f"Архивная {i}", [
+            step(1, "Было", status="done", completed_date=date(2026, 8, 1))])
+    цель = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
+
+    собранные = []
+    подлинный = store.Store._assemble_task
+
+    def учёт(self, conn, row):
+        собранные.append(row["title"])
+        return подлинный(self, conn, row)
+
+    store.Store._assemble_task = учёт
+    try:
+        r = run(engine.cmd_done, task=цель.stem, step="1")
+    finally:
+        store.Store._assemble_task = подлинный
+
+    assert r["ok"]
+    assert set(собранные) == {"Грант"}, f"собрано лишнее: {собранные}"
+
+
 # --- 9. refresh ------------------------------------------------------------
 #
-# Раньше второй прогон в тот же день не трогал ни одного файла: сводка
-# сравнивалась с тем, что уже лежало на диске (экономило запись и не
-# заставляло Obsidian переиндексировать стор впустую). В БД сравнивать не с
-# чем — сводка нигде не хранится, поэтому refresh честно пересчитывает и
-# отдаёт всё заново при каждом вызове; см. docstring cmd_refresh в engine.py.
+# `refresh` — чистое чтение: он отдаёт сводку на указанный день и не пишет
+# ничего. Раньше он звал `save()` на каждую задачу и тем перезаписывал весь
+# стор строками, равными прежним (сводка в БД не хранится, колонок под неё
+# нет). Стоило это 71 секунду на целевом объёме, а `remind.py` звал команду
+# каждые пять минут; см. докстринг `cmd_refresh` и запись в PROTOCOL.md от
+# 2026-09-07.
 
-def test_refresh_repeated_call_keeps_data_identical(vault):
-    """Второй прогон подряд отчитывается по всем задачам (сравнивать не с
-    чем), но содержимое БД от этого не меняется."""
+def dump_db(vault):
+    """Полный дамп базы **вместе с** autoincrement-идентификаторами.
+
+    Отличается от `snapshot_db` именно этим: та намеренно выкидывает
+    `step_log.id`, потому что при пересохранении с тем же содержимым он
+    меняется. Здесь сравнение строгое — команда, которая не пишет, не имеет
+    права поменять даже id.
+    """
+    conn = sqlite3.connect(str(vault / "стор.db"))
+    дамп = "\n".join(conn.iterdump())
+    conn.close()
+    return дамп
+
+
+def test_refresh_ничего_не_пишет(vault):
+    """Главное свойство команды: ни одной изменённой строки, включая
+    autoincrement журнала.
+
+    Сторож против возврата к `save()` в цикле: та версия проходила все прежние
+    тесты, потому что `snapshot_db` не смотрит на `step_log.id`, а сводку
+    тесты считают сами через `read()`. Единственное, что её выдавало, — время.
+    """
+    status_set(vault)
+    before = dump_db(vault)
+
+    result = run(engine.cmd_refresh)
+
+    assert result["count"] == 6
+    assert dump_db(vault) == before, "refresh изменил базу, а обязан только читать"
+
+
+def test_refresh_отдаёт_статус_по_каждой_задаче(vault):
+    """Форма ответа: задача и её статус на указанный день, без поля «изменено» —
+    менять больше нечего."""
     status_set(vault)
 
-    first = run(engine.cmd_refresh)
-    assert first["count"] == 6
-    assert all(t["changed"] for t in first["written"])
+    result = run(engine.cmd_refresh)
 
-    before = snapshot_db(vault)
-    second = run(engine.cmd_refresh)
-
-    assert second["count"] == 6
-    assert snapshot_db(vault) == before
+    assert result["count"] == 6
+    assert len(result["tasks"]) == 6
+    assert all(set(t) == {"task", "status"} for t in result["tasks"])
+    assert all(t["status"] for t in result["tasks"])
 
 
-def test_refresh_force_rewrites_everything(vault):
-    """`--force` раньше отличался от обычного прогона тем, что переписывал
-    файлы, даже когда сводка не поменялась. В БД оба прогона и так переписывают
-    всё каждый раз — `force` остался в контракте ответа ради обратной
-    совместимости, а не потому что меняет запись."""
+def test_refresh_force_ничего_не_меняет(vault):
+    """`--force` отличался тем, что переписывал файлы, даже когда сводка не
+    поменялась. Писать больше нечего, значит нечего и форсировать: флаг остался
+    в ответе ради обратной совместимости и на поведение не влияет."""
     status_set(vault)
-    run(engine.cmd_refresh)
-    before = snapshot_db(vault)
+    before = dump_db(vault)
 
     result = run(engine.cmd_refresh, force=True)
 
     assert result["forced"] is True and result["count"] == 6
-    assert snapshot_db(vault) == before
+    assert dump_db(vault) == before
 
 
 def test_refresh_idempotent_with_control_time_too(vault):
@@ -729,13 +966,13 @@ def test_refresh_idempotent_with_control_time_too(vault):
     assert read(path)[0]["status"] == "ждёт"
     assert isinstance(read(path)[0]["steps"][0]["control_date"], datetime)
 
-    before = snapshot_db(vault)
+    before = dump_db(vault)
     assert run(engine.cmd_refresh)["count"] == 1
-    assert snapshot_db(vault) == before
+    assert dump_db(vault) == before
 
 
 def test_refresh_sets_summary_from_scratch(vault):
-    """Файл, заведённый руками без сводки, после refresh пригоден для Bases."""
+    """Задача без сводки после refresh получает пересчитанную сводку в meta."""
     path = task(vault, "Грант", [
         step(1, "Раз", status="done", completed_date=date(2026, 8, 1)),
         step(2, "Два", control_date=date(2026, 8, 10), log=[
@@ -774,8 +1011,7 @@ def test_status_goes_stale_as_day_passes(vault):
 
 # --- 11. Свои поля не теряются ----------------------------------------------
 #
-# Раньше это был вопрос порядка полей в YAML под редактор свойств Obsidian —
-# без Obsidian порядок ничего не значит. Инвариант, который остался: то, чего
+# Раньше это был вопрос порядка полей в YAML — инвариант, который остался: то, чего
 # движок не знает (frontmatter, который заказчик добавил руками), не должно
 # потеряться при следующей записи. Миграция кладёт такие поля в колонку
 # `extra`; здесь проверяется именно этот путь, а не то, что кладёт туда сама
@@ -2695,7 +2931,8 @@ def test_defer_сохраняет_время_а_не_только_дату(vault
     «перенести на конкретный час», а тем более пресет «через час», был
     в принципе недостижим."""
     т = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
-    r = run(engine.cmd_defer, task=т.stem, step="1", to="2026-08-25 15:00", reason="не было времени")
+    r = run(engine.cmd_defer, task=т.stem, step="1", to="2026-08-25 15:00",
+            reason="не было времени")
     assert r["ok"], r
     assert r["next_check"] == "2026-08-25 15:00"
     meta, _ = read(т)
@@ -2704,7 +2941,8 @@ def test_defer_сохраняет_время_а_не_только_дату(vault
 
 def test_notdone_с_явной_датой_сохраняет_время(vault):
     т = task(vault, "Грант", [step(1, "Собрать", control_date=TODAY)])
-    r = run(engine.cmd_notdone, task=т.stem, step="1", to="2026-08-25 09:30", reason="не было времени")
+    r = run(engine.cmd_notdone, task=т.stem, step="1", to="2026-08-25 09:30",
+            reason="не было времени")
     assert r["ok"], r
     assert r["next_check"] == "2026-08-25 09:30"
 

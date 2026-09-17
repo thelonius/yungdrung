@@ -1,5 +1,7 @@
 'use strict';
 
+const { $, $$, get, post, toast, shortDate, dateField } = Yd;
+
 // Архив (история) и поиск. Раздел 5.9 ТЗ, требование R24.
 //
 // Список истории и результаты поиска — разные запросы к ядру, не два вида
@@ -7,18 +9,8 @@
 // фильтры по тегу и периоду, `/api/search` ищет по леммам во всём сторе.
 // Показывается одно или другое, а не оба разом.
 
-const $ = (s, r = document) => r.querySelector(s);
 
-async function get(url) {
-  const r = await fetch(url);
-  return r.json();
-}
 
-function короткаяДата(iso) {
-  if (!iso) return '';
-  const [y, m, d] = iso.split('-');
-  return `${d}.${m}.${y}`;
-}
 
 // --- строка истории ----------------------------------------------------------
 
@@ -49,7 +41,7 @@ function строкаЗадачи(item, компактно = false) {
   статус.textContent = item.status;
   const дата = document.createElement('span');
   дата.className = 'archive-row-date';
-  дата.textContent = короткаяДата(item.date);
+  дата.textContent = shortDate(item.date);
   право.append(статус, дата);
 
   a.append(info, право);

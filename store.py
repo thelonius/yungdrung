@@ -34,10 +34,15 @@ SCHEMA = 3
 
 DEFAULT_TAG_COLOR = "#999999"
 
+# Статусы, означающие «шаг закрыт». Раньше здесь лежал дубль знания из
+# `engine.is_closed`: импортировать engine отсюда было нельзя (он импортирует
+# store — вышло бы кольцо). После переезда вычислений в `domain/` кольца нет,
+# и SQL-фильтры ниже берут кортеж из того же места, что и `is_closed`.
+from domain.steps import CLOSED_STATUSES  # noqa: E402
+
 # Поля задачи, которые движок вычисляет заново при каждом save() (статус,
 # текущий шаг, дата контроля, буксование, прогресс) сюда не идут — колонок под
-# них нет. Раньше это была денормализация под таблицу Obsidian Bases; без
-# Obsidian в них нет смысла, а source of truth и так остаётся в шагах.
+# них нет — source of truth остаётся в шагах, сводка вычисляется при save().
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
 
@@ -251,6 +256,17 @@ def migrate_schema(conn):
     # git pull. Ровно это и поймал тест про доращивание старой базы.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_cycle "
                  "ON tasks(template_name, cycle_key)")
+    # Частичный индекс: в нём лежат только открытые листья, то есть 150–450
+    # строк независимо от того, насколько вырос архив закрытых задач. Обычный
+    # индекс по status здесь не помог бы — 95% строк в нём было бы 'done', и
+    # `NOT IN` всё равно свёлся бы к перебору. Условие обязано совпадать с
+    # запросом в `tasks_with_open_steps` дословно, иначе SQLite индекс не
+    # применит. Тоже после ALTER TABLE, а не в SCHEMA_SQL: ссылается на `mode`,
+    # колонку версии 2, и на базе, заведённой до неё, упал бы на «no such
+    # column» при первом же открытии после git pull.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_steps_open ON steps(task_id) "
+        f"WHERE mode IS NULL AND status NOT IN {CLOSED_STATUSES}")
 
 
 def _iso(value):
@@ -286,9 +302,61 @@ class Store:
     # --- чтение --------------------------------------------------------
 
     def load_tasks(self):
+        """Весь стор целиком, со шагами и журналом.
+
+        Дорого и растёт линейно вместе с архивом: на пяти тысячах закрытых
+        задач это ~22 тысячи запросов и 180 мс. Оставлено для тех, кому правда
+        нужны все задачи — миграции, выгрузки, `reindex`, «все задачи»
+        списком. Всё, что смотрит только на текущую работу или на одну задачу,
+        обязано брать один из запросов ниже.
+        """
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM tasks ORDER BY title").fetchall()
             return [self._assemble_task(conn, row) for row in rows]
+
+    def tasks_with_open_steps(self, include_cancelled=False):
+        """Только задачи, в которых есть хоть один открытый лист.
+
+        Форма ответа — та же, что у `load_tasks`, поэтому вызывающий код и
+        доменные функции (`current_steps`, `stall_count`) не меняются: разница
+        в том, что закрытый хвост не читается вовсе. Лента, завал и `next`
+        смотрят ровно на текущую работу, и её объём от роста архива не зависит.
+
+        Отменённая задача исключается по умолчанию. Шаги в ней остаются
+        открытыми — по ним просто больше не работают, — поэтому без явного
+        условия она всплывала бы просроченной каждый день, хотя
+        `engine.task_status` считает её отменённой первым же правилом. Заодно
+        это снимает напоминания: `remind.py` ходит за списком туда же.
+
+        Условие по шагам совпадает с частичным индексом `idx_steps_open`
+        дословно — см. `migrate_schema`.
+        """
+        сроки = "AND t.cancelled = 0 " if not include_cancelled else ""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT t.* FROM tasks t WHERE EXISTS ("
+                "  SELECT 1 FROM steps s WHERE s.task_id = t.id "
+                f"   AND s.mode IS NULL AND s.status NOT IN {CLOSED_STATUSES}"
+                f") {сроки}ORDER BY t.title").fetchall()
+            return [self._assemble_task(conn, row) for row in rows]
+
+    def titles(self):
+        """Пары (id, название) по всем задачам — без шагов, тегов и журнала.
+
+        Для поиска задачи по куску названия. Сравнение остаётся в Python
+        намеренно: `lower()` и `LIKE` в SQLite работают только по ASCII, и
+        «ГРАНТ» не нашёл бы «грант». Одна колонка на пять тысяч строк читается
+        за микросекунды — дорого было именно собирать при этом шаги и журнал.
+        """
+        with self._connect() as conn:
+            return [(r["id"], r["title"])
+                    for r in conn.execute("SELECT id, title FROM tasks ORDER BY title")]
+
+    def task_by_id(self, task_id):
+        """Одна задача целиком по id, или None."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            return self._assemble_task(conn, row) if row else None
 
     def _assemble_task(self, conn, row):
         steps = conn.execute(
@@ -522,6 +590,56 @@ class Store:
         with self._connect() as conn:
             conn.execute("DELETE FROM attachments WHERE id=?", (attachment_id,))
 
+    # --- владелец вложения / ссылки базы знаний по названию задачи -------
+    #
+    # Владельцем остаётся название, не `task_id` (Р3, срез 2, §8 В1): миграция
+    # схемы с перезаписью `source_id` через JOIN отложена — докстринг
+    # `migrate_schema` обещает, что данные миграция не переписывает никогда, а
+    # стор заказчика лежит под OneDrive. Взамен `core.tasks.update_task`/`delete`
+    # переносят и забывают строки владения сами, при каждом переименовании и
+    # удалении задачи.
+
+    def _step_owner_rows(self, conn, table, prefix):
+        """(id, source_id) строк `table` с source_type='step', чей source_id
+        начинается с `prefix` ("название:"). Сравнение в Python, не SQL LIKE:
+        название задачи не запрещает `%`/`_`, и LIKE-паттерн из произвольного
+        названия читал бы их как метасимволы."""
+        rows = conn.execute(
+            f"SELECT id, source_id FROM {table} WHERE source_type='step'").fetchall()
+        return [(r["id"], r["source_id"]) for r in rows if r["source_id"].startswith(prefix)]
+
+    def rename_owner(self, old_title, new_title):
+        """Задача переименована: строки владения (вложения, ссылки базы
+        знаний) её самой и всех её шагов переезжают на новое название. Файлы
+        на диске не трогаются — вложение адресуется своим sha256, теряется
+        только строка-ссылка, не байты."""
+        prefix = f"{old_title}:"
+        with self._connect() as conn:
+            for table in ("attachments", "kb_links"):
+                conn.execute(
+                    f"UPDATE {table} SET source_id=? "
+                    "WHERE source_type='task' AND source_id=?",
+                    (new_title, old_title))
+                for row_id, старый in self._step_owner_rows(conn, table, prefix):
+                    conn.execute(
+                        f"UPDATE {table} SET source_id=? WHERE id=?",
+                        (f"{new_title}:{старый[len(prefix):]}", row_id))
+
+    def forget_owner(self, title):
+        """Задача удалена: строки владения её самой и всех её шагов удаляются
+        вместе с ней — та же пара таблиц, что и `rename_owner`. Файлы на диске
+        не трогаются, как и у `delete_attachment`."""
+        prefix = f"{title}:"
+        with self._connect() as conn:
+            for table in ("attachments", "kb_links"):
+                conn.execute(
+                    f"DELETE FROM {table} WHERE source_type='task' AND source_id=?",
+                    (title,))
+                ids = [row_id for row_id, _ in self._step_owner_rows(conn, table, prefix)]
+                if ids:
+                    места = ",".join("?" * len(ids))
+                    conn.execute(f"DELETE FROM {table} WHERE id IN ({места})", ids)
+
     # --- база знаний ----------------------------------------------------
     #
     # Этап (b) переезда: записи, ссылки и исключения перебираются из
@@ -601,9 +719,9 @@ class Store:
                 "INSERT OR IGNORE INTO kb_links (kb_entry_id, source_type, source_id,"
                 " offset_start, offset_end, confirmed_at, matched)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [(l["kb_entry_id"], l["source_type"], str(l["source_id"]),
-                  l["offset_start"], l["offset_end"], str(l["confirmed_at"]),
-                  l["matched"]) for l in links])
+                [(s["kb_entry_id"], s["source_type"], str(s["source_id"]),
+                  s["offset_start"], s["offset_end"], str(s["confirmed_at"]),
+                  s["matched"]) for s in links])
 
     def load_kb_exclusions(self):
         with self._connect() as conn:
